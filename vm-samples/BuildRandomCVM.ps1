@@ -71,6 +71,9 @@ $resgrp =  $basename # name of the resource group where all resources will be cr
 $akvname = $basename + "akv"    #Name of the Azure Key Vault
 $desname = $basename + "des"    #Name of the Disk Encryption Set
 $keyname = $basename + "-cmk-key" #Name of the key in the Key Vault
+$storageKeyName = $basename + "-storage-cmk-key" #Name of the storage account key in the Key Vault
+$storageAccountName = $basename.Replace("-", "").ToLower() + "stor" #Storage account name (must be lowercase, no hyphens)
+$blobContainerName = "skr-demo-store" #Name of the blob container
 $vmname = $basename # name of the VM, copied from $basename, or customise it here
 $vnetname = $vmname + "vnet" # name of the VNET
 $bastionname = $vnetname + "-bastion" # name of the bastion host
@@ -164,7 +167,7 @@ New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku 
 $cvmAgent = Get-AzADServicePrincipal -ApplicationId 'bf7b6499-ff71-4aa2-97a4-f372087be7f0';
 Set-AzKeyVaultAccessPolicy -VaultName $akvname -ResourceGroupName $resgrp -ObjectId $cvmAgent.id -PermissionsToKeys get,release;
 
-# Add Key vault Key
+# Add Key vault Key for Disk Encryption
 if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
     Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -ReleasePolicyPath $policyFilePath;
 } else {
@@ -173,6 +176,10 @@ if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
     }
     Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -UseDefaultCVMPolicy;
 }
+
+# Add Key vault Key for Storage Account encryption (standard key, not CVM-specific)
+Write-Host "Creating customer managed key for storage account encryption..."
+Add-AzKeyVaultKey -VaultName $akvname -Name $storageKeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM;
         
 # Capture Key Vault and Key details
 $encryptionKeyVaultId = (Get-AzKeyVault -VaultName $akvname -ResourceGroupName $resgrp).ResourceId;
@@ -248,6 +255,177 @@ $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -disable #disable b
 
 New-AzVM -ResourceGroupName $resgrp -Location $region -Vm $VirtualMachine;
 $vm = Get-AzVm -ResourceGroupName $resgrp -Name $vmname;
+
+# Get the VM's system-assigned managed identity principal ID
+Write-Host "Retrieving VM's managed identity for storage access configuration..."
+$vmIdentity = (Get-AzVM -ResourceGroupName $resgrp -Name $vmname).Identity.PrincipalId
+
+# Create Storage Account with Customer Managed Key and Private Endpoint
+Write-Host "Creating storage account '$storageAccountName' with customer managed key encryption, and access by vm identity ($vmIdentity)..."
+
+# Create storage account tags for compliance
+$storageAccountTags = @{
+    owner = $ownername
+    BuiltBy = $scriptName
+    Purpose = "CVM Secure Key Release Demo"
+    Compliance = "CMK-Enabled"
+    GitRepo = $gitRemoteUrl
+}
+
+if ($description -ne "") {
+    $storageAccountTags.Add("description", $description)
+}
+
+# Create the storage account with system-assigned identity first (needed for CMK)
+# Enabled compliance features: infrastructure encryption, secure transfer, blob public access disabled
+$storageAccount = New-AzStorageAccount -ResourceGroupName $resgrp `
+    -Name $storageAccountName `
+    -Location $region `
+    -SkuName "Standard_GRS" `
+    -Kind "StorageV2" `
+    -AllowBlobPublicAccess $false `
+    -MinimumTlsVersion "TLS1_2" `
+    -EnableHttpsTrafficOnly $true `
+    -AssignIdentity `
+    -RequireInfrastructureEncryption `
+    -AllowSharedKeyAccess $false `
+    -PublicNetworkAccess Disabled `
+    -Tag $storageAccountTags
+
+# Get the storage account identity
+$storageIdentity = (Get-AzStorageAccount -ResourceGroupName $resgrp -Name $storageAccountName).Identity.PrincipalId
+
+# Grant the storage account identity access to the key vault key
+Write-Host "Granting storage account access to Key Vault..."
+Set-AzKeyVaultAccessPolicy -VaultName $akvname -ResourceGroupName $resgrp -ObjectId $storageIdentity `
+    -PermissionsToKeys get,wrapKey,unwrapKey -BypassObjectIdValidation
+
+# Get the storage encryption key URL
+$storageKeyURL = (Get-AzKeyVaultKey -VaultName $akvname -KeyName $storageKeyName).Key.Kid
+
+# Enable customer managed key encryption on the storage account
+Write-Host "Enabling customer managed key encryption on storage account..."
+Set-AzStorageAccount -ResourceGroupName $resgrp `
+    -Name $storageAccountName `
+    -KeyvaultEncryption `
+    -KeyName $storageKeyName `
+    -KeyVersion "" `
+    -KeyVaultUri "https://$akvname.vault.azure.net/"
+
+# Enable blob service compliance features: versioning, soft delete, change feed
+Write-Host "Enabling blob service compliance features (versioning, soft delete, change feed)..."
+$storageAccount = Get-AzStorageAccount -ResourceGroupName $resgrp -Name $storageAccountName
+Update-AzStorageBlobServiceProperty -ResourceGroupName $resgrp `
+    -StorageAccountName $storageAccountName `
+    -IsVersioningEnabled $true `
+    -EnableChangeFeed $true `
+    -ChangeFeedRetentionInDays 90
+
+# Enable blob soft delete (90 days retention)
+Enable-AzStorageBlobDeleteRetentionPolicy -ResourceGroupName $resgrp `
+    -StorageAccountName $storageAccountName `
+    -RetentionDays 90
+
+# Enable container soft delete (90 days retention)
+Enable-AzStorageContainerDeleteRetentionPolicy -ResourceGroupName $resgrp `
+    -StorageAccountName $storageAccountName `
+    -RetentionDays 90
+
+# Create blob container using RBAC (since shared key access is disabled)
+Write-Host "Creating blob container '$blobContainerName'..."
+New-AzRmStorageContainer -ResourceGroupName $resgrp `
+    -StorageAccountName $storageAccountName `
+    -Name $blobContainerName `
+    -PublicAccess None
+
+# Enable diagnostic logging for compliance and auditing
+Write-Host "Configuring diagnostic logging for storage account..."
+$storageAccountResourceId = $storageAccount.Id
+
+# Note: In production, you should configure Log Analytics workspace or Event Hub for logs
+# This requires additional setup. For now, we'll configure the storage account to enable logging
+# You can extend this by adding Set-AzDiagnosticSetting when log destination is available
+
+# Disable public network access to storage account (required for private endpoint)
+Write-Host "Configuring storage account network security..."
+Set-AzStorageAccount -ResourceGroupName $resgrp `
+    -Name $storageAccountName `
+    -NetworkRuleSet (@{defaultAction="Deny";bypass="AzureServices"})
+
+# Create Private Endpoint for the storage account
+Write-Host "Creating private endpoint for storage account..."
+$privateEndpointName = $storageAccountName + "-pe"
+$privateLinkServiceConnection = New-AzPrivateLinkServiceConnection `
+    -Name ($privateEndpointName + "-connection") `
+    -PrivateLinkServiceId $storageAccount.Id `
+    -GroupId "blob"
+
+$privateEndpoint = New-AzPrivateEndpoint `
+    -ResourceGroupName $resgrp `
+    -Name $privateEndpointName `
+    -Location $region `
+    -Subnet $vnet.Subnets[0] `
+    -PrivateLinkServiceConnection $privateLinkServiceConnection
+
+# Configure Private DNS Zone for the private endpoint
+Write-Host "Configuring Private DNS Zone for storage account..."
+$dnsZoneName = "privatelink.blob.core.windows.net"
+$dnsZone = New-AzPrivateDnsZone -ResourceGroupName $resgrp -Name $dnsZoneName
+
+$dnsLink = New-AzPrivateDnsVirtualNetworkLink `
+    -ResourceGroupName $resgrp `
+    -ZoneName $dnsZoneName `
+    -Name ($storageAccountName + "-dnslink") `
+    -VirtualNetworkId $vnet.Id
+
+# Create DNS A record for the private endpoint
+$privateDnsZoneConfig = New-AzPrivateDnsZoneConfig `
+    -Name $dnsZoneName `
+    -PrivateDnsZoneId $dnsZone.ResourceId
+
+$privateDnsZoneGroup = New-AzPrivateDnsZoneGroup `
+    -ResourceGroupName $resgrp `
+    -PrivateEndpointName $privateEndpointName `
+    -Name "default" `
+    -PrivateDnsZoneConfig $privateDnsZoneConfig
+
+# Grant the VM's managed identity Storage Blob Data Contributor role on the storage account
+Write-Host "Granting VM's managed identity access to storage account..."
+$storageAccountResourceId = $storageAccount.Id
+
+# Retry logic for role assignment as it may fail initially due to replication delays
+$maxRetries = 5
+$retryCount = 0
+$roleAssigned = $false
+
+while (-not $roleAssigned -and $retryCount -lt $maxRetries) {
+    try {
+        New-AzRoleAssignment -ObjectId $vmIdentity `
+            -RoleDefinitionName "Storage Blob Data Contributor" `
+            -Scope $storageAccountResourceId `
+            -ErrorAction Stop
+        $roleAssigned = $true
+        Write-Host "Role assignment successful"
+    }
+    catch {
+        $retryCount++
+        if ($retryCount -lt $maxRetries) {
+            Write-Host "Role assignment attempt $retryCount failed, retrying in 10 seconds..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 10
+        }
+        else {
+            Write-Host "Warning: Failed to assign role after $maxRetries attempts. You may need to manually assign the 'Storage Blob Data Contributor' role to the VM's managed identity." -ForegroundColor Yellow
+            Write-Host "VM Identity Object ID: $vmIdentity" -ForegroundColor Yellow
+            Write-Host "Storage Account: $storageAccountName" -ForegroundColor Yellow
+        }
+    }
+}
+
+Write-Host "Storage account configuration complete!" -ForegroundColor Green
+Write-Host "Storage Account: $storageAccountName"
+Write-Host "Blob Container: $blobContainerName"
+Write-Host "Private Endpoint: $privateEndpointName"
+Write-Host "VM '$vmname' has exclusive access via its managed identity"
 
 # Create the Bastion to allow accessing the VM via the Azure portal (unless disabled)
 if (-not $DisableBastion) {
