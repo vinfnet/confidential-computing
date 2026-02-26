@@ -51,6 +51,16 @@
           key to one specific VM instance. Even another compliant CVM with
           the same identity cannot release this key.
 
+    Why only the application key is VM-bound (not the disk CMK):
+      The disk encryption CMK must exist BEFORE the VM is deployed (to create
+      the DiskEncryptionSet), but the VM ID is only assigned AFTER deployment.
+      Additionally, Add-AzKeyVaultKey -UseDefaultCVMPolicy creates the CMK
+      with a release policy that cannot be modified post-creation — AKV rejects
+      PATCH requests with error AKV.SKR.1016. Application-level keys created
+      via the REST API with custom policies are not subject to this restriction.
+      See: https://learn.microsoft.com/azure/confidential-computing/concept-skr-attestation
+      See: https://learn.microsoft.com/powershell/module/az.keyvault/add-azkeyvaultkey
+
     After the bootstrap displays the released key, the script auto-cleans
     up all Azure resources and local SSH keys.
 
@@ -383,6 +393,15 @@ Set-KVAccessPolicyWithRetry -PolicyParams @{
 }
 
 # ---- CMK for confidential OS disk encryption ----
+# Note: The disk CMK uses the standard 2-claim CVM policy (compliance + SEV-SNP)
+# and is NOT VM-bound. Two reasons:
+#   1. The CMK must exist before the VM is deployed (to create the DES), but the
+#      VM ID is only assigned after deployment — a chicken-and-egg dependency.
+#   2. Keys created with -UseDefaultCVMPolicy cannot have their release policy
+#      updated post-creation. AKV rejects PATCH requests with AKV.SKR.1016 even
+#      when the policy's Immutable flag is False.
+# The application-level SKR key (created in Phase 4 via REST API) IS VM-bound.
+# See: https://learn.microsoft.com/powershell/module/az.keyvault/add-azkeyvaultkey
 Write-Host "  Creating disk encryption key: $cmkName (RSA-HSM 3072-bit)"
 $cmkMaxRetries = 6
 for ($i = 1; $i -le $cmkMaxRetries; $i++) {

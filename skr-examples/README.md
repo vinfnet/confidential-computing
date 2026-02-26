@@ -300,6 +300,19 @@ The third claim (`vmUniqueId`) is the key difference — it pins the key to a sp
 | CVM with debug enabled | Blocked | MAA won't issue compliance claim |
 | The exact CVM deployed by this script | Released | All three conditions met |
 
+### Why Only the Application Key Is VM-Bound
+
+The disk encryption CMK (`disk-cmk`) uses the standard 2-claim CVM policy and is **not** VM-bound. Two independent constraints prevent this:
+
+1. **Chicken-and-egg dependency** — The CMK must exist *before* the VM is deployed (to create the DiskEncryptionSet), but the VM ID is only assigned *after* deployment.
+2. **AKV policy restriction** — Keys created with [`Add-AzKeyVaultKey -UseDefaultCVMPolicy`](https://learn.microsoft.com/powershell/module/az.keyvault/add-azkeyvaultkey) cannot have their release policy updated post-creation. AKV rejects `PATCH` requests with error `AKV.SKR.1016` ("Key Release Policy can only be set on versionless key"), even when the policy's `Immutable` flag is `False`.
+
+Application-level keys created via the [AKV REST API](https://learn.microsoft.com/rest/api/keyvault/keys/create-key) with a custom release policy *can* include the `vmUniqueId` claim because they are created after the VM exists.
+
+For more background on SKR policies, see:
+- [Secure Key Release with AKV and ACC](https://learn.microsoft.com/azure/confidential-computing/concept-skr-attestation)
+- [SKR policy grammar](https://learn.microsoft.com/azure/key-vault/keys/policy-grammar)
+
 ### Deployment Order
 
 Because the release policy requires the VM ID, the script deploys in a different order than `Deploy-SKRExample.ps1`:
