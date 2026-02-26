@@ -128,10 +128,11 @@ Reusable PowerShell snippets for common confidential computing tasks:
 - `snippet-remoteCallAttest.ps1` - Remote attestation call examples
 
 ### [SKR Examples](/skr-examples/README.md) 🆕
-Standalone Secure Key Release demonstration:
+Standalone Secure Key Release demonstrations:
 - **Deploy-SKRExample.ps1** - End-to-end CVM deployment with AMD SEV-SNP attestation and AKV key release
-  - Deploys a Confidential VM, SSHs in, performs vTPM attestation via MAA, and releases an HSM key
-  - Auto-cleans up all resources after displaying the released key material
+- **Deploy-VMBoundSKR.ps1** - SKR with release policy pinned to a specific VM's unique Azure VM ID
+  - Both scripts deploy a CVM, SSH in, perform vTPM attestation via MAA, and release an HSM key
+  - Auto-clean up all resources after displaying the released key material
   - NSG locks SSH access to deployer's IP; ephemeral SSH key pair (no password)
 
 ### [Container Samples](/containersamples/README.md) *(Intel SGX)*

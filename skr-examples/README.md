@@ -1,8 +1,21 @@
-# Secure Key Release (SKR) Example
+# Secure Key Release (SKR) Examples
 
-This example deploys a single **Azure Confidential VM** (AMD SEV-SNP) and demonstrates
+This folder contains examples that deploy **Azure Confidential VMs** (AMD SEV-SNP) and demonstrate
 **Secure Key Release** — the ability for a VM to prove its hardware identity to Azure
 Key Vault and receive an encryption key that cannot be accessed any other way.
+
+## Scripts
+
+| Script | Description |
+|--------|-------------|
+| `Deploy-SKRExample.ps1` | SKR with standard CVM release policy (any compliant CVM with correct identity) |
+| `Deploy-VMBoundSKR.ps1` | SKR with **VM-bound** release policy (key pinned to a specific VM's unique Azure VM ID) |
+
+---
+
+## Deploy-SKRExample.ps1
+
+Deploys a CVM and releases a key using a policy that requires AMD SEV-SNP attestation.
 
 ## What It Does
 
@@ -208,3 +221,92 @@ All resources are automatically deleted after the SKR result is displayed.
 | SSH connection times out | NSG or VM not ready | Script waits up to 5 min; check NSG allows your IP |
 | "Enter passphrase for key" | SSH key generated with passphrase | Delete `.ssh/` folder and re-run; uses `-P ""` for no passphrase |
 | Resources left after interruption | Script was killed before auto-cleanup | Run `.\Deploy-SKRExample.ps1 -Cleanup` |
+
+---
+
+## Deploy-VMBoundSKR.ps1
+
+Deploys a CVM and creates a key whose release policy is **pinned to the specific VM's Azure VM ID**. This is the strongest form of key binding — the key can only ever be released to that one VM instance.
+
+### How It Differs from Deploy-SKRExample.ps1
+
+| Aspect | Deploy-SKRExample | Deploy-VMBoundSKR |
+|--------|-------------------|-------------------|
+| **Release policy** | Any compliant CVM + correct identity | Specific VM ID + compliant CVM + correct identity |
+| **Key creation timing** | Before VM deployment | After VM deployment (needs VM ID) |
+| **Key name** | `fabrikam-totally-top-secret-key` | `vm-bound-secret-key` |
+| **Config file** | `skr-config.json` | `vmbound-config.json` |
+| **RG naming** | `{prefix}{suffix}-skr-rg` | `{prefix}{suffix}-vmbound-rg` |
+
+### Quick Start
+
+```powershell
+# Deploy CVM, create VM-bound key, run SKR, auto-clean up (~10 minutes)
+.\Deploy-VMBoundSKR.ps1 -Prefix "vmbound"
+
+# Clean up manually if interrupted
+.\Deploy-VMBoundSKR.ps1 -Cleanup
+```
+
+### VM-Bound Release Policy
+
+The key `vm-bound-secret-key` uses a three-condition release policy:
+
+```json
+{
+  "version": "1.0.0",
+  "anyOf": [{
+    "authority": "https://sharedneu.neu.attest.azure.net",
+    "allOf": [
+      {
+        "claim": "x-ms-isolation-tee.x-ms-compliance-status",
+        "equals": "azure-compliant-cvm"
+      },
+      {
+        "claim": "x-ms-isolation-tee.x-ms-attestation-type",
+        "equals": "sevsnpvm"
+      },
+      {
+        "claim": "x-ms-isolation-tee.x-ms-runtime.vm-configuration.vmUniqueId",
+        "equals": "12345678-ABCD-EFGH-IJKL-000000000000"
+      }
+    ]
+  }]
+}
+```
+
+The third claim (`vmUniqueId`) is the key difference — it pins the key to a specific Azure VM ID.
+
+> **Important:** The `vmUniqueId` comparison in the release policy is **case-sensitive**.
+> The script uppercases the VM ID before writing the policy because Azure returns the ID
+> in lowercase while the MAA token contains it in uppercase. A case mismatch will cause
+> key release to fail silently.
+
+### What Each Claim Does
+
+| Claim | Purpose |
+|-------|---------|
+| `x-ms-isolation-tee.x-ms-compliance-status` = `azure-compliant-cvm` | VM passed MAA compliance checks (SNP report, VCEK chain, firmware) |
+| `x-ms-isolation-tee.x-ms-attestation-type` = `sevsnpvm` | Genuine AMD SEV-SNP hardware with memory encryption |
+| `x-ms-isolation-tee.x-ms-runtime.vm-configuration.vmUniqueId` = `<VM ID>` | The VM's Azure-assigned unique identifier matches exactly |
+
+### What Gets Blocked
+
+| Scenario | Result | Why |
+|----------|--------|-----|
+| Standard VM (no SEV-SNP) | Blocked | No vTPM attestation evidence |
+| Different CVM (even with same identity) | Blocked | VM ID won't match the policy |
+| Same CVM redeployed (new VM ID) | Blocked | Azure assigns a new VM ID on redeployment |
+| CVM with debug enabled | Blocked | MAA won't issue compliance claim |
+| The exact CVM deployed by this script | Released | All three conditions met |
+
+### Deployment Order
+
+Because the release policy requires the VM ID, the script deploys in a different order than `Deploy-SKRExample.ps1`:
+
+1. Resource Group + Networking (same)
+2. Key Vault + Identity + Disk CMK + DES (SKR key **deferred**)
+3. Deploy Confidential VM → capture `VmId`
+4. **Create SKR key** with VM-ID-bound release policy
+5. SSH bootstrap: attest + release key
+6. Auto-cleanup
