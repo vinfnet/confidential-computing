@@ -20,8 +20,7 @@
     6. Ubuntu 24.04 Confidential VM (DCas_v5) with DiskWithVMGuestState encryption
     7. After VM creation: creates the SKR key with a release policy that
        includes the VM's unique Azure VM ID as a required claim
-    8. Updates the disk CMK release policy to also require the VM ID
-    9. SSH into the CVM to perform attestation + key release
+    8. SSH into the CVM to perform attestation + key release
 
     SKR Release Policy (explained):
     ┌──────────────────────────────────────────────────────────────────────┐
@@ -384,55 +383,15 @@ Set-KVAccessPolicyWithRetry -PolicyParams @{
 }
 
 # ---- CMK for confidential OS disk encryption ----
-# We create the CMK via REST API (not Add-AzKeyVaultKey -UseDefaultCVMPolicy)
-# so the release policy is MUTABLE. After VM creation, Phase 4 will PATCH
-# the policy to add the vmUniqueId claim, binding the disk key to the VM.
-Write-Host "  Creating disk encryption key: $cmkName (RSA-HSM 3072-bit, mutable policy)"
-$cmkMaaAuthority = "https://$maaEndpoint"
-$cmkInitialPolicyObj = @{
-    version = "1.0.0"
-    anyOf   = @(
-        @{
-            authority = $cmkMaaAuthority
-            allOf     = @(
-                @{
-                    claim  = "x-ms-isolation-tee.x-ms-compliance-status"
-                    equals = "azure-compliant-cvm"
-                }
-                @{
-                    claim  = "x-ms-isolation-tee.x-ms-attestation-type"
-                    equals = "sevsnpvm"
-                }
-            )
-        }
-    )
-}
-$cmkInitialPolicyJson = $cmkInitialPolicyObj | ConvertTo-Json -Depth 10 -Compress
-$cmkInitialPolicyBase64Url = [Convert]::ToBase64String(
-    [System.Text.Encoding]::UTF8.GetBytes($cmkInitialPolicyJson)
-).Replace('+', '-').Replace('/', '_').TrimEnd('=')
-
-$cmkCreateBody = @{
-    kty            = "RSA-HSM"
-    key_size       = 3072
-    key_ops        = @("wrapKey", "unwrapKey")
-    attributes     = @{ exportable = $true }
-    release_policy = @{
-        contentType = "application/json; charset=utf-8"
-        immutable   = $false
-        data        = $cmkInitialPolicyBase64Url
-    }
-} | ConvertTo-Json -Depth 10
-
-$cmkToken = (Get-AzAccessToken -ResourceUrl "https://vault.azure.net").Token
-$cmkCreateUri = "https://$kvName.vault.azure.net/keys/$cmkName/create?api-version=7.4"
+Write-Host "  Creating disk encryption key: $cmkName (RSA-HSM 3072-bit)"
 $cmkMaxRetries = 6
 for ($i = 1; $i -le $cmkMaxRetries; $i++) {
     try {
-        $null = Invoke-RestMethod -Method POST -Uri $cmkCreateUri `
-            -Headers @{ Authorization = "Bearer $cmkToken" } `
-            -ContentType "application/json" `
-            -Body $cmkCreateBody
+        Add-AzKeyVaultKey `
+            -VaultName $kvName -Name $cmkName `
+            -Size 3072 -KeyOps wrapKey, unwrapKey `
+            -KeyType RSA -Destination HSM `
+            -Exportable -UseDefaultCVMPolicy | Out-Null
         break
     }
     catch {
@@ -464,7 +423,7 @@ Set-KVAccessPolicyWithRetry -PolicyParams @{
 }
 Write-Host "  DiskEncryptionSet: $desName" -ForegroundColor Green
 
-Write-Host "`nPhase 2 complete (SKR key and CMK policy update deferred until after VM creation).`n" -ForegroundColor Green
+Write-Host "`nPhase 2 complete (SKR key deferred until after VM creation).`n" -ForegroundColor Green
 
 
 # ============================================================================
@@ -597,52 +556,6 @@ $null = Invoke-RestMethod -Method POST -Uri $createKeyUri `
     -ContentType "application/json" `
     -Body $createKeyBody
 Write-Host "  Key created: $appKeyName (RSA-HSM 2048, exportable, VM-bound policy)" -ForegroundColor Green
-
-# ---- Update CMK release policy to also bind to this VM ----
-Write-Host ""
-Write-Host "  Updating disk CMK release policy to bind to VM ID..." -ForegroundColor Cyan
-$cmkKeyObj = Get-AzKeyVaultKey -VaultName $kvName -KeyName $cmkName
-$cmkVersion = $cmkKeyObj.Version
-$cmkReleasePolicyObj = @{
-    version = "1.0.0"
-    anyOf   = @(
-        @{
-            authority = $maaAuthority
-            allOf     = @(
-                @{
-                    claim  = "x-ms-isolation-tee.x-ms-compliance-status"
-                    equals = "azure-compliant-cvm"
-                }
-                @{
-                    claim  = "x-ms-isolation-tee.x-ms-attestation-type"
-                    equals = "sevsnpvm"
-                }
-                @{
-                    claim  = "x-ms-isolation-tee.x-ms-runtime.vm-configuration.vmUniqueId"
-                    equals = $vmId
-                }
-            )
-        }
-    )
-}
-$cmkReleasePolicyJson = $cmkReleasePolicyObj | ConvertTo-Json -Depth 10 -Compress
-$cmkReleasePolicyBase64Url = [Convert]::ToBase64String(
-    [System.Text.Encoding]::UTF8.GetBytes($cmkReleasePolicyJson)
-).Replace('+', '-').Replace('/', '_').TrimEnd('=')
-
-$updateCmkBody = @{
-    release_policy = @{
-        contentType = "application/json; charset=utf-8"
-        data        = $cmkReleasePolicyBase64Url
-    }
-} | ConvertTo-Json -Depth 10
-
-$updateCmkUri = "https://$kvName.vault.azure.net/keys/$cmkName/$cmkVersion`?api-version=7.4"
-$null = Invoke-RestMethod -Method PATCH -Uri $updateCmkUri `
-    -Headers @{ Authorization = "Bearer $akvToken" } `
-    -ContentType "application/json" `
-    -Body $updateCmkBody
-Write-Host "  Disk CMK updated: $cmkName now also requires VM ID $($vmId.Substring(0,8))..." -ForegroundColor Green
 
 Write-Host "`nPhase 4 complete.`n" -ForegroundColor Green
 
