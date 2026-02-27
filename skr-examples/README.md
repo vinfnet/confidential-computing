@@ -1,21 +1,24 @@
 # Secure Key Release (SKR) Examples
 
-This folder contains examples that deploy **Azure Confidential VMs** (AMD SEV-SNP) and demonstrate
+This folder contains examples that deploy **Azure Confidential VMs** and demonstrate
 **Secure Key Release** — the ability for a VM to prove its hardware identity to Azure
 Key Vault and receive an encryption key that cannot be accessed any other way.
+
+Both **AMD SEV-SNP** and **Intel TDX** hardware platforms are supported.
 
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
-| `Deploy-SKRExample.ps1` | SKR with standard CVM release policy (any compliant CVM with correct identity) |
+| `Deploy-SKRExample.ps1` | SKR with standard CVM release policy (any compliant CVM with correct identity). Supports `-TeeType AMD` (default) and `-TeeType Intel`. |
 | `Deploy-VMBoundSKR.ps1` | SKR with **VM-bound** release policy (key pinned to a specific VM's unique Azure VM ID) |
 
 ---
 
 ## Deploy-SKRExample.ps1
 
-Deploys a CVM and releases a key using a policy that requires AMD SEV-SNP attestation.
+Deploys a CVM and releases a key using a policy that requires hardware TEE attestation.
+Use `-TeeType AMD` (default) for AMD SEV-SNP or `-TeeType Intel` for Intel TDX.
 
 ## What It Does
 
@@ -27,11 +30,12 @@ Deploys a CVM and releases a key using a policy that requires AMD SEV-SNP attest
 │  2. VNet + Public IP + NSG (SSH locked to deployer's IP)            │
 │  3. Azure Key Vault Premium (HSM-backed)                            │
 │       └─ Key: "fabrikam-totally-top-secret-key"                     │
-│            └─ Release policy: AMD SEV-SNP CVM only                  │
+│            └─ Release policy: TEE-attested CVM only                 │
 │  4. User-Assigned Managed Identity → KV get + release               │
 │  5. DiskEncryptionSet → confidential OS disk (CMK)                  │
-│  6. Ubuntu 24.04 Confidential VM (DCas_v5)                          │
-│       └─ SSH key auth (ephemeral key pair, no password)             │
+│  6. Ubuntu 24.04 Confidential VM                                    │
+│       ├─ AMD: DCas_v5 series (SEV-SNP)                              │
+│       └─ Intel: DCes_v6 series (TDX)                                │
 │  7. SSH into CVM: attest via vTPM → MAA token → key release         │
 │  8. Result streamed directly to your console                        │
 │  9. Auto-cleanup: resource group deleted, SSH keys removed          │
@@ -41,8 +45,11 @@ Deploys a CVM and releases a key using a policy that requires AMD SEV-SNP attest
 ## Quick Start
 
 ```powershell
-# Deploy, run SKR, display result, and auto-clean up (~10 minutes)
+# AMD SEV-SNP (default) — deploy, run SKR, display result, auto-clean up (~10 minutes)
 .\Deploy-SKRExample.ps1 -Prefix "skrdemo"
+
+# Intel TDX — deploy on Intel TDX hardware
+.\Deploy-SKRExample.ps1 -Prefix "skrdemo" -TeeType Intel
 ```
 
 The script deploys all resources, SSHs into the CVM to perform secure key release,
@@ -59,8 +66,9 @@ To clean up a previous deployment manually (e.g. if the script was interrupted):
 | Parameter  | Required | Default             | Description                                    |
 |------------|----------|---------------------|------------------------------------------------|
 | `-Prefix`  | Yes*     | —                   | 3-8 char prefix for resource names             |
-| `-Location`| No       | `northeurope`       | Azure region (must support DCas_v5)            |
-| `-VMSize`  | No       | `Standard_DC2as_v5` | Confidential VM SKU                            |
+| `-Location`| No       | `northeurope`       | Azure region (must support chosen VM series)   |
+| `-VMSize`  | No       | Auto per TeeType    | Override VM SKU (AMD: `Standard_DC2as_v5`, Intel: `Standard_DC2es_v6`) |
+| `-TeeType` | No       | `AMD`               | TEE platform: `AMD` (SEV-SNP) or `Intel` (TDX) |
 | `-Cleanup` | No       | —                   | Remove all resources from previous deployment  |
 
 \* Required for deployment. Omit all params to see usage + current deployment status.
@@ -94,22 +102,26 @@ caller provides a **Microsoft Azure Attestation (MAA) token** that satisfies the
 }
 ```
 
+> The `x-ms-attestation-type` value changes based on `-TeeType`:
+> - **AMD SEV-SNP**: `"sevsnpvm"` — genuine AMD SEV-SNP guest VM with memory encryption
+> - **Intel TDX**: `"tdxvm"` — genuine Intel TDX Trust Domain with hardware isolation
+
 ### What Each Part Means
 
 | Element | Purpose |
 |---------|---------|
 | **`anyOf`** | Array of acceptable attestation authorities. We specify the shared MAA endpoint for the deployment region. You could add multiple regions or private MAA instances. |
-| **`authority`** | The MAA endpoint URL. Key Vault will only accept tokens issued by this authority. The shared MAA endpoint is operated by Microsoft and validates attestation evidence against AMD's key distribution server (KDS). |
+| **`authority`** | The MAA endpoint URL. Key Vault will only accept tokens issued by this authority. The shared MAA endpoint is operated by Microsoft and validates attestation evidence against the hardware vendor's root of trust. |
 | **`allOf`** | All claims in this array must be present AND match. This is an AND condition — both claims are required. |
-| **Claim 1:** `x-ms-isolation-tee.x-ms-compliance-status` = `azure-compliant-cvm` | MAA checked the AMD SEV-SNP attestation report, verified the VCEK certificate chain against AMD's root of trust, validated the firmware measurements, and confirmed this is a compliant Azure CVM. |
-| **Claim 2:** `x-ms-isolation-tee.x-ms-attestation-type` = `sevsnpvm` | The attestation evidence came from an AMD SEV-SNP guest VM — confirming hardware memory encryption is active and memory integrity protection is enforced. |
+| **Claim 1:** `x-ms-isolation-tee.x-ms-compliance-status` = `azure-compliant-cvm` | MAA checked the hardware attestation report, verified the certificate chain against the vendor's root of trust, validated the firmware measurements, and confirmed this is a compliant Azure CVM. |
+| **Claim 2:** `x-ms-isolation-tee.x-ms-attestation-type` = `sevsnpvm` or `tdxvm` | The attestation evidence came from the expected TEE hardware — AMD SEV-SNP or Intel TDX — confirming hardware memory isolation is active. |
 
 ### Why Nested Claims?
 
 The claims use the **nested path** `x-ms-isolation-tee.x-ms-attestation-type` rather than
 the top-level path `x-ms-attestation-type`. This is important because:
 
-- MAA tokens for CVM attestation place SEV-SNP-specific claims **inside** the
+- MAA tokens for CVM attestation place TEE-specific claims **inside** the
   `x-ms-isolation-tee` object (the Trusted Execution Environment section)
 - The top-level `x-ms-attestation-type` may contain a different value or be absent
 - Using the wrong claim path causes the release policy to fail silently
@@ -122,33 +134,35 @@ the top-level path `x-ms-attestation-type`. This is important because:
 
 | Scenario | Result | Why |
 |----------|--------|-----|
-| Standard VM (no SEV-SNP) | ❌ Blocked | Cannot produce vTPM attestation with SEV-SNP evidence |
+| Standard VM (no TEE) | ❌ Blocked | Cannot produce vTPM attestation with TEE evidence |
 | CVM with debug enabled | ❌ Blocked | MAA will not issue `azure-compliant-cvm` for debug VMs |
 | CVM that fails firmware check | ❌ Blocked | Compliance status won't be `azure-compliant-cvm` |
 | CVM in wrong region (different MAA) | ❌ Blocked | Token authority won't match the policy |
 | CVM without the managed identity | ❌ Blocked | Can't authenticate to Key Vault at all |
-| Genuine Azure CVM (SEV-SNP) with correct identity | ✅ Released | All conditions met |
+| CVM on wrong TEE (e.g. TDX key on SEV-SNP VM) | ❌ Blocked | Attestation type won't match the policy |
+| Genuine Azure CVM on matching TEE with correct identity | ✅ Released | All conditions met |
 
 ## How It Works (Flow)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                                                                          │
-│  1. VM boots on AMD SEV-SNP hardware                                     │
-│     └─ AMD CPU generates attestation report (SNP_REPORT)                 │
-│        └─ Signed by VCEK (chip-unique key from AMD KDS)                  │
+│  1. VM boots on TEE hardware (AMD SEV-SNP or Intel TDX)                  │
+│     └─ Hardware generates attestation report                             │
+│        └─ AMD: SNP_REPORT signed by chip-unique VCEK                     │
+│        └─ Intel: TD Quote signed by platform attestation key             │
 │                                                                          │
 │  2. Script SSHs into the VM and runs the bootstrap                       │
-│     └─ Reads SNP report from vTPM (/dev/tpmrm0)                         │
+│     └─ Reads attestation evidence from vTPM (/dev/tpmrm0)               │
 │        └─ cvm-attestation-tools sends evidence to MAA                    │
 │                                                                          │
 │  3. MAA validates the evidence                                           │
-│     ├─ Verifies VCEK signature chain → AMD root of trust                 │
+│     ├─ Verifies certificate chain → vendor root of trust                 │
 │     ├─ Checks firmware measurements against known-good values            │
 │     ├─ Confirms no debug flags are set                                   │
 │     └─ Issues JWT token with claims:                                     │
 │        ├─ x-ms-isolation-tee.x-ms-compliance-status: azure-compliant-cvm │
-│        └─ x-ms-isolation-tee.x-ms-attestation-type: sevsnpvm             │
+│        └─ x-ms-isolation-tee.x-ms-attestation-type: sevsnpvm | tdxvm     │
 │                                                                          │
 │  4. Bootstrap calls AKV /keys/{name}/{version}/release                   │
 │     ├─ Auth: Managed identity bearer token (proves KV access)            │
@@ -172,10 +186,11 @@ the top-level path `x-ms-attestation-type`. This is important because:
 
 The security of this example relies on **two independent layers**:
 
-### Layer 1: Hardware Attestation (AMD SEV-SNP → MAA → Release Policy)
+### Layer 1: Hardware Attestation (TEE → MAA → Release Policy)
 The Key Vault HSM will not release the key unless it receives an MAA token proving
-the caller is a genuine AMD SEV-SNP Confidential VM that passed all compliance checks.
-This is enforced by the HSM — even Microsoft cannot bypass it.
+the caller is a genuine Confidential VM running on the expected TEE hardware (AMD SEV-SNP
+or Intel TDX) that passed all compliance checks. This is enforced by the HSM — even
+Microsoft cannot bypass it.
 
 ### Layer 2: Identity Authorization (Managed Identity → KV Access Policy)
 Even if another CVM passes attestation, it cannot release the key unless its managed
@@ -193,7 +208,7 @@ Both layers must pass for key release to succeed.
 | Public IP | `{prefix}{suffix}-pip` | SSH access to VM |
 | NSG | `{prefix}{suffix}-nsg` | SSH locked to deployer's IP |
 | VM NIC | `{prefix}{suffix}-cvm-nic` | Public + private IP (10.0.1.4) |
-| Confidential VM | `{prefix}{suffix}-cvm` | Ubuntu 24.04, DCas_v5, SSH key auth |
+| Confidential VM | `{prefix}{suffix}-cvm` | Ubuntu 24.04, DCas_v5 (AMD) or DCes_v6 (Intel), SSH key auth |
 | Key Vault | `{prefix}{suffix}kv` | Premium (HSM), soft-delete |
 | User Identity | `{prefix}{suffix}-id` | VM identity for KV access |
 | Disk Encryption Set | `{prefix}{suffix}-des` | Confidential OS disk CMK |
@@ -206,7 +221,7 @@ All resources are automatically deleted after the SKR result is displayed.
 
 - **Azure PowerShell** (`Az` module) — `Install-Module -Name Az -Force`
 - **SSH client** — pre-installed on macOS/Linux; on Windows use OpenSSH or Git Bash
-- **Azure subscription** with Confidential VM quota for `DCas_v5` series
+- **Azure subscription** with Confidential VM quota for `DCas_v5` (AMD) or `DCes_v6` (Intel) series
 - **Logged in** — `Connect-AzAccount`
 
 ## Troubleshooting
@@ -215,9 +230,9 @@ All resources are automatically deleted after the SKR result is displayed.
 |-------|-------|-----|
 | "No shared MAA endpoint for region" | Region doesn't have a shared MAA endpoint | Use a supported region (see script) |
 | CMK creation fails repeatedly | Key Vault not fully provisioned | Script retries 6 times automatically |
-| Bootstrap shows "No vTPM device" | VM not running as CVM | Check VM SKU is DCas_v5 or similar |
+| Bootstrap shows "No vTPM device" | VM not running as CVM | Check VM SKU is DCas_v5 (AMD) or DCes_v6 (Intel) |
 | Key release returns 403 | Identity doesn't have KV permissions | Check access policy includes `get` + `release` |
-| Key release returns policy error | MAA token claims don't match policy | Verify VM is SEV-SNP (not TDX), check claim paths |
+| Key release returns policy error | MAA token claims don't match policy | Verify `-TeeType` matches the VM hardware, check claim paths |
 | SSH connection times out | NSG or VM not ready | Script waits up to 5 min; check NSG allows your IP |
 | "Enter passphrase for key" | SSH key generated with passphrase | Delete `.ssh/` folder and re-run; uses `-P ""` for no passphrase |
 | Resources left after interruption | Script was killed before auto-cleanup | Run `.\Deploy-SKRExample.ps1 -Cleanup` |
@@ -278,9 +293,10 @@ The key `vm-bound-secret-key` uses a three-condition release policy:
 The third claim (`vmUniqueId`) is the key difference — it pins the key to a specific Azure VM ID.
 
 > **Important:** The `vmUniqueId` comparison in the release policy is **case-sensitive**.
-> The script uppercases the VM ID before writing the policy because Azure returns the ID
-> in lowercase while the MAA token contains it in uppercase. A case mismatch will cause
-> key release to fail silently.
+> MAA returns the VM ID in **uppercase** for AMD SEV-SNP but **lowercase** for Intel TDX.
+> The script normalises the VM ID to match the MAA convention for the chosen TEE type
+> (`.ToUpper()` for AMD, `.ToLower()` for Intel). A case mismatch will cause key release
+> to fail silently.
 
 ### What Each Claim Does
 

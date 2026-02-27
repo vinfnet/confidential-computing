@@ -4,17 +4,20 @@
 
 .DESCRIPTION
     Creates a minimal confidential computing environment that demonstrates
-    AMD SEV-SNP Secure Key Release from Azure Key Vault:
+    Secure Key Release from Azure Key Vault on either AMD SEV-SNP or Intel TDX
+    hardware (controlled by the -TeeType parameter):
 
     1. Resource Group with random suffix (from -Prefix)
     2. VNet with public IP + NSG (SSH locked to deployer's IP)
     3. Azure Key Vault Premium with HSM-backed exportable RSA key
        ("fabrikam-totally-top-secret-key") bound to a CVM release policy
     4. User-assigned managed identity for Key Vault access
-    5. Ubuntu 24.04 Confidential VM (DCas_v5) with DiskWithVMGuestState encryption
+    5. Ubuntu 24.04 Confidential VM with DiskWithVMGuestState encryption
+       – AMD SEV-SNP: DCas_v5 series (default)
+       – Intel TDX:   DCes_v6 series (-TeeType Intel)
     6. SSH session into the CVM that:
        a. Installs cvm-attestation-tools (Python vTPM attestation)
-       b. Gets an MAA token via the vTPM (proves AMD SEV-SNP hardware)
+       b. Gets an MAA token via the vTPM (proves TEE hardware)
        c. Calls AKV key release API with the MAA token
        d. Prints the released key material directly to the console
 
@@ -31,7 +34,7 @@
     │        { "claim": "x-ms-isolation-tee.x-ms-compliance-status",       │
     │          "equals": "azure-compliant-cvm" },                          │
     │        { "claim": "x-ms-isolation-tee.x-ms-attestation-type",        │
-    │          "equals": "sevsnpvm" }                                      │
+    │          "equals": "sevsnpvm" | "tdxvm" }                            │
     │      ]                                                               │
     │    }]                                                                │
     │  }                                                                   │
@@ -40,17 +43,18 @@
     The policy requires BOTH conditions (allOf) from ANY trusted MAA authority:
       • x-ms-isolation-tee.x-ms-compliance-status = "azure-compliant-cvm"
         → The VM passed Azure's compliance checks for confidential VMs.
-          MAA verifies the SNP report, VCEK certificate chain, and guest
+          MAA verifies the hardware report, certificate chain, and guest
           firmware measurements before issuing this claim.
-      • x-ms-isolation-tee.x-ms-attestation-type = "sevsnpvm"
-        → The attestation evidence came from an AMD SEV-SNP guest VM.
-          This confirms the VM is running on genuine SEV-SNP hardware
-          with memory encryption and integrity protection active.
+      • x-ms-isolation-tee.x-ms-attestation-type = "sevsnpvm" or "tdxvm"
+        → The attestation evidence came from a genuine TEE on the matching
+          hardware platform:
+          - "sevsnpvm" — AMD SEV-SNP (memory encryption + integrity)
+          - "tdxvm"    — Intel TDX   (Trust Domain Extensions)
 
     Together these claims ensure the key can ONLY be released to a genuine
-    Azure Confidential VM running on AMD SEV-SNP hardware that passes MAA
-    guest attestation. A standard VM, a VM with debug enabled, or a VM that
-    fails firmware measurement checks will NOT receive the key.
+    Azure Confidential VM running on the matching TEE hardware that passes
+    MAA guest attestation. A standard VM, a VM with debug enabled, or a VM
+    that fails measurement checks will NOT receive the key.
 
     The managed identity provides the second layer: even if another CVM
     passes attestation, it cannot release the key unless its identity has
@@ -61,17 +65,28 @@
     A random 5-character suffix is appended automatically.
 
 .PARAMETER Location
-    Azure region (default: northeurope). Must support DCas_v5 series.
+    Azure region (default: northeurope). Must support the chosen VM series.
 
 .PARAMETER VMSize
-    VM SKU (default: Standard_DC2as_v5). Must be a confidential VM SKU.
+    VM SKU override. If omitted, defaults based on -TeeType:
+      AMD   → Standard_DC2as_v5
+      Intel → Standard_DC2es_v5
+
+.PARAMETER TeeType
+    Trusted Execution Environment hardware platform (default: AMD).
+      AMD   — AMD SEV-SNP (DCas_v5 series, attestation-type "sevsnpvm")
+      Intel — Intel TDX   (DCes_v6 series, attestation-type "tdxvm")
 
 .PARAMETER Cleanup
     Remove all resources created by a previous deployment.
 
 .EXAMPLE
     .\Deploy-SKRExample.ps1 -Prefix "skrdemo"
-    Deploy the SKR example and display the released key in the console.
+    Deploy on AMD SEV-SNP (default) and display the released key.
+
+.EXAMPLE
+    .\Deploy-SKRExample.ps1 -Prefix "skrdemo" -TeeType Intel
+    Deploy on Intel TDX and display the released key.
 
 .EXAMPLE
     .\Deploy-SKRExample.ps1 -Cleanup
@@ -87,7 +102,11 @@ param (
     [string]$Location = "northeurope",
 
     [Parameter(Mandatory = $false)]
-    [string]$VMSize = "Standard_DC2as_v5",
+    [string]$VMSize,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('AMD', 'Intel')]
+    [string]$TeeType = "AMD",
 
     [Parameter(Mandatory = $false)]
     [switch]$Cleanup
@@ -98,6 +117,20 @@ $startTime = Get-Date
 $scriptName = $MyInvocation.MyCommand.Name
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $configFile = Join-Path $scriptDir "skr-config.json"
+
+# ---- TEE-specific settings (AMD SEV-SNP vs Intel TDX) ----
+if ($TeeType -eq "Intel") {
+    $attestationType = "tdxvm"
+    $teeDisplay      = "Intel TDX"
+    $isolationType   = "TDX"
+    $defaultVMSize   = "Standard_DC2es_v6"
+} else {
+    $attestationType = "sevsnpvm"
+    $teeDisplay      = "AMD SEV-SNP"
+    $isolationType   = "SEV_SNP"
+    $defaultVMSize   = "Standard_DC2as_v5"
+}
+if (-not $VMSize) { $VMSize = $defaultVMSize }
 
 
 # ============================================================================
@@ -213,8 +246,9 @@ if (-not $Prefix) {
     Write-Host "`n=== SKR Example — Secure Key Release from Azure Confidential VM ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Usage:" -ForegroundColor Yellow
-    Write-Host "  .\$scriptName -Prefix <name>     Deploy CVM + Key Vault + release key"
-    Write-Host "  .\$scriptName -Cleanup           Remove all resources"
+    Write-Host "  .\$scriptName -Prefix <name>                   Deploy on AMD SEV-SNP (default)"
+    Write-Host "  .\$scriptName -Prefix <name> -TeeType Intel    Deploy on Intel TDX"
+    Write-Host "  .\$scriptName -Cleanup                         Remove all resources"
     Write-Host ""
     if (Test-Path $configFile) {
         $config = Get-Content -Path $configFile -Raw | ConvertFrom-Json
@@ -260,6 +294,7 @@ Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan
 Write-Host " SKR Example — Secure Key Release from Confidential VM" -ForegroundColor Cyan
 Write-Host "================================================================" -ForegroundColor Cyan
+Write-Host "  TEE Platform:   $teeDisplay ($attestationType)"
 Write-Host "  Basename:       $basename"
 Write-Host "  Resource Group: $resgrp"
 Write-Host "  Location:       $Location"
@@ -423,7 +458,7 @@ Write-Host "  DiskEncryptionSet: $desName" -ForegroundColor Green
 # ---- Application SKR key with custom CVM release policy ----
 # This is the key that the VM will release at boot time.
 # We use the REST API to create it with a release policy that requires
-# AMD SEV-SNP attestation via nested claim paths (see .DESCRIPTION).
+# TEE attestation via nested claim paths (see .DESCRIPTION).
 Write-Host "`n  Creating SKR key: $appKeyName" -ForegroundColor Cyan
 
 $maaAuthority = "https://$maaEndpoint"
@@ -439,7 +474,7 @@ $releasePolicyObj = @{
                 }
                 @{
                     claim  = "x-ms-isolation-tee.x-ms-attestation-type"
-                    equals = "sevsnpvm"
+                    equals = $attestationType
                 }
             )
         }
@@ -452,23 +487,22 @@ $releasePolicyBase64Url = [Convert]::ToBase64String(
 
 Write-Host ""
 Write-Host "  ┌─────────────────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
-Write-Host "  │  SKR Release Policy                                             │" -ForegroundColor DarkCyan
+Write-Host "  │  SKR Release Policy ($teeDisplay)" -ForegroundColor DarkCyan
 Write-Host "  │                                                                 │" -ForegroundColor DarkCyan
 Write-Host "  │  Authority: $($maaAuthority.PadRight(40))       │" -ForegroundColor DarkCyan
 Write-Host "  │                                                                 │" -ForegroundColor DarkCyan
 Write-Host "  │  Required claims (ALL must match):                              │" -ForegroundColor DarkCyan
 Write-Host "  │    1. x-ms-isolation-tee.x-ms-compliance-status                 │" -ForegroundColor DarkCyan
 Write-Host "  │       = azure-compliant-cvm                                     │" -ForegroundColor DarkCyan
-Write-Host "  │       → VM passed MAA compliance checks (SNP report valid,      │" -ForegroundColor DarkCyan
-Write-Host "  │         VCEK chain verified, firmware measurements OK)           │" -ForegroundColor DarkCyan
+Write-Host "  │       → VM passed MAA compliance checks (hardware report valid, │" -ForegroundColor DarkCyan
+Write-Host "  │         certificate chain verified, firmware measurements OK)    │" -ForegroundColor DarkCyan
 Write-Host "  │                                                                 │" -ForegroundColor DarkCyan
 Write-Host "  │    2. x-ms-isolation-tee.x-ms-attestation-type                  │" -ForegroundColor DarkCyan
-Write-Host "  │       = sevsnpvm                                                │" -ForegroundColor DarkCyan
-Write-Host "  │       → Attestation came from AMD SEV-SNP guest VM              │" -ForegroundColor DarkCyan
-Write-Host "  │         (hardware memory encryption active, integrity enforced)  │" -ForegroundColor DarkCyan
+Write-Host "  │       = $($attestationType.PadRight(56))│" -ForegroundColor DarkCyan
+Write-Host "  │       → Attestation came from $($teeDisplay.PadRight(30))       │" -ForegroundColor DarkCyan
 Write-Host "  │                                                                 │" -ForegroundColor DarkCyan
 Write-Host "  │  Result: Key can ONLY be released to a genuine Azure CVM        │" -ForegroundColor DarkCyan
-Write-Host "  │  running on AMD SEV-SNP hardware. Standard VMs, debug-enabled   │" -ForegroundColor DarkCyan
+Write-Host "  │  running on $teeDisplay hardware. Standard VMs, debug-enabled" -ForegroundColor DarkCyan
 Write-Host "  │  VMs, or VMs that fail measurement checks are REJECTED.         │" -ForegroundColor DarkCyan
 Write-Host "  └─────────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
 Write-Host ""
@@ -570,6 +604,7 @@ echo " Key:      __KEY_NAME__"
 echo " Vault:    __AKV_ENDPOINT__"
 echo " MAA:      __MAA_ENDPOINT__"
 echo " Identity: __CLIENT_ID__"
+echo " TEE:      __TEE_DISPLAY__"
 echo " Started:  $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo "================================================================"
 echo ""
@@ -624,6 +659,9 @@ MAA_ENDPOINT = sys.argv[1]
 AKV_ENDPOINT = sys.argv[2]
 KEY_NAME     = sys.argv[3]
 CLIENT_ID    = sys.argv[4]
+ISOLATION    = sys.argv[5]   # "SEV_SNP" or "TDX"
+TEE_DISPLAY  = sys.argv[6]   # "AMD SEV-SNP" or "Intel TDX"
+ATTEST_TYPE  = sys.argv[7]   # "sevsnpvm" or "tdxvm"
 
 
 def decode_jwt_payload(token):
@@ -642,16 +680,18 @@ def decode_jwt_payload(token):
 #  Step 1: MAA attestation token via vTPM
 # =========================================================================
 print("  Step 1/3: Getting MAA attestation token from vTPM...")
-print("  This proves the VM is running on AMD SEV-SNP hardware.")
+print(f"  This proves the VM is running on {TEE_DISPLAY} hardware.")
 
 maa_clean = MAA_ENDPOINT.replace('https://', '').replace('http://', '').rstrip('/')
 attest_url = f"https://{maa_clean}/attest/AzureGuest?api-version=2020-10-01"
+
+isolation_type = IsolationType[ISOLATION]   # SEV_SNP or TDX
 
 logger = Logger("skr").get_logger()
 params = AttestationClientParameters(
     endpoint=attest_url,
     verifier=Verifier.MAA,
-    isolation_type=IsolationType.SEV_SNP,
+    isolation_type=isolation_type,
     claims=None,
 )
 client = AttestationClient(logger, params)
@@ -805,7 +845,7 @@ print()
 print(" The key was released because this VM satisfied BOTH conditions")
 print(" in the release policy:")
 print("   1. x-ms-isolation-tee.x-ms-compliance-status = azure-compliant-cvm")
-print("   2. x-ms-isolation-tee.x-ms-attestation-type  = sevsnpvm")
+print(f"   2. x-ms-isolation-tee.x-ms-attestation-type  = {ATTEST_TYPE}")
 print()
 print(f" Released JWS token (first 200 chars):")
 print(f" {jws_value[:200]}...")
@@ -839,7 +879,7 @@ print("================================================================")
 PYEOF
 
 source /opt/skr-venv/bin/activate
-python3 /tmp/skr_release.py "__MAA_ENDPOINT__" "__AKV_ENDPOINT__" "__KEY_NAME__" "__CLIENT_ID__"
+python3 /tmp/skr_release.py "__MAA_ENDPOINT__" "__AKV_ENDPOINT__" "__KEY_NAME__" "__CLIENT_ID__" "__ISOLATION_TYPE__" "__TEE_DISPLAY__" "__ATTESTATION_TYPE__"
 '@
 
 # Substitute placeholders in the bootstrap script
@@ -847,7 +887,10 @@ $bootstrapScript = $bootstrapScript `
     -replace '__KEY_NAME__', $appKeyName `
     -replace '__AKV_ENDPOINT__', "$kvName.vault.azure.net" `
     -replace '__MAA_ENDPOINT__', $maaEndpoint `
-    -replace '__CLIENT_ID__', $identity.ClientId
+    -replace '__CLIENT_ID__', $identity.ClientId `
+    -replace '__ISOLATION_TYPE__', $isolationType `
+    -replace '__TEE_DISPLAY__', $teeDisplay `
+    -replace '__ATTESTATION_TYPE__', $attestationType
 
 # Write the bootstrap script to a local temp file for SCP
 $tempScript = Join-Path ([System.IO.Path]::GetTempPath()) "skr-bootstrap-$basename.sh"
@@ -922,6 +965,8 @@ $config = @{
     identity      = $identityName
     identityClientId = $identity.ClientId
     maaEndpoint   = $maaEndpoint
+    teeType       = $TeeType
+    attestationType = $attestationType
 }
 $config | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Force
 
@@ -936,9 +981,10 @@ Write-Host "  VM:              $vmName ($vmIp)"
 Write-Host "  Key Vault:       $kvName"
 Write-Host "  Key:             $appKeyName"
 Write-Host "  MAA Endpoint:    $maaEndpoint"
+Write-Host "  TEE Platform:    $teeDisplay ($attestationType)"
 Write-Host ""
 Write-Host "  The key '$appKeyName' was released from the Key Vault" -ForegroundColor Cyan
-Write-Host "  to the Confidential VM using AMD SEV-SNP attestation." -ForegroundColor Cyan
+Write-Host "  to the Confidential VM using $teeDisplay attestation." -ForegroundColor Cyan
 Write-Host ""
 Write-Host ("  Deployment time: {0} minutes and {1} seconds" -f [int]$elapsed.TotalMinutes, $elapsed.Seconds) -ForegroundColor Gray
 Write-Host "================================================================" -ForegroundColor Green
