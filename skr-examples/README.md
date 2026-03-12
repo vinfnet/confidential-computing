@@ -12,6 +12,8 @@ Both **AMD SEV-SNP** and **Intel TDX** hardware platforms are supported.
 |--------|-------------|
 | `Deploy-SKRExample.ps1` | SKR with standard CVM release policy (any compliant CVM with correct identity). Supports `-TeeType AMD` (default) and `-TeeType Intel`. |
 | `Deploy-VMBoundSKR.ps1` | SKR with **VM-bound** release policy (key pinned to a specific VM's unique Azure VM ID) |
+| `Deploy-AttestationAPI.ps1` | **Attestation API web server** — deploys a CVM with an HTTP endpoint that performs MAA guest attestation with a caller-supplied nonce |
+| `Deploy-AttestationExtension.ps1` | **Attestation API via Custom Script Extension** — deploys the attestation web server to any existing CVM via ARM (no SSH needed) |
 
 ---
 
@@ -339,3 +341,77 @@ Because the release policy requires the VM ID, the script deploys in a different
 4. **Create SKR key** with VM-ID-bound release policy
 5. SSH bootstrap: attest + release key
 6. Auto-cleanup
+
+---
+
+## Deploy-AttestationAPI.ps1
+
+Deploys a CVM with a **web server** exposing an attestation API. When called with a
+nonce, performs MAA guest attestation from inside the CVM's vTPM and returns a richly
+formatted HTML page explaining every claim. Attestation-only (no Key Vault, no SKR),
+uses Platform Managed Keys.
+
+```powershell
+.\Deploy-AttestationAPI.ps1 -Prefix "attest"              # AMD SEV-SNP
+.\Deploy-AttestationAPI.ps1 -Prefix "attest" -TeeType Intel  # Intel TDX
+.\Deploy-AttestationAPI.ps1 -Cleanup                         # Remove everything
+```
+
+Endpoints: `http://<ip>:8080/` (landing page) and `http://<ip>:8080/attest?nonce=<value>`
+
+---
+
+## Deploy-AttestationExtension.ps1
+
+Deploys the same attestation API web server to any **existing** Linux CVM using the
+Azure Custom Script Extension (`Microsoft.Azure.Extensions.CustomScript`). Everything
+runs through the ARM control plane — no SSH, no ephemeral keys, no credentials.
+
+The extension automatically detects the TEE type (AMD SEV-SNP or Intel TDX) and MAA
+endpoint from IMDS at startup.
+
+### Quick Start
+
+```powershell
+# Deploy the attestation web server to an existing CVM
+.\Deploy-AttestationExtension.ps1 -VMName "my-cvm" -ResourceGroupName "my-rg"
+
+# Deploy and open port 8080 on the VM's NSG
+.\Deploy-AttestationExtension.ps1 -VMName "my-cvm" -ResourceGroupName "my-rg" -OpenPort
+
+# Use a custom MAA endpoint (e.g. private MAA instance)
+.\Deploy-AttestationExtension.ps1 -VMName "my-cvm" -ResourceGroupName "my-rg" -MaaEndpoint "my-private.neu.attest.azure.net"
+
+# Remove the extension and stop the service
+.\Deploy-AttestationExtension.ps1 -VMName "my-cvm" -ResourceGroupName "my-rg" -Remove
+```
+
+### Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `-VMName` | Yes | Name of an existing Linux CVM |
+| `-ResourceGroupName` | Yes | Resource group containing the VM |
+| `-MaaEndpoint` | — | Override the auto-detected MAA endpoint |
+| `-OpenPort` | — | Add NSG rule for TCP 8080 from caller's IP |
+| `-Remove` | — | Remove extension and stop the service |
+
+### Endpoints
+
+| Endpoint | Format | Description |
+|----------|--------|-------------|
+| `/` | HTML | Landing page with usage instructions |
+| `/attest?nonce=<value>` | HTML | Attestation with decoded claims |
+| `/attest?nonce=<value>&format=json` | JSON | Machine-readable attestation result |
+| `/health` | JSON | Health check with TEE and MAA info |
+
+### How It Works
+
+1. PowerShell base64-encodes a bash bootstrap script
+2. Deploys it via `Set-AzVMExtension` (Custom Script Extension)
+3. The extension runs as root inside the VM:
+   - Installs python3, venv, tpm2-tools
+   - Clones cvm-attestation-tools from GitHub
+   - Writes a Flask web server that auto-detects TEE + MAA
+   - Creates a systemd service on port 8080
+4. Optionally opens port 8080 on the VM's NSG

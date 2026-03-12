@@ -128,12 +128,13 @@ Reusable PowerShell snippets for common confidential computing tasks:
 - `snippet-remoteCallAttest.ps1` - Remote attestation call examples
 
 ### [SKR Examples](/skr-examples/README.md) 🆕
-Standalone Secure Key Release demonstrations:
-- **Deploy-SKRExample.ps1** - End-to-end CVM deployment with AMD SEV-SNP attestation and AKV key release
+Secure Key Release and attestation demonstrations:
+- **Deploy-SKRExample.ps1** - End-to-end CVM deployment with AMD SEV-SNP or Intel TDX attestation and AKV key release
 - **Deploy-VMBoundSKR.ps1** - SKR with release policy pinned to a specific VM's unique Azure VM ID
-  - Both scripts deploy a CVM, SSH in, perform vTPM attestation via MAA, and release an HSM key
-  - Auto-clean up all resources after displaying the released key material
-  - NSG locks SSH access to deployer's IP; ephemeral SSH key pair (no password)
+- **Deploy-AttestationAPI.ps1** - Attestation API web server — CVM with HTTP endpoint for MAA guest attestation
+- **Deploy-AttestationExtension.ps1** - Deploy the attestation web server to any existing CVM via Custom Script Extension (no SSH)
+  - All scripts support both AMD SEV-SNP and Intel TDX
+  - The extension variant auto-detects TEE type and MAA endpoint from inside the VM
 
 ### [Container Samples](/containersamples/README.md) *(Intel SGX)*
 Enclave-aware container samples for AKS with Intel SGX:
