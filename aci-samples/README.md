@@ -45,6 +45,7 @@ Scripts and samples for creating Confidential Azure Container Instances (ACIs) u
 | Sample | Description |
 |--------|-------------|
 | `BuildRandomACI.ps1` | PowerShell script to create a confidential ACI with a hello-world container |
+| [Secure Snake ACI](SecureSnakeACI/README.md) | Trivial browser game sample showing how to deploy an ordinary container onto Azure Confidential ACI with digest pinning, `confcom` policy generation, and a live attestation page |
 | [Visual Attestation Demo](visual-attestation-demo/README.md) | Interactive web application demonstrating remote attestation via Microsoft Azure Attestation (MAA) |
 
 ---

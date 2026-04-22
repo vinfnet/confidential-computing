@@ -1,0 +1,185 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerGroupName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the Secure Snake confidential container group"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the container group"
+      }
+    },
+    "dnsNameLabel": {
+      "type": "string",
+      "metadata": {
+        "description": "DNS name label for the public endpoint"
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "metadata": {
+        "description": "Immutable container image reference to deploy"
+      }
+    },
+    "registryServer": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Container Registry login server"
+      }
+    },
+    "registryUsername": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Container Registry username"
+      }
+    },
+    "registryPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Azure Container Registry password"
+      }
+    },
+    "appPort": {
+      "type": "int",
+      "defaultValue": 8000,
+      "metadata": {
+        "description": "Port exposed by the Secure Snake app"
+      }
+    },
+    "imageDigest": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Pinned image digest surfaced to the app for demo purposes"
+      }
+    },
+    "maaEndpoint": {
+      "type": "string",
+      "defaultValue": "sharedeus.eus.attest.azure.net",
+      "metadata": {
+        "description": "Microsoft Azure Attestation endpoint used by the in-container attestation page"
+      }
+    },
+    "policyMode": {
+      "type": "string",
+      "defaultValue": "confcom-generated",
+      "metadata": {
+        "description": "Human-readable note describing the security posture"
+      }
+    },
+    "hardeningSummary": {
+      "type": "string",
+      "defaultValue": "digest-pinned; confcom; stdio-disabled",
+      "metadata": {
+        "description": "Security hardening summary shown in the demo UI"
+      }
+    },
+    "identityResourceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional user-assigned managed identity attached to the container group"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('containerGroupName')]",
+      "location": "[parameters('location')]",
+      "identity": "[if(empty(parameters('identityResourceId')), null(), createObject('type', 'UserAssigned', 'userAssignedIdentities', createObject(parameters('identityResourceId'), createObject())))]",
+      "properties": {
+        "sku": "Confidential",
+        "confidentialComputeProperties": {
+          "ccePolicy": ""
+        },
+        "containers": [
+          {
+            "name": "[parameters('containerGroupName')]",
+            "properties": {
+              "image": "[parameters('containerImage')]",
+              "ports": [
+                {
+                  "protocol": "TCP",
+                  "port": "[parameters('appPort')]"
+                }
+              ],
+              "environmentVariables": [
+                {
+                  "name": "SECURE_SNAKE_RUNTIME",
+                  "value": "Azure Confidential ACI"
+                },
+                {
+                  "name": "SECURE_SNAKE_POLICY_BOUND",
+                  "value": "true"
+                },
+                {
+                  "name": "SECURE_SNAKE_POLICY_MODE",
+                  "value": "[parameters('policyMode')]"
+                },
+                {
+                  "name": "SECURE_SNAKE_IMAGE_DIGEST",
+                  "value": "[parameters('imageDigest')]"
+                },
+                {
+                  "name": "SKR_MAA_ENDPOINT",
+                  "value": "[parameters('maaEndpoint')]"
+                },
+                {
+                  "name": "SECURE_SNAKE_HARDENING_SUMMARY",
+                  "value": "[parameters('hardeningSummary')]"
+                }
+              ],
+              "resources": {
+                "requests": {
+                  "cpu": 2,
+                  "memoryInGB": 4
+                }
+              }
+            }
+          }
+        ],
+        "imageRegistryCredentials": [
+          {
+            "server": "[parameters('registryServer')]",
+            "username": "[parameters('registryUsername')]",
+            "password": "[parameters('registryPassword')]"
+          }
+        ],
+        "osType": "Linux",
+        "restartPolicy": "Always",
+        "ipAddress": {
+          "type": "Public",
+          "dnsNameLabel": "[parameters('dnsNameLabel')]",
+          "ports": [
+            {
+              "protocol": "TCP",
+              "port": "[parameters('appPort')]"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "containerGroupId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.ContainerInstance/containerGroups', parameters('containerGroupName'))]"
+    },
+    "fqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('containerGroupName'))).ipAddress.fqdn]"
+    },
+    "image": {
+      "type": "string",
+      "value": "[parameters('containerImage')]"
+    }
+  }
+}
