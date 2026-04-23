@@ -144,6 +144,12 @@ Enclave-aware container samples for AKS with Intel SGX:
 - **HelloWorld** - Simple enclave creation and function calls
 - **Attested-TLS** - Secure communication channel between enclaves
 
+### [SOV Examples](/sov-examples/README.md) 🆕
+Sovereign-focused sample applications showing end-to-end data protection with Azure Confidential Computing (ACC):
+- **Norland Citizen Registry App** - Confidential ACI + PostgreSQL sample with ccepolicy generation and CRUD operations over fictional citizen records
+- Includes random fictional citizen seed data generation for about 5,000 records
+- Demonstrates a common sovereign requirement where sensitive data remains protected in an end-to-end manner, including while in use
+
 ## 🤖 AI-Assisted Development Note
 
 The **multi-party-samples** in this repository were entirely created using AI-assisted development with **GitHub Copilot** powered by **Claude**. This demonstrates the capabilities of modern AI models for:

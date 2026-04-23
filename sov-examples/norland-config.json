@@ -1,0 +1,10 @@
+{
+  "prefix": "sgall",
+  "location": "uaenorth",
+  "resourceGroup": "rg-sgall-norland",
+  "acrName": "sgallnoracr",
+  "acrLoginServer": "sgallnoracr.azurecr.io",
+  "image": "sgallnoracr.azurecr.io/norland-citizen-cce:latest",
+  "keyVaultName": "sgall-nor-kv",
+  "identityName": "sgall-nor-id"
+}

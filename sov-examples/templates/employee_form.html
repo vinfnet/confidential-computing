@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ 'Add Citizen' if mode == 'create' else 'Edit Citizen' }}</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(145deg, #edf2f7, #f8fbff);
+      color: #183042;
+    }
+    .container { max-width: 900px; margin: 28px auto; padding: 0 16px; }
+    .card {
+      background: #fff;
+      border-radius: 14px;
+      box-shadow: 0 10px 24px rgba(16, 44, 68, 0.08);
+      padding: 20px;
+    }
+    h1 { margin-top: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+    label {
+      font-size: 13px;
+      color: #476075;
+      display: block;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #c5d5e2;
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    .actions { margin-top: 16px; display: flex; gap: 10px; }
+    .btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      color: #fff;
+      background: #0a6c9e;
+    }
+    .btn-secondary { background: #577283; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>{{ country_name }}: {{ 'Add Citizen' if mode == 'create' else 'Edit Citizen' }}</h1>
+      {% set c = citizen %}
+      <form method="post">
+        <div class="grid">
+          <div><label>National ID</label><input name="national_id" required value="{{ c[1] if c else '' }}"></div>
+          <div><label>First Name</label><input name="first_name" required value="{{ c[2] if c else '' }}"></div>
+          <div><label>Last Name</label><input name="last_name" required value="{{ c[3] if c else '' }}"></div>
+          <div><label>Date of Birth</label><input type="date" name="date_of_birth" required value="{{ c[4] if c else '' }}"></div>
+          <div><label>Sex</label><input name="sex" required value="{{ c[5] if c else '' }}"></div>
+          <div><label>Region</label><input name="region" required value="{{ c[6] if c else '' }}"></div>
+          <div><label>Municipality</label><input name="municipality" required value="{{ c[7] if c else '' }}"></div>
+          <div><label>Address Line</label><input name="address_line" required value="{{ c[8] if c else '' }}"></div>
+          <div><label>Postal Code</label><input name="postal_code" required value="{{ c[9] if c else '' }}"></div>
+          <div><label>Household Size</label><input type="number" min="1" max="20" name="household_size" required value="{{ c[10] if c else '' }}"></div>
+          <div><label>Marital Status</label><input name="marital_status" required value="{{ c[11] if c else '' }}"></div>
+          <div><label>Employment Status</label><input name="employment_status" required value="{{ c[12] if c else '' }}"></div>
+          <div><label>Tax Bracket</label><input name="tax_bracket" required value="{{ c[13] if c else '' }}"></div>
+          <div>
+            <label>Registered Voter</label>
+            <select name="registered_voter">
+              <option value="true" {% if not c or c[14] %}selected{% endif %}>True</option>
+              <option value="false" {% if c and not c[14] %}selected{% endif %}>False</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn" type="submit">Save</button>
+          <a class="btn btn-secondary" href="{{ url_for('index') }}">Cancel</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

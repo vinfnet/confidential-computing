@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Norland Citizen Registry</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --card: #ffffff;
+      --text: #1a2a36;
+      --accent: #0a6c9e;
+      --accent-soft: #e5f3fb;
+      --danger: #b11f1f;
+      --success: #0c8d46;
+      --muted: #5d6b76;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(140deg, #eef3f7, #f9fbfd 55%, #e7f0f8);
+      color: var(--text);
+    }
+    .container {
+      max-width: 1220px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: 14px;
+      box-shadow: 0 10px 24px rgba(16, 44, 68, 0.08);
+      padding: 18px;
+    }
+    h1 { margin: 0 0 8px; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .btn {
+      display: inline-block;
+      border: 0;
+      border-radius: 8px;
+      padding: 9px 14px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      color: #fff;
+      background: var(--accent);
+    }
+    .btn-danger { background: var(--danger); }
+    .btn-ghost {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    thead th {
+      text-align: left;
+      background: #f0f6fb;
+      color: #163247;
+      padding: 10px;
+      border-bottom: 1px solid #d5e5f1;
+    }
+    tbody td {
+      padding: 9px 10px;
+      border-bottom: 1px solid #edf2f6;
+      vertical-align: top;
+    }
+    .actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .flash {
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      font-size: 14px;
+    }
+    .flash.success { background: #e8f9ef; color: var(--success); }
+    .flash.error { background: #fdeceb; color: var(--danger); }
+    .pager {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    @media (max-width: 1000px) {
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="topbar">
+        <div>
+          <h1>{{ country_name }} Citizen Registry</h1>
+          <div class="meta">Total records: {{ total_rows }} | Page {{ page }} of {{ total_pages if total_pages > 0 else 1 }}</div>
+        </div>
+        <a class="btn" href="{{ url_for('create_citizen') }}">Add Citizen</a>
+      </div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>National ID</th>
+            <th>Name</th>
+            <th>Date of Birth</th>
+            <th>Sex</th>
+            <th>Region</th>
+            <th>Municipality</th>
+            <th>Household</th>
+            <th>Marital</th>
+            <th>Employment</th>
+            <th>Tax Bracket</th>
+            <th>Voter</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in citizens %}
+          <tr>
+            <td>{{ c[0] }}</td>
+            <td>{{ c[1] }}</td>
+            <td>{{ c[2] }} {{ c[3] }}</td>
+            <td>{{ c[4] }}</td>
+            <td>{{ c[5] }}</td>
+            <td>{{ c[6] }}</td>
+            <td>{{ c[7] }}</td>
+            <td>{{ c[10] }}</td>
+            <td>{{ c[11] }}</td>
+            <td>{{ c[12] }}</td>
+            <td>{{ c[13] }}</td>
+            <td>{{ "Yes" if c[14] else "No" }}</td>
+            <td>
+              <div class="actions">
+                <a class="btn btn-ghost" href="{{ url_for('edit_citizen', citizen_id=c[0]) }}">Edit</a>
+                <form method="post" action="{{ url_for('delete_citizen', citizen_id=c[0]) }}" onsubmit="return confirm('Delete this citizen record?');">
+                  <button class="btn btn-danger" type="submit">Delete</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <div class="pager">
+        {% if page > 1 %}
+          <a class="btn btn-ghost" href="{{ url_for('index', page=page-1) }}">Previous</a>
+        {% endif %}
+        {% if page < total_pages %}
+          <a class="btn btn-ghost" href="{{ url_for('index', page=page+1) }}">Next</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</body>
+</html>
