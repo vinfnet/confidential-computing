@@ -951,22 +951,43 @@ function Invoke-Deploy {
     Write-Host "  Selected SKU: $pgSkuName ($pgSkuLabel)" -ForegroundColor Cyan
     Write-Host "  This may take several minutes..." -ForegroundColor Yellow
     
-    $pgCreateResult = az postgres flexible-server create `
-        --name $PgServerName `
-        --resource-group $ResourceGroup `
-        --location $deployLocation `
-        --sku-name $pgSkuName `
-        --tier $pgSkuTier `
-        --version "16" `
-        --admin-user $PgAdminUser `
-        --admin-password $PgPassword `
-        --storage-size 32 `
-        --public-access $publicAccessParam `
-        --yes 2>&1
+    # Use ARM template deployment to bypass CLI pre-flight location check
+    # (the CLI capabilities API returns null for some subscriptions even when
+    # the RP actually supports the location, causing a false "location restricted" error)
+    $pgTemplateBody = @{
+        '$schema' = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+        contentVersion = "1.0.0.0"
+        resources = @(@{
+            type = "Microsoft.DBforPostgreSQL/flexibleServers"
+            apiVersion = "2022-12-01"
+            name = $PgServerName
+            location = $deployLocation
+            sku = @{ name = $pgSkuName; tier = $pgSkuTier }
+            properties = @{
+                version = "16"
+                administratorLogin = $PgAdminUser
+                administratorLoginPassword = $PgPassword
+                storage = @{ storageSizeGB = 32 }
+                network = @{ publicNetworkAccess = "Enabled" }
+            }
+        })
+    } | ConvertTo-Json -Depth 10
+    $pgTempFile = Join-Path $env:TEMP "_pg-template-$(Get-Random).json"
+    $pgTemplateBody | Out-File -FilePath $pgTempFile -Encoding utf8
     
-    if ($LASTEXITCODE -ne 0 -and $pgSkuName -like "Standard_DC*") {
+    try {
+        $pgDeployName = "pg-deploy-$(Get-Random -Min 1000 -Max 9999)"
+        $pgCreateResult = az deployment group create `
+            --resource-group $ResourceGroup `
+            --template-file $pgTempFile `
+            --name $pgDeployName 2>&1
+        $pgCreateExitCode = $LASTEXITCODE
+    } finally {
+        Remove-Item -Path $pgTempFile -Force -ErrorAction SilentlyContinue
+    }
+    
+    if ($pgCreateExitCode -ne 0 -and $pgSkuName -like "Standard_DC*") {
         Write-Warning "DCa/ECa AMD creation failed (may be a quota/subscription restriction). Falling back to Standard_D2ds_v5..."
-        # DC attempt may have reserved the name; generate a new unique name
         $pgRandom2 = -join ((97..122) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
         $PgServerName = "${Prefix}pgfin${pgRandom2}"
         $pgSkuName = "Standard_D2ds_v5"
@@ -974,21 +995,40 @@ function Invoke-Deploy {
         Write-Host "  New server name: $PgServerName" -ForegroundColor Gray
         Write-Host "  Fallback SKU: $pgSkuName" -ForegroundColor Gray
         
-        $pgCreateResult = az postgres flexible-server create `
-            --name $PgServerName `
-            --resource-group $ResourceGroup `
-            --location $deployLocation `
-            --sku-name $pgSkuName `
-            --tier $pgSkuTier `
-            --version "16" `
-            --admin-user $PgAdminUser `
-            --admin-password $PgPassword `
-            --storage-size 32 `
-            --public-access $publicAccessParam `
-            --yes 2>&1
+        $pgTemplateBody = @{
+            '$schema' = "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#"
+            contentVersion = "1.0.0.0"
+            resources = @(@{
+                type = "Microsoft.DBforPostgreSQL/flexibleServers"
+                apiVersion = "2022-12-01"
+                name = $PgServerName
+                location = $deployLocation
+                sku = @{ name = $pgSkuName; tier = $pgSkuTier }
+                properties = @{
+                    version = "16"
+                    administratorLogin = $PgAdminUser
+                    administratorLoginPassword = $PgPassword
+                    storage = @{ storageSizeGB = 32 }
+                    network = @{ publicNetworkAccess = "Enabled" }
+                }
+            })
+        } | ConvertTo-Json -Depth 10
+        $pgTempFile = Join-Path $env:TEMP "_pg-template-$(Get-Random).json"
+        $pgTemplateBody | Out-File -FilePath $pgTempFile -Encoding utf8
+        
+        try {
+            $pgDeployName = "pg-deploy-$(Get-Random -Min 1000 -Max 9999)"
+            $pgCreateResult = az deployment group create `
+                --resource-group $ResourceGroup `
+                --template-file $pgTempFile `
+                --name $pgDeployName 2>&1
+            $pgCreateExitCode = $LASTEXITCODE
+        } finally {
+            Remove-Item -Path $pgTempFile -Force -ErrorAction SilentlyContinue
+        }
     }
     
-    if ($LASTEXITCODE -ne 0) {
+    if ($pgCreateExitCode -ne 0) {
         Write-Host $pgCreateResult
         throw "Failed to create PostgreSQL Flexible Server ($pgSkuName in $deployLocation)."
     }
