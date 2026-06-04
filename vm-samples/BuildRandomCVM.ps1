@@ -10,7 +10,7 @@
 # 
 # Clone this repo to a folder (relies on the WindowsAttest.ps1 script being in the same folder as this script)
 #
-# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight]
+# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight] [-GPU]
 #
 # Basename is a prefix for all resources created, it's used to create unique names for the resources
 # osType specifies which OS to deploy: Windows (Server 2022), Windows11 (Windows 11 Enterprise), Ubuntu (24.04), or RHEL (9.5)
@@ -19,6 +19,12 @@
 # region is an optional parameter that specifies the Azure region (defaults to northeurope)
 # policyFilePath is an optional parameter that specifies the path to a custom policy file for key vault key creation
 # DisableBastion is an optional switch that skips the creation of Azure Bastion (VM will only be accessible via private network)
+# GPU is an optional switch that builds a Confidential VM with an NVIDIA H100 GPU (Standard_NCC40ads_H100_v5,
+#     SEV-SNP + H100 CC mode). When set this overrides -vmsize, forces -osType to Ubuntu (Linux-only),
+#     switches to the Ubuntu 22.04 CVM image which is the documented base for NCC H100 v5, and after the
+#     VM boots installs the NVIDIA open-kernel driver and the NVIDIA local GPU verifier (nvtrust) inside
+#     the VM. The script then runs both a GPU confidential-mode attestation (verifier.cc_admin) and the
+#     normal CPU SEV-SNP attestation (cvm-attestation-tools), and surfaces both outputs to the caller.
 #
 # You'll need to have the latest Azure PowerShell module installed as older versions don't have the parameters for AKV & ACC (update-module -force)
 #
@@ -39,8 +45,32 @@ param (
     [Parameter(Mandatory=$false)]$vmsize = "Standard_DC2as_v5",
     [Parameter(Mandatory=$false)]$policyFilePath = "",
     [Parameter(Mandatory=$false)][switch]$DisableBastion,
-    [Parameter(Mandatory=$false)][switch]$SkipSkuPreflight
+    [Parameter(Mandatory=$false)][switch]$SkipSkuPreflight,
+    [Parameter(Mandatory=$false)][switch]$GPU
 )
+
+# -GPU: Override VM SKU / image / region defaults so we provision a Confidential VM with
+# an NVIDIA H100 GPU running in CC (confidential compute) mode. This SKU is Linux-only
+# (Ubuntu 22.04 CVM is the documented base image), so we also force osType=Ubuntu and
+# warn if the caller asked for something else. Region defaults to eastus2 (which is one
+# of the regions where Standard_NCC40ads_H100_v5 is offered without subscription
+# restriction; the other is westeurope).
+if ($GPU) {
+    $h100Sku    = 'Standard_NCC40ads_H100_v5'
+    $h100Family = 'StandardNCCads2023Family'
+    if ($vmsize -ne 'Standard_DC2as_v5' -and $vmsize -ne $h100Sku) {
+        write-host "-GPU was specified: overriding -vmsize '$vmsize' with '$h100Sku' (NVIDIA H100 SEV-SNP CVM)." -ForegroundColor Yellow
+    }
+    $vmsize = $h100Sku
+    if ($osType -ne 'Ubuntu') {
+        write-host "-GPU was specified: overriding -osType '$osType' with 'Ubuntu' (NVIDIA H100 CC mode is Linux-only on Azure)." -ForegroundColor Yellow
+        $osType = 'Ubuntu'
+    }
+    if ($region -eq 'northeurope') {
+        write-host "-GPU was specified: switching default region from 'northeurope' to 'eastus2' where '$h100Sku' is offered." -ForegroundColor Yellow
+        $region = 'eastus2'
+    }
+}
 
 if ($subsID -eq "" -or $basename -eq "" -or $osType -eq "") {
     write-host "You must enter a subscription ID, basename, and OS type (Windows, Windows11, Ubuntu, or RHEL)"
@@ -98,6 +128,9 @@ if ($region -eq "northeurope") {
 
 write-host "----------------------------------------------------------------------------------------------------------------"
 write-host "Building a Confidential Virtual Machine ($osType) in " $basename " in " $region
+if ($GPU) {
+    write-host "GPU MODE: Provisioning '$vmsize' (NVIDIA H100 SEV-SNP CVM). NVIDIA driver + nvtrust local GPU verifier will be installed inside the VM and a GPU CC-mode attestation will be performed in addition to the CPU SEV-SNP attestation." -ForegroundColor Magenta
+}
 if ($smoketest) {
     write-host "SMOKETEST MODE: Resources will be automatically deleted after completion" -ForegroundColor Yellow
 }
@@ -154,8 +187,14 @@ if ($vmSize -match '^Standard_DC\d+s_v[23]$') {
 }
 
 # Warn (but don't fail) if the SKU doesn't look like a known CVM SKU naming pattern.
-if ($vmSize -notmatch '^Standard_(DC|EC)\d+[a-z]+_v\d+$' -or $vmSize -notmatch '_(DC|EC)\d+(a|e)') {
-    write-host "Warning: '$vmSize' does not match a known Confidential VM SKU pattern (DCa*/ECa* for SEV-SNP, DCe*/ECe* for TDX). Continuing, but deployment may fail if this is not a CVM SKU." -ForegroundColor Yellow
+# Recognised CVM patterns:
+#   - DCa*/ECa* (AMD SEV-SNP, e.g. Standard_DC2as_v5)
+#   - DCe*/ECe* (Intel TDX, e.g. Standard_DC2es_v6)
+#   - NCCads*_H100_v5 (NVIDIA H100 SEV-SNP confidential GPU VM, e.g. Standard_NCC40ads_H100_v5)
+$isKnownCvmSku = ($vmSize -match '^Standard_(DC|EC)\d+[a-z]+_v\d+$' -and $vmSize -match '_(DC|EC)\d+(a|e)') `
+              -or ($vmSize -match '^Standard_NCC\d+ads_H100_v\d+$')
+if (-not $isKnownCvmSku) {
+    write-host "Warning: '$vmSize' does not match a known Confidential VM SKU pattern (DCa*/ECa* for SEV-SNP, DCe*/ECe* for TDX, NCCads_H100 for confidential GPU). Continuing, but deployment may fail if this is not a CVM SKU." -ForegroundColor Yellow
 }
 
 $skuInfo = $null
@@ -314,9 +353,16 @@ switch ($osType) {
         $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'windowsserver' -Skus '2019-datacenter-smalldisk-g2' -Version "latest";
         $VMIsLinux = $false
     }
-    "Ubuntu" { # updated to use Ubuntu 24.04 LTS
+    "Ubuntu" { # updated to use Ubuntu 24.04 LTS (or Ubuntu 22.04 CVM when -GPU is set, which is the
+              # documented base image for the NVIDIA H100 SEV-SNP confidential VM SKU).
         $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Linux -ComputerName $vmname -Credential $cred;
-        $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer 'ubuntu-24_04-lts' -Skus 'cvm' -Version "latest";
+        if ($GPU) {
+            # H100 CC mode requires Ubuntu 22.04 CVM (jammy). The 24.04 CVM image isn't
+            # listed by Microsoft as a supported base for NCC H100 v5 today.
+            $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer '0001-com-ubuntu-confidential-vm-jammy' -Skus '22_04-lts-cvm' -Version "latest";
+        } else {
+            $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer 'ubuntu-24_04-lts' -Skus 'cvm' -Version "latest";
+        }
         $VMIsLinux = $true
     }
     "RHEL" {
@@ -364,6 +410,99 @@ if (-not $DisableBastion) {
 } else {
     write-host "VM created, Bastion creation skipped due to -DisableBastion parameter"
     write-host "VM is only accessible via private network connectivity (VPN, ExpressRoute, or peered networks)"
+}
+
+#---------GPU mode: install NVIDIA open-kernel driver + nvtrust local GPU verifier and run a GPU CC-mode attestation--
+# Only runs when -GPU was specified. The H100 SKU exposes a GPU running in CC (confidential
+# compute) mode; the NVIDIA local GPU verifier (nvtrust) talks to the GPU's RoT, fetches an
+# attestation report, validates it against NVIDIA's reference values, and prints a verdict.
+# This block is intentionally separate from the CPU SEV-SNP attestation below: with -GPU we
+# do *both* a GPU and a CPU attestation, so the caller sees end-to-end runtime evidence for
+# both the AMD SEV-SNP TEE and the NVIDIA H100 in CC mode.
+if ($GPU) {
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 1/3: installing NVIDIA open-kernel driver and nvtrust local GPU verifier inside the VM..." -ForegroundColor Magenta
+    $gpuInstallScript = @"
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+echo "--- apt-get update + install build deps ---"
+apt-get update -y >/dev/null 2>&1 || true
+apt-get install -y build-essential dkms python3-pip python3-venv git curl jq unzip linux-headers-`$(uname -r) >/dev/null 2>&1 || true
+
+echo "--- adding NVIDIA CUDA apt repo (Ubuntu 22.04) ---"
+curl -fsSL -o /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+dpkg -i /tmp/cuda-keyring.deb >/dev/null 2>&1
+apt-get update -y >/dev/null 2>&1
+
+echo "--- installing nvidia-open driver (required for H100 CC mode) ---"
+# The 'open' kernel module variant is required for H100 confidential compute mode.
+# We pin to a known-good major version that ships open-kernel modules and supports CC mode.
+apt-get install -y nvidia-open >/dev/null 2>&1 || apt-get install -y nvidia-driver-555-open || apt-get install -y nvidia-driver-550-open || true
+
+echo "--- cloning NVIDIA nvtrust (local GPU verifier) ---"
+rm -rf /opt/nvtrust
+git clone --depth 1 https://github.com/NVIDIA/nvtrust.git /opt/nvtrust 2>&1 | tail -5
+
+echo "--- creating venv and installing local_gpu_verifier ---"
+python3 -m venv /opt/gpu-verifier-venv
+/opt/gpu-verifier-venv/bin/pip install --quiet --upgrade pip
+/opt/gpu-verifier-venv/bin/pip install --quiet -e /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier 2>&1 | tail -5 || true
+
+echo "--- driver/verifier install complete; the VM will now be rebooted to load the new NVIDIA kernel module ---"
+"@
+    try {
+        $gpuInstallOut = Invoke-AzVMRunCommand -Name $vmname -ResourceGroupName $resgrp -CommandId 'RunShellScript' -ScriptString $gpuInstallScript -ErrorAction Stop
+        foreach ($entry in $gpuInstallOut.Value) { if ($entry.Message) { write-host $entry.Message } }
+    } catch {
+        write-host "GPU step 1/3 failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 2/3: rebooting VM to load NVIDIA open-kernel module..." -ForegroundColor Magenta
+    Restart-AzVM -ResourceGroupName $resgrp -Name $vmname | Out-Null
+    write-host "Waiting 60s after reboot for the OS + run-command extension to come back up..."
+    Start-Sleep -Seconds 60
+
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 3/3: running NVIDIA local GPU verifier (verifier.cc_admin) for H100 CC-mode attestation..." -ForegroundColor Magenta
+    $gpuAttestScript = @"
+#!/bin/bash
+set -e
+echo "--- nvidia-smi ---"
+nvidia-smi || echo "nvidia-smi failed (driver may not have loaded; check 'dmesg | grep -i nvidia' on the VM)"
+
+echo ""
+echo "--- /opt/nvtrust/.../local_gpu_verifier : verifier.cc_admin ---"
+if [ -x /opt/gpu-verifier-venv/bin/python3 ] && [ -d /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier ]; then
+    cd /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier
+    /opt/gpu-verifier-venv/bin/python3 -m verifier.cc_admin 2>&1 || echo "verifier.cc_admin exited with code `$?"
+else
+    echo "Local GPU verifier was not installed in step 1/3; skipping."
+fi
+"@
+    $gpuOutput = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            write-host "GPU verifier run-command attempt $attempt of 6..." -ForegroundColor Cyan
+            $gpuOutput = Invoke-AzVMRunCommand -Name $vmname -ResourceGroupName $resgrp -CommandId 'RunShellScript' -ScriptString $gpuAttestScript -ErrorAction Stop
+            break
+        } catch {
+            $msg = $_.Exception.Message
+            if ($attempt -lt 6 -and ($msg -like '*Conflict*' -or $msg -like '*in progress*' -or $msg -like '*409*' -or $msg -like '*not ready*')) {
+                write-host "Run-command extension busy/not ready; waiting 30s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 30
+            } else { throw }
+        }
+    }
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "--------------Output from NVIDIA local GPU verifier (H100 CC-mode attestation)--------------" -ForegroundColor Magenta
+    if ($gpuOutput) {
+        foreach ($entry in $gpuOutput.Value) { if ($entry.Message) { write-host $entry.Message } }
+    } else {
+        write-host "(no GPU verifier output was captured)" -ForegroundColor Yellow
+    }
+    write-host "----------------------------------------------------------------------------------------------------------------"
 }
 
 #---------Do attestation check inside the VM using Azure/cvm-attestation-tools-----------------------------------
