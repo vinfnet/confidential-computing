@@ -204,7 +204,7 @@ Get-AzComputeResourceSku |
 Get-AzVMUsage -Location 'eastus2' | Where-Object { $_.Name.Value -eq 'StandardNCCads2023Family' } | Format-Table -AutoSize
 ```
 
-Reference: [Azure NCCads H100 v5-series](https://learn.microsoft.com/azure/virtual-machines/sizes/gpu-accelerated/nccadsh100v5-series), [NVIDIA H100 confidential computing on Azure](https://learn.microsoft.com/azure/confidential-computing/confidential-vm-overview-gpu) and [`NVIDIA/nvtrust`](https://github.com/NVIDIA/nvtrust).
+Reference: [Azure NCCads H100 v5-series](https://learn.microsoft.com/azure/virtual-machines/sizes/gpu-accelerated/nccadsh100v5-series), [NVIDIA H100 confidential computing on Azure](https://learn.microsoft.com/azure/confidential-computing/confidential-vm-overview-gpu) and [`NVIDIA/nvtrust`](https://github.com/NVIDIA/nvtrust). For the up-to-date list of regions that offer `Standard_NCC40ads_H100_v5` see the [Azure products by region](https://azure.microsoft.com/en-gb/explore/global-infrastructure/products-by-region/table) page (filter for *NCCads H100 v5*).
 
 ### Examples
 
