@@ -66,8 +66,12 @@ if ($GPU) {
         write-host "-GPU was specified: overriding -osType '$osType' with 'Ubuntu' (NVIDIA H100 CC mode is Linux-only on Azure)." -ForegroundColor Yellow
         $osType = 'Ubuntu'
     }
-    if ($region -eq 'northeurope') {
-        write-host "-GPU was specified: switching default region from 'northeurope' to 'eastus2' where '$h100Sku' is offered." -ForegroundColor Yellow
+    # Regions where Standard_NCC40ads_H100_v5 is generally offered. If the user picked
+    # something else (or just accepted the default northeurope, which does NOT have H100),
+    # switch to eastus2 and tell them why.
+    $h100Regions = @('eastus2','westeurope','southcentralus','westus3','swedencentral','centraluseuap')
+    if ($h100Regions -notcontains $region) {
+        write-host "-GPU was specified: region '$region' does not offer '$h100Sku'. Switching to 'eastus2'. Pass -region with one of: $($h100Regions -join ', ') to override." -ForegroundColor Yellow
         $region = 'eastus2'
     }
 }
