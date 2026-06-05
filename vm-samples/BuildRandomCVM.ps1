@@ -101,7 +101,10 @@ if (-not $gitRemoteUrl) {
 # Set PowerShell variables to use in the script
 $basename = $basename + -join ((97..122) | Get-Random -Count 5 | % {[char]$_}) # basename + 5 random lower-case letters
 $vmusername = "azureuser" # you can adjust this if you want
-$vmadminpassword = -join ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%".ToCharArray() | Get-Random -Count 40) # build a random password - note you can't get it back afterwards
+# Alphanumeric-only so the printed password is a single "word" the user can double-click to select and copy.
+# 40 random chars from [A-Za-z0-9] easily satisfies Azure's 3-of-4 complexity rule (upper+lower+digit) without any
+# punctuation chars (!@#$%) that act as word-break boundaries in most terminals.
+$vmadminpassword = -join ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".ToCharArray() | Get-Random -Count 40)
 $resgrp =  $basename # name of the resource group where all resources will be created, copied from $basename
 $akvname = $basename + "akv"    #Name of the Azure Key Vault
 $desname = $basename + "des"    #Name of the Disk Encryption Set
@@ -141,9 +144,11 @@ if ($smoketest) {
 if ($DisableBastion) {
     write-host "BASTION DISABLED: VM will only be accessible via private network connectivity" -ForegroundColor Yellow
 }
-write-host "IMPORTANT"
-write-host "VM admin username is " $vmusername
-write-host "randomly generated passsword for the VM is " $vmadminpassword " - save this now as you CANNOT retrieve it later"
+write-host "IMPORTANT - save these credentials now, they CANNOT be retrieved later:" -ForegroundColor Yellow
+write-host ("  username: {0}" -f $vmusername)
+write-host ("  password: {0}" -f $vmadminpassword)
+write-host ""
+write-host "(the password is alphanumeric only so you can double-click it to select, then Ctrl+C to copy)" -ForegroundColor DarkGray
 write-host ""
 write-host "Script: $scriptName"
 write-host "Repository URL: $gitRemoteUrl"
@@ -582,7 +587,31 @@ New-Item -ItemType Directory -Path `$work -Force | Out-Null
 Set-Location `$work
 Write-Host "Downloading latest attest-win.zip from cvm-attestation-tools..."
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -Uri 'https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-win.zip' -OutFile 'attest-win.zip' -UseBasicParsing
+# Run-command runs as SYSTEM, which has no IE/WinINet proxy config; Invoke-WebRequest then
+# fails with "Unable to connect to the remote server" even though outbound is fine.
+# Prefer curl.exe (in-box on Win10/11/Server2019+, doesn't use WinINet); fall back to
+# Invoke-WebRequest with the default proxy explicitly cleared.
+`$attestUrl = 'https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-win.zip'
+`$dlOk = `$false
+`$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+if (`$curl) {
+    & `$curl.Source -fsSL --retry 5 --retry-connrefused --retry-delay 5 -o 'attest-win.zip' `$attestUrl
+    if (`$LASTEXITCODE -eq 0 -and (Test-Path 'attest-win.zip')) { `$dlOk = `$true }
+    else { Write-Host "curl.exe download failed (exit `$LASTEXITCODE); falling back to Invoke-WebRequest..." -ForegroundColor Yellow }
+}
+if (-not `$dlOk) {
+    [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+    for (`$i = 1; `$i -le 5 -and -not `$dlOk; `$i++) {
+        try {
+            Invoke-WebRequest -Uri `$attestUrl -OutFile 'attest-win.zip' -UseBasicParsing
+            `$dlOk = `$true
+        } catch {
+            Write-Host "Invoke-WebRequest attempt `$i failed: `$(`$_.Exception.Message)" -ForegroundColor Yellow
+            if (`$i -lt 5) { Start-Sleep -Seconds 10 }
+        }
+    }
+}
+if (-not `$dlOk) { throw "Failed to download attest-win.zip from `$attestUrl" }
 Expand-Archive -Path 'attest-win.zip' -DestinationPath '.' -Force
 Write-Host "--------- attest.exe --c $attestConfig ---------"
 
