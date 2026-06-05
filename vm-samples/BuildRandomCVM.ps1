@@ -31,6 +31,8 @@
 
 # TODO
 # - look at the credential handling, it's not optimal
+# - look at auto-cleanup of resources for non-smoketest mode (e.g. opt-in tear-down on failure
+#   so non-smoketest runs that fail mid-build don't leave orphaned resources behind)
 
 # handle command line parameters, mandatory, will force you to enter them
 param (
@@ -87,6 +89,31 @@ if ($basename -notmatch '^[A-Za-z]+$') {
     write-host "ERROR: -basename must contain letters only (A-Z, a-z). No digits, hyphens, or other characters." -ForegroundColor Red
     write-host "       Provided: '$basename'" -ForegroundColor Red
     exit 1
+}
+
+# Tear-down helper used by both the success path and the failure trap below.
+# Idempotent: silently no-ops if the resource group / vault don't exist.
+function Invoke-SmoketestCleanup {
+    param(
+        [string]$ResourceGroup,
+        [string]$KeyVaultName,
+        [string]$Region
+    )
+    if (-not $ResourceGroup) { return }
+    $rg = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
+    if (-not $rg) {
+        Write-Host "Smoketest cleanup: resource group '$ResourceGroup' not found - nothing to clean up." -ForegroundColor DarkGray
+        return
+    }
+    # Purge the Key Vault first so the HSM-protected key stops billing immediately (no soft-delete tail).
+    # Smoketest vaults are created without purge protection so this is allowed.
+    Write-Host "Soft-deleting Key Vault '$KeyVaultName' (if present)..."
+    Remove-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroup -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Purging soft-deleted Key Vault '$KeyVaultName' (if present) to stop HSM key billing..."
+    Remove-AzKeyVault -VaultName $KeyVaultName -Location $Region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Removing resource group '$ResourceGroup'..."
+    Remove-AzResourceGroup -Name $ResourceGroup -Force -AsJob | Out-Null
+    Write-Host "Resource group deletion initiated (running in background)." -ForegroundColor Yellow
 }
 
 # mark the start time of the script execution
@@ -309,6 +336,26 @@ if ($DisableBastion) {
     $resourceGroupTags.Add("BastionDisabled", "true")
 }
 
+# In smoketest mode, install a trap so any uncaught terminating error during the build
+# (network, VM, key vault, attestation, etc.) tears the resource group down before the
+# script exits. Non-smoketest runs keep the existing behaviour (leave resources for
+# inspection / manual cleanup).
+if ($smoketest) {
+    trap {
+        Write-Host ""
+        Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "----------------------------------------------------------------------------------------------------------------" -ForegroundColor Red
+        Write-Host "SMOKETEST MODE: build failed - cleaning up partially-created resources..." -ForegroundColor Yellow
+        Write-Host "----------------------------------------------------------------------------------------------------------------" -ForegroundColor Red
+        try {
+            Invoke-SmoketestCleanup -ResourceGroup $resgrp -KeyVaultName $akvname -Region $region
+        } catch {
+            Write-Host "Smoketest cleanup error: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        exit 1
+    }
+}
+
 New-AzResourceGroup -Name $resgrp -Location $region -Tag $resourceGroupTags -force
 
 #create a credential object
@@ -348,8 +395,11 @@ for ($i = 1; $i -le $maxAttempts; $i++) {
     Start-Sleep -Seconds 10
 }
 
-# Add Key vault Key (with retry to absorb SKR policy-service propagation lag)
-$keyAttempts = 6
+# Add Key vault Key (with retry to absorb SKR policy-service propagation lag).
+# On cold/personal subscriptions the SKR policy service ARM cache can lag well past the AKV control-plane (minutes,
+# not seconds), so use a generous window here: 20 attempts * 30s = 10 minutes.
+$keyAttempts = 20
+$keySleep = 30
 for ($i = 1; $i -le $keyAttempts; $i++) {
     try {
         if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
@@ -366,8 +416,8 @@ for ($i = 1; $i -le $keyAttempts; $i++) {
         $msg = $_.Exception.Message
         if ($i -lt $keyAttempts -and ($msg -match 'does not exist in current subscription' -or $msg -match 'Fetch default CVM Policy failed')) {
             Write-Host "Add-AzKeyVaultKey transient failure (attempt $i/$keyAttempts): $msg" -ForegroundColor Yellow
-            Write-Host "Retrying in 15s..." -ForegroundColor Yellow
-            Start-Sleep -Seconds 15
+            Write-Host "Retrying in ${keySleep}s (SKR policy service cache may be cold on first use in this subscription)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $keySleep
         } else {
             throw
         }
@@ -808,15 +858,7 @@ if ($smoketest) {
     } else {
         write-host "`nProceeding with resource deletion..."
         try {
-            # Purge the Key Vault first so the HSM-protected key stops billing immediately (no soft-delete tail).
-            # Smoketest vaults are created without purge protection so this is allowed.
-            write-host "Soft-deleting Key Vault '$akvname'..."
-            Remove-AzKeyVault -VaultName $akvname -ResourceGroupName $resgrp -Force -ErrorAction SilentlyContinue | Out-Null
-            write-host "Purging soft-deleted Key Vault '$akvname' to stop HSM key billing..."
-            Remove-AzKeyVault -VaultName $akvname -Location $region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
-
-            Remove-AzResourceGroup -Name $resgrp -Force -AsJob
-            write-host "Resource group deletion initiated successfully (running in background)"
+            Invoke-SmoketestCleanup -ResourceGroup $resgrp -KeyVaultName $akvname -Region $region
             write-host "All resources in resource group '$resgrp' are being removed"
         } catch {
             write-host "Error removing resource group: $($_.Exception.Message)" -ForegroundColor Red
