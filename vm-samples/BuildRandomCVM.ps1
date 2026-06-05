@@ -385,6 +385,28 @@ $subnet = New-AzVirtualNetworkSubnetConfig -Name ($vmsubnetName) -AddressPrefix 
 $vnet = New-AzVirtualNetwork -Force -Name ($vnetname) -ResourceGroupName $resgrp -Location $region -AddressPrefix "10.0.0.0/16" -Subnet $subnet;
 $vnet = Get-AzVirtualNetwork -Name ($vnetname) -ResourceGroupName $resgrp;
 $subnetId = $vnet.Subnets[0].Id;
+
+# NAT Gateway for outbound internet from the VM subnet.
+# Azure retired default outbound access on 30 Sep 2025: a new VM in a new VNet with no
+# public IP / no NAT gateway / no LB outbound rule has zero internet access (it can't
+# reach github.com to download the attest tool, can't apt/yum/winget update, etc).
+# Bastion only provides inbound, so it doesn't help here. A NAT gateway on the subnet
+# gives outbound to every VM in it without exposing any inbound surface, and is the
+# Azure-recommended pattern. See https://learn.microsoft.com/azure/virtual-network/ip-services/default-outbound-access
+write-host "Creating NAT Gateway for outbound internet access on the VM subnet..." -ForegroundColor Cyan
+$natpipName = $basename + "-natgw-pip"
+$natgwName  = $basename + "-natgw"
+$natpip = New-AzPublicIpAddress -ResourceGroupName $resgrp -Name $natpipName -Location $region -Sku Standard -AllocationMethod Static
+$natgw  = New-AzNatGateway -ResourceGroupName $resgrp -Name $natgwName -Location $region -Sku Standard -PublicIpAddress $natpip -IdleTimeoutInMinutes 10
+# Re-fetch vnet, attach NAT gateway to the VM subnet, and push the update.
+$vnet = Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $resgrp
+$vmSubnet = $vnet.Subnets | Where-Object { $_.Name -eq $vmsubnetName }
+$vmSubnet.NatGateway = New-Object Microsoft.Azure.Commands.Network.Models.PSResourceId
+$vmSubnet.NatGateway.Id = $natgw.Id
+Set-AzVirtualNetwork -VirtualNetwork $vnet | Out-Null
+$vnet = Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $resgrp
+$subnetId = ($vnet.Subnets | Where-Object { $_.Name -eq $vmsubnetName }).Id
+
 #uncomment the below if you want to add a public IP address to the VM
 #$pubip = New-AzPublicIpAddress -Force -Name ($pubIpPrefix + $resgrp) -ResourceGroupName $resgrp -Location $region -AllocationMethod Static -DomainNameLabel $domainNameLabel2;
 #$pubip = Get-AzPublicIpAddress -Name ($pubIpPrefix + $resgrp) -ResourceGroupName $resgrp;
