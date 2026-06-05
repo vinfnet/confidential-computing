@@ -665,8 +665,25 @@ if ! command -v unzip >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
 fi
 WORKDIR=`$(mktemp -d)
 cd "`$WORKDIR"
+# Wait for outbound to github.com:443 to come up. A freshly-attached NAT Gateway can
+# take a couple of minutes to become effective on the VM subnet, during which curl
+# fails with exit 28 (TCP connect timeout). Probe with a 5s timeout per attempt and
+# back off; total ~5 minutes.
+echo "Waiting for outbound connectivity to github.com:443..."
+for i in `$(seq 1 30); do
+    if curl -fsS --max-time 5 -o /dev/null https://github.com 2>/dev/null; then
+        echo "Outbound to github.com is up (attempt `$i)."
+        break
+    fi
+    if [ "`$i" -eq 30 ]; then
+        echo "WARNING: github.com still unreachable after 5 minutes; attempting download anyway."
+    else
+        echo "  attempt `$i: outbound not yet ready, sleeping 10s..."
+        sleep 10
+    fi
+done
 echo "Downloading latest attest-lin.zip from cvm-attestation-tools..."
-curl -fsSL -o attest-lin.zip https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-lin.zip
+curl -fsSL --retry 5 --retry-connrefused --retry-delay 10 -o attest-lin.zip https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-lin.zip
 unzip -q attest-lin.zip
 chmod +x attest read_report 2>/dev/null || true
 echo "--------- attest --c $attestConfig ---------"
@@ -713,6 +730,30 @@ Write-Host "Downloading latest attest-win.zip from cvm-attestation-tools..."
 `$attestUrl = 'https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-win.zip'
 `$dlOk = `$false
 `$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+# Wait for outbound to github.com:443 to come up before the real download. A freshly-attached
+# NAT Gateway on the VM subnet can take a couple of minutes to become effective, during which
+# every connection out of the VM fails with TCP connect timeout (curl exit 28). Probe with a
+# 5s timeout per attempt and back off; total ~5 minutes.
+Write-Host "Waiting for outbound connectivity to github.com:443..."
+for (`$i = 1; `$i -le 30; `$i++) {
+    `$ok = `$false
+    if (`$curl) {
+        & `$curl.Source -fsS --max-time 5 -o NUL https://github.com 2>`$null
+        if (`$LASTEXITCODE -eq 0) { `$ok = `$true }
+    } else {
+        try {
+            `$tnc = Test-NetConnection -ComputerName 'github.com' -Port 443 -WarningAction SilentlyContinue
+            if (`$tnc.TcpTestSucceeded) { `$ok = `$true }
+        } catch { `$ok = `$false }
+    }
+    if (`$ok) { Write-Host "Outbound to github.com is up (attempt `$i)." -ForegroundColor Green; break }
+    if (`$i -eq 30) {
+        Write-Host "WARNING: github.com still unreachable after 5 minutes; attempting download anyway." -ForegroundColor Yellow
+    } else {
+        Write-Host "  attempt `${i}: outbound not yet ready, sleeping 10s..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds 10
+    }
+}
 if (`$curl) {
     & `$curl.Source -fsSL --retry 5 --retry-connrefused --retry-delay 5 -o 'attest-win.zip' `$attestUrl
     if (`$LASTEXITCODE -eq 0 -and (Test-Path 'attest-win.zip')) { `$dlOk = `$true }
