@@ -331,14 +331,47 @@ if ($smoketest) {
 $cvmAgent = Get-AzADServicePrincipal -ApplicationId 'bf7b6499-ff71-4aa2-97a4-f372087be7f0';
 Set-AzKeyVaultAccessPolicy -VaultName $akvname -ResourceGroupName $resgrp -ObjectId $cvmAgent.id -PermissionsToKeys get,release;
 
-# Add Key vault Key
-if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
-    Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -ReleasePolicyPath $policyFilePath;
-} else {
-    if ($policyFilePath -ne "" -and !(Test-Path $policyFilePath)) {
-        Write-Host "Warning: Policy file path '$policyFilePath' does not exist. Using default CVM policy instead." -ForegroundColor Yellow
+# Wait for the new Key Vault to be visible to the SKR policy service before creating the CMK with -UseDefaultCVMPolicy.
+# Without this, freshly-created vaults can fail Add-AzKeyVaultKey with:
+#   "Fetch default CVM Policy failed, Vault '<name>' does not exist in current subscription"
+# because the policy service has its own ARM cache that lags behind vault creation (especially on first use in a subscription).
+$maxAttempts = 12   # ~2 minutes total
+for ($i = 1; $i -le $maxAttempts; $i++) {
+    try {
+        if (Get-AzKeyVault -VaultName $akvname -ResourceGroupName $resgrp -ErrorAction Stop) {
+            Write-Host "Key Vault '$akvname' is visible (attempt $i)." -ForegroundColor Green
+            break
+        }
+    } catch {
+        Write-Host "Waiting for Key Vault '$akvname' to propagate (attempt $i/$maxAttempts)..." -ForegroundColor Yellow
     }
-    Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -UseDefaultCVMPolicy;
+    Start-Sleep -Seconds 10
+}
+
+# Add Key vault Key (with retry to absorb SKR policy-service propagation lag)
+$keyAttempts = 6
+for ($i = 1; $i -le $keyAttempts; $i++) {
+    try {
+        if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
+            Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -ReleasePolicyPath $policyFilePath -ErrorAction Stop | Out-Null
+        } else {
+            if ($policyFilePath -ne "" -and !(Test-Path $policyFilePath)) {
+                Write-Host "Warning: Policy file path '$policyFilePath' does not exist. Using default CVM policy instead." -ForegroundColor Yellow
+            }
+            Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -UseDefaultCVMPolicy -ErrorAction Stop | Out-Null
+        }
+        Write-Host "Created CMK '$KeyName' in vault '$akvname' (attempt $i)." -ForegroundColor Green
+        break
+    } catch {
+        $msg = $_.Exception.Message
+        if ($i -lt $keyAttempts -and ($msg -match 'does not exist in current subscription' -or $msg -match 'Fetch default CVM Policy failed')) {
+            Write-Host "Add-AzKeyVaultKey transient failure (attempt $i/$keyAttempts): $msg" -ForegroundColor Yellow
+            Write-Host "Retrying in 15s..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 15
+        } else {
+            throw
+        }
+    }
 }
         
 # Capture Key Vault and Key details
