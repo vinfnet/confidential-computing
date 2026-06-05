@@ -81,6 +81,14 @@ if ($subsID -eq "" -or $basename -eq "" -or $osType -eq "") {
     exit
 }# exit if any of the parameters are empty
 
+# basename must be letters only - some downstream resource names (e.g. storage accounts, certain DNS labels)
+# don't accept digits in the prefix, so reject them up front for consistency.
+if ($basename -notmatch '^[A-Za-z]+$') {
+    write-host "ERROR: -basename must contain letters only (A-Z, a-z). No digits, hyphens, or other characters." -ForegroundColor Red
+    write-host "       Provided: '$basename'" -ForegroundColor Red
+    exit 1
+}
+
 # mark the start time of the script execution
 $startTime = Get-Date
 # get the name of the script so we can tag the resource group with it
@@ -308,7 +316,13 @@ $securePassword = ConvertTo-SecureString -String $vmadminpassword -AsPlainText -
 $cred = New-Object System.Management.Automation.PSCredential ($vmusername, $securePassword);
 
 # Create Key Vault
-New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 10 -EnablePurgeProtection;
+# Smoketest runs use the 7-day minimum soft-delete retention and skip purge protection so the cleanup step can purge the vault
+# immediately and avoid the HSM-key billing tail. Non-smoketest runs keep the 10-day retention + purge protection for safety.
+if ($smoketest) {
+    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 7;
+} else {
+    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 10 -EnablePurgeProtection;
+}
 
 #TO DO - if the SP hasn't been created in this tenant yet - break here, or prompt to create it (code as follows)
 #Connect-Graph -Tenant "your tenant ID" Application.ReadWrite.All
@@ -761,6 +775,13 @@ if ($smoketest) {
     } else {
         write-host "`nProceeding with resource deletion..."
         try {
+            # Purge the Key Vault first so the HSM-protected key stops billing immediately (no soft-delete tail).
+            # Smoketest vaults are created without purge protection so this is allowed.
+            write-host "Soft-deleting Key Vault '$akvname'..."
+            Remove-AzKeyVault -VaultName $akvname -ResourceGroupName $resgrp -Force -ErrorAction SilentlyContinue | Out-Null
+            write-host "Purging soft-deleted Key Vault '$akvname' to stop HSM key billing..."
+            Remove-AzKeyVault -VaultName $akvname -Location $region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
+
             Remove-AzResourceGroup -Name $resgrp -Force -AsJob
             write-host "Resource group deletion initiated successfully (running in background)"
             write-host "All resources in resource group '$resgrp' are being removed"
