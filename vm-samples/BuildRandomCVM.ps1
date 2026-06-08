@@ -554,21 +554,55 @@ if ($GPU) {
     write-host "GPU step 1/3: installing NVIDIA open-kernel driver and nvtrust local GPU verifier inside the VM..." -ForegroundColor Magenta
     $gpuInstallScript = @"
 #!/bin/bash
-set -e
+# Note: no 'set -e' here - we want to continue past individual failures and
+# print the diagnostics block at the end so the caller can see *why* a step
+# failed instead of getting a silent abort partway through.
 export DEBIAN_FRONTEND=noninteractive
+echo "--- secure boot state (signed modules required if enabled) ---"
+mokutil --sb-state 2>&1 || echo "(mokutil not installed)"
+
 echo "--- apt-get update + install build deps ---"
-apt-get update -y >/dev/null 2>&1 || true
-apt-get install -y build-essential dkms python3-pip python3-venv git curl jq unzip linux-headers-`$(uname -r) >/dev/null 2>&1 || true
+apt-get update -y
+apt-get install -y build-essential dkms python3-pip python3-venv git curl jq unzip mokutil linux-headers-`$(uname -r)
 
 echo "--- adding NVIDIA CUDA apt repo (Ubuntu 22.04) ---"
 curl -fsSL -o /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-dpkg -i /tmp/cuda-keyring.deb >/dev/null 2>&1
-apt-get update -y >/dev/null 2>&1
+dpkg -i /tmp/cuda-keyring.deb
+apt-get update -y
+
+echo "--- candidate open-kernel driver packages available in the repo ---"
+apt-cache search '^nvidia-driver-[0-9]+-open`$' | sort
+apt-cache search '^nvidia-open`$' | sort
 
 echo "--- installing nvidia-open driver (required for H100 CC mode) ---"
 # The 'open' kernel module variant is required for H100 confidential compute mode.
-# We pin to a known-good major version that ships open-kernel modules and supports CC mode.
-apt-get install -y nvidia-open >/dev/null 2>&1 || apt-get install -y nvidia-driver-555-open || apt-get install -y nvidia-driver-550-open || true
+# Try the meta-package first (tracks current branch), then fall back to specific
+# branches in descending order. Each attempt prints its own apt output so we can
+# see exactly which one ran.
+DRIVER_INSTALLED=0
+INSTALLED_PKG=""
+for pkg in nvidia-open nvidia-driver-570-open nvidia-driver-565-open nvidia-driver-560-open nvidia-driver-555-open nvidia-driver-550-open; do
+    echo ">>> attempting: apt-get install -y `$pkg"
+    if apt-get install -y "`$pkg"; then
+        echo ">>> `$pkg installed successfully"
+        DRIVER_INSTALLED=1
+        INSTALLED_PKG="`$pkg"
+        break
+    else
+        echo ">>> `$pkg install failed (exit `$?), trying next candidate"
+    fi
+done
+if [ "`$DRIVER_INSTALLED" -ne 1 ]; then
+    echo "ERROR: no nvidia open-kernel driver package could be installed"
+fi
+
+echo "--- post-install verification ---"
+echo ">>> dpkg -l nvidia* | grep -E '^ii'"
+dpkg -l 'nvidia*' 2>/dev/null | grep -E '^ii' || echo "(no nvidia packages installed)"
+echo ">>> dkms status"
+dkms status || true
+echo ">>> built kernel modules under /lib/modules/`$(uname -r)/"
+find /lib/modules/`$(uname -r)/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none found)"
 
 echo "--- cloning NVIDIA nvtrust (local GPU verifier) ---"
 rm -rf /opt/nvtrust
@@ -611,6 +645,16 @@ for i in `$(seq 1 30); do
     fi
     if [ "`$i" -eq 30 ]; then
         echo "WARNING: nvidia-smi still not responding after 5 minutes."
+        echo "--- mokutil --sb-state ---"
+        mokutil --sb-state 2>&1 || echo "(mokutil not installed)"
+        echo "--- dkms status ---"
+        dkms status 2>&1 || true
+        echo "--- built nvidia .ko under /lib/modules/`$(uname -r) ---"
+        find /lib/modules/`$(uname -r)/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none)"
+        echo "--- modprobe -v nvidia (manual load attempt) ---"
+        modprobe -v nvidia 2>&1 | head -20 || true
+        echo "--- journalctl -b | grep -iE 'nvidia|dkms|secure' (tail) ---"
+        journalctl -b 2>/dev/null | grep -iE 'nvidia|dkms|secure' | tail -50 || true
         echo "--- dmesg | grep -i nvidia (tail) ---"
         dmesg 2>/dev/null | grep -i nvidia | tail -50 || true
         echo "--- lsmod | grep nvidia ---"
