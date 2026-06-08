@@ -599,6 +599,26 @@ echo "--- driver/verifier install complete; the VM will now be rebooted to load 
     $gpuAttestScript = @"
 #!/bin/bash
 set -e
+# Poll nvidia-smi until the driver is loaded. After reboot, the NVIDIA kernel module
+# can take a couple of minutes to initialize (DKMS rebuilds on first boot, GPU PCI
+# enumeration delay, persistenced startup). Without this wait, nvmlInit() inside the
+# verifier returns DriverNotLoaded and attestation fails spuriously.
+echo "--- waiting for nvidia-smi to respond (driver readiness probe) ---"
+for i in `$(seq 1 30); do
+    if nvidia-smi >/dev/null 2>&1; then
+        echo "nvidia driver ready (attempt `$i)."
+        break
+    fi
+    if [ "`$i" -eq 30 ]; then
+        echo "WARNING: nvidia-smi still not responding after 5 minutes."
+        echo "--- dmesg | grep -i nvidia (tail) ---"
+        dmesg 2>/dev/null | grep -i nvidia | tail -50 || true
+        echo "--- lsmod | grep nvidia ---"
+        lsmod | grep -i nvidia || echo "(no nvidia kernel modules loaded)"
+    else
+        sleep 10
+    fi
+done
 echo "--- nvidia-smi ---"
 nvidia-smi || echo "nvidia-smi failed (driver may not have loaded; check 'dmesg | grep -i nvidia' on the VM)"
 
@@ -693,7 +713,7 @@ echo "--------- attest --c $attestConfig ---------"
 # and on a brand-new VM the SNAT mapping to the MAA endpoint can take a minute or two
 # to warm up after NAT GW attach, surfacing as ConnectTimeoutError to *.attest.azure.net
 # even though github.com is already reachable.
-for `$i in `$(seq 1 5); do
+for i in `$(seq 1 5); do
     ./attest --c $attestConfig 2>&1 | tee attest.out
     rc=`${PIPESTATUS[0]}
     if [ "`$rc" -eq 0 ]; then break; fi
