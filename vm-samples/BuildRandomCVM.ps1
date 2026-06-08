@@ -689,7 +689,21 @@ curl -fsSL --retry 5 --retry-connrefused --retry-delay 10 -o attest-lin.zip http
 unzip -q attest-lin.zip
 chmod +x attest read_report 2>/dev/null || true
 echo "--------- attest --c $attestConfig ---------"
-./attest --c $attestConfig 2>&1 | tee attest.out || echo "attest exited with code `$?"
+# Retry attest a few times: the attestation provider's internal retry budget is short,
+# and on a brand-new VM the SNAT mapping to the MAA endpoint can take a minute or two
+# to warm up after NAT GW attach, surfacing as ConnectTimeoutError to *.attest.azure.net
+# even though github.com is already reachable.
+for `$i in `$(seq 1 5); do
+    ./attest --c $attestConfig 2>&1 | tee attest.out
+    rc=`${PIPESTATUS[0]}
+    if [ "`$rc" -eq 0 ]; then break; fi
+    if [ "`$i" -lt 5 ]; then
+        echo "attest attempt `$i exited with code `$rc; sleeping 30s before retry..."
+        sleep 30
+    else
+        echo "attest exited with code `$rc after `$i attempts"
+    fi
+done
 
 # Extract JWT (a single token of the form xxx.yyy.zzz with base64url chars)
 # from the attest output and pretty-print header + payload claims using jq.
@@ -786,8 +800,21 @@ Write-Host "--------- attest.exe --c $attestConfig ---------"
 `$prevEap = `$ErrorActionPreference
 `$ErrorActionPreference = 'Continue'
 if (`$PSVersionTable.PSVersion.Major -ge 7) { `$PSNativeCommandUseErrorActionPreference = `$false }
-`$attestOut = (& .\attest.exe --c $attestConfig 2>&1 | Out-String -Width 16384)
-`$attestExit = `$LASTEXITCODE
+# Retry attest.exe a few times: the attestation provider's internal retry budget is short,
+# and on a brand-new VM the SNAT mapping to the MAA endpoint can take a minute or two to
+# warm up after NAT GW attach, surfacing as ConnectTimeoutError to *.attest.azure.net even
+# though github.com is already reachable by the time we finish downloading.
+`$attestOut = ''
+`$attestExit = -1
+for (`$i = 1; `$i -le 5; `$i++) {
+    `$attestOut = (& .\attest.exe --c $attestConfig 2>&1 | Out-String -Width 16384)
+    `$attestExit = `$LASTEXITCODE
+    if (`$attestExit -eq 0) { break }
+    if (`$i -lt 5) {
+        Write-Host "attest.exe attempt `$i exited with code `$attestExit; sleeping 30s before retry..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 30
+    }
+}
 `$ErrorActionPreference = `$prevEap
 Write-Host `$attestOut
 if (`$attestExit -ne 0) { Write-Host "attest.exe exited with code `$attestExit" -ForegroundColor Yellow }
