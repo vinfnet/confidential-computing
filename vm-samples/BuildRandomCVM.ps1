@@ -551,58 +551,69 @@ if (-not $DisableBastion) {
 # both the AMD SEV-SNP TEE and the NVIDIA H100 in CC mode.
 if ($GPU) {
     write-host "----------------------------------------------------------------------------------------------------------------"
-    write-host "GPU step 1/3: installing NVIDIA open-kernel driver and nvtrust local GPU verifier inside the VM..." -ForegroundColor Magenta
+    write-host "GPU step 1/3: installing Canonical-signed NVIDIA kernel module + nvtrust local GPU verifier inside the VM..." -ForegroundColor Magenta
     $gpuInstallScript = @"
 #!/bin/bash
-# Note: no 'set -e' here - we want to continue past individual failures and
-# print the diagnostics block at the end so the caller can see *why* a step
-# failed instead of getting a silent abort partway through.
+# No 'set -e' - each section surfaces its own diagnostics rather than aborting
+# on the first hiccup.
 export DEBIAN_FRONTEND=noninteractive
+
 echo "--- secure boot state (signed modules required if enabled) ---"
 mokutil --sb-state 2>&1 || echo "(mokutil not installed)"
+echo "--- kernel ---"
+uname -r
 
-echo "--- apt-get update + install build deps ---"
+echo "--- apt-get update + base deps ---"
 apt-get update -y
-apt-get install -y build-essential dkms python3-pip python3-venv git curl jq unzip mokutil linux-headers-`$(uname -r)
+apt-get install -y python3-pip python3-venv git curl jq unzip mokutil ca-certificates
 
-echo "--- adding NVIDIA CUDA apt repo (Ubuntu 22.04) ---"
-curl -fsSL -o /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-dpkg -i /tmp/cuda-keyring.deb
-apt-get update -y
+# Strategy: use Canonical-signed prebuilt NVIDIA kernel modules from the Ubuntu
+# archive instead of building NVIDIA's CUDA-repo DKMS package on top. Azure CVM
+# Ubuntu uses the '-azure-fde' kernel flavor, for which Canonical ships
+# 'linux-modules-nvidia-<branch>-<flavor>' packages signed with a key already
+# in shim's trust DB - so no MOK enrollment is needed under Secure Boot.
+KREL=`$(uname -r)
+KFLAV=`$(echo "`$KREL" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-//')
+echo "kernel release: `$KREL"
+echo "kernel flavor:  `$KFLAV"
 
-echo "--- candidate open-kernel driver packages available in the repo ---"
-apt-cache search '^nvidia-driver-[0-9]+-open`$' | sort
-apt-cache search '^nvidia-open`$' | sort
+echo "--- all linux-modules-nvidia-* matching kernel flavor '`$KFLAV' ---"
+apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | sed 's/^/  /' || true
 
-echo "--- installing nvidia-open driver (required for H100 CC mode) ---"
-# The 'open' kernel module variant is required for H100 confidential compute mode.
-# Try the meta-package first (tracks current branch), then fall back to specific
-# branches in descending order. Each attempt prints its own apt output so we can
-# see exactly which one ran.
-DRIVER_INSTALLED=0
-INSTALLED_PKG=""
-for pkg in nvidia-open nvidia-driver-570-open nvidia-driver-565-open nvidia-driver-560-open nvidia-driver-555-open nvidia-driver-550-open; do
-    echo ">>> attempting: apt-get install -y `$pkg"
-    if apt-get install -y "`$pkg"; then
-        echo ">>> `$pkg installed successfully"
-        DRIVER_INSTALLED=1
-        INSTALLED_PKG="`$pkg"
-        break
-    else
-        echo ">>> `$pkg install failed (exit `$?), trying next candidate"
-    fi
-done
-if [ "`$DRIVER_INSTALLED" -ne 1 ]; then
-    echo "ERROR: no nvidia open-kernel driver package could be installed"
+echo "--- preferring 'open' variants (required for H100 CC mode) ---"
+CAND=`$(apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | awk '{print `$1}' | grep -- '-open' | sort -V)
+if [ -z "`$CAND" ]; then
+    echo "WARNING: no -open variant found for flavor `$KFLAV; falling back to non-open prebuilt (may not support H100 CC)"
+    CAND=`$(apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | awk '{print `$1}' | sort -V)
+fi
+echo "`$CAND" | sed 's/^/  /'
+
+if [ -z "`$CAND" ]; then
+    echo "ERROR: no signed prebuilt NVIDIA module package available for kernel flavor '`$KFLAV'."
+    echo "       All linux-modules-nvidia-* in the archive (any flavor):"
+    apt-cache search '^linux-modules-nvidia-' | sed 's/^/  /' | head -40
+    exit 1
 fi
 
+PKG=`$(echo "`$CAND" | tail -1)
+BRANCH=`$(echo "`$PKG" | sed -E 's/^linux-modules-nvidia-([0-9]+).*`$/\1/')
+echo "selected kernel module package: `$PKG (branch `$BRANCH)"
+
+echo "--- installing `$PKG (Canonical-signed prebuilt module) ---"
+apt-get install -y "`$PKG"
+
+echo "--- installing matching userspace: nvidia-utils-`${BRANCH}-server (headless) ---"
+apt-get install -y "nvidia-utils-`${BRANCH}-server" || apt-get install -y "nvidia-utils-`${BRANCH}"
+
 echo "--- post-install verification ---"
-echo ">>> dpkg -l nvidia* | grep -E '^ii'"
-dpkg -l 'nvidia*' 2>/dev/null | grep -E '^ii' || echo "(no nvidia packages installed)"
-echo ">>> dkms status"
-dkms status || true
-echo ">>> built kernel modules under /lib/modules/`$(uname -r)/"
-find /lib/modules/`$(uname -r)/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none found)"
+echo ">>> dpkg -l matching nvidia/linux-modules-nvidia"
+dpkg -l 2>/dev/null | grep -E 'nvidia|linux-modules-nvidia' || echo "(none)"
+echo ">>> built kernel modules for `${KREL}"
+find /lib/modules/`${KREL}/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none)"
+echo ">>> module signers (Canonical key expected for SB-trusted load)"
+for f in `$(find /lib/modules/`${KREL}/ -name 'nvidia*.ko*' 2>/dev/null); do
+    echo "  `$f -> `$(modinfo -F signer "`$f" 2>/dev/null | head -1)"
+done
 
 echo "--- cloning NVIDIA nvtrust (local GPU verifier) ---"
 rm -rf /opt/nvtrust
