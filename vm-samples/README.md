@@ -94,7 +94,7 @@ Basename is a prefix assigned to all resources created by the script and will be
 The script will generate a random complex password and output it to the terminal once; make sure you copy it if you want to login to the CVM.
 
 ```powershell
-./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-vmsize <VM SIZE SKU>] [-policyFilePath <PATH>] [-DisableBastion] [-GPU] [-OverrideKeyPurgeProtection]
+./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-vmsize <VM SIZE SKU>] [-policyFilePath <PATH>] [-DisableBastion] [-GPU]
 ```
 
 ## Parameters:
@@ -108,7 +108,6 @@ The script will generate a random complex password and output it to the terminal
 - **policyFilePath**: Optional path to a custom key release policy JSON (defaults to `-UseDefaultCVMPolicy`)
 - **DisableBastion**: Optional switch that skips Azure Bastion creation; the VM will only be reachable via private network connectivity (VPN, ExpressRoute, peering)
 - **GPU**: Optional switch that builds an NVIDIA H100 confidential GPU VM (`Standard_NCC40ads_H100_v5`, AMD SEV-SNP CPU TEE + H100 in CC mode). Overrides `-vmsize`, forces `-osType Ubuntu`, and switches to the Ubuntu 22.04 CVM image. The script then installs the NVIDIA open-kernel driver and the NVIDIA `nvtrust` local GPU verifier inside the VM and runs **two** attestations: a GPU CC-mode attestation (`verifier.cc_admin`) and the normal SEV-SNP CPU attestation. See [GPU mode](#gpu-mode--h100-confidential-gpu-vm) below.
-- **OverrideKeyPurgeProtection**: Optional switch that creates the AKV **without** `-EnablePurgeProtection`. Useful with `-smoketest` because cleanup can then fully purge the vault and its HSM-backed CMK immediately, eliminating the ~7-day soft-delete billing tail on the HSM key. Tradeoffs: (1) some Azure subscriptions enforce purge protection via the built-in policy *Key vaults should have deletion protection enabled*, in which case AKV creation will fail terminating-ly and the smoketest cleanup trap will tear the resource group down; (2) `New-AzDiskEncryptionSet` for `ConfidentialVmEncryptedWithCustomerKey` is expected to reject a vault without purge protection (`KeyVaultNotPurgeProtectionEnabled`), again triggering smoketest cleanup. **Default is off** so the standard, working CVM-DES deployment path is preserved.
 
 ## OS Type Options:
 - **Windows**: Windows Server 2022 Datacenter (RDP via Bastion)
@@ -277,7 +276,7 @@ In short, this is the strongest "my data, my key, my hardware boundary" posture 
 If the `-policyFilePath` parameter is not specified when running `BuildRandomCVM.ps1`, the script uses the default CVM key release policy (`-UseDefaultCVMPolicy`), which points at the shared attestation endpoint serving the region where the CVM is created. This provides out-of-the-box attestation-gated key release without requiring custom configuration. For background on attestation-bound key release see the [Azure Key Vault SKR docs](https://learn.microsoft.com/azure/key-vault/keys/policy-grammar) and [`https://aka.ms/accdocs`](https://aka.ms/accdocs).
 
 ## Important Notes:
-Note this will deploy an Azure Keyvault *Premium* SKU [pricing](https://azure.microsoft.com/en-gb/pricing/details/key-vault/#pricing) & enables purge protection for 10 days (7 days under `-smoketest`). AKV Premium with an HSM-backed RSA-3072 key is required for CVMs with **Confidential OS disk encryption** — see [`https://aka.ms/accdocs`](https://aka.ms/accdocs) for the full requirements. Pass `-OverrideKeyPurgeProtection` to drop purge protection if you want smoketest cleanup to fully purge the vault and HSM key with no soft-delete cost tail; see the parameter description above for the caveats (subscription-policy enforcement, expected DES failure).
+Note this will deploy an Azure Keyvault *Premium* SKU [pricing](https://azure.microsoft.com/en-gb/pricing/details/key-vault/#pricing) with purge protection enabled and the **platform-minimum 7-day soft-delete retention**. AKV Premium with an HSM-backed RSA-3072 key plus purge protection is required for CVMs with **Confidential OS disk encryption** — the Microsoft.Compute resource provider enforces `KeyVaultNotPurgeProtectionEnabled` at VM-create time, and purge protection is a one-way Key Vault setting (it cannot be disabled once enabled), so the 7-day HSM-key billing tail after teardown is unavoidable on this code path. See [`https://aka.ms/accdocs`](https://aka.ms/accdocs) for the full requirements.
 
 By default the script will create resources in North Europe - you can specify a different region using the `-region` parameter. Make sure to check availability of CVMs in your chosen region first.
 
