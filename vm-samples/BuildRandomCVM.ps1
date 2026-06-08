@@ -10,7 +10,7 @@
 # 
 # Clone this repo to a folder (relies on the WindowsAttest.ps1 script being in the same folder as this script)
 #
-# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight] [-GPU]
+# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight] [-GPU] [-OverrideKeyPurgeProtection]
 #
 # Basename is a prefix for all resources created, it's used to create unique names for the resources
 # osType specifies which OS to deploy: Windows (Server 2022), Windows11 (Windows 11 Enterprise), Ubuntu (24.04), or RHEL (9.5)
@@ -48,7 +48,8 @@ param (
     [Parameter(Mandatory=$false)]$policyFilePath = "",
     [Parameter(Mandatory=$false)][switch]$DisableBastion,
     [Parameter(Mandatory=$false)][switch]$SkipSkuPreflight,
-    [Parameter(Mandatory=$false)][switch]$GPU
+    [Parameter(Mandatory=$false)][switch]$GPU,
+    [Parameter(Mandatory=$false)][switch]$OverrideKeyPurgeProtection
 )
 
 # -GPU: Override VM SKU / image / region defaults so we provision a Confidential VM with
@@ -83,6 +84,22 @@ if ($subsID -eq "" -or $basename -eq "" -or $osType -eq "") {
     exit
 }# exit if any of the parameters are empty
 
+# -OverrideKeyPurgeProtection: opt out of -EnablePurgeProtection on the AKV so cleanup
+# can fully purge the vault and its HSM-backed CMK immediately, eliminating the ~7-day
+# soft-delete billing tail. Tradeoff: New-AzDiskEncryptionSet for
+# ConfidentialVmEncryptedWithCustomerKey will fail with KeyVaultNotPurgeProtectionEnabled
+# under current Azure CVM-DES policy, and some Azure subscriptions enforce purge
+# protection at the policy level so even AKV creation can fail. Either failure is fine -
+# the smoketest trap (when -smoketest is set) will tear the RG down on any terminating
+# error.
+if ($OverrideKeyPurgeProtection) {
+    write-host "-OverrideKeyPurgeProtection was specified: AKV will be created WITHOUT purge protection." -ForegroundColor Yellow
+    write-host "  - Cleanup can fully purge the vault + HSM key (no 7-day cost tail)." -ForegroundColor Yellow
+    write-host "  - Some Azure subscriptions enforce purge protection via Azure Policy; AKV creation may fail." -ForegroundColor Yellow
+    write-host "  - New-AzDiskEncryptionSet will likely fail with KeyVaultNotPurgeProtectionEnabled." -ForegroundColor Yellow
+    write-host "  - On failure, smoketest cleanup (if -smoketest) will tear the RG down." -ForegroundColor Yellow
+}
+
 # basename must be letters only - some downstream resource names (e.g. storage accounts, certain DNS labels)
 # don't accept digits in the prefix, so reject them up front for consistency.
 if ($basename -notmatch '^[A-Za-z]+$') {
@@ -105,12 +122,14 @@ function Invoke-SmoketestCleanup {
         Write-Host "Smoketest cleanup: resource group '$ResourceGroup' not found - nothing to clean up." -ForegroundColor DarkGray
         return
     }
-    # Azure requires purge protection on AKVs backing a CVM disk-encryption set, so we can no longer purge the
-    # vault during smoketest cleanup. The HSM-protected key will incur a soft-delete billing tail equal to the
-    # vault's retention period (7 days, the minimum). Try the purge anyway in case the policy is ever relaxed.
+    # Azure normally requires purge protection on AKVs backing a CVM disk-encryption set, in which case the
+    # purge below will be rejected and the HSM-protected key will incur a soft-delete billing tail equal to
+    # the vault's retention period (7 days minimum). When -OverrideKeyPurgeProtection was passed (or the
+    # vault simply has purge protection disabled for any other reason), the purge succeeds immediately and
+    # the cost tail is zero. Either way we soft-delete first, then attempt the purge.
     Write-Host "Soft-deleting Key Vault '$KeyVaultName' (if present)..."
     Remove-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroup -Force -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "Attempting to purge soft-deleted Key Vault '$KeyVaultName' (will fail if purge protection is on; HSM key billing tail of 7 days expected in that case)..."
+    Write-Host "Attempting to purge soft-deleted Key Vault '$KeyVaultName' (succeeds when purge protection is off; otherwise a 7-day HSM key billing tail is expected)..."
     Remove-AzKeyVault -VaultName $KeyVaultName -Location $Region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
     Write-Host "Removing resource group '$ResourceGroup'..."
     Remove-AzResourceGroup -Name $ResourceGroup -Force -AsJob | Out-Null
@@ -366,12 +385,23 @@ $cred = New-Object System.Management.Automation.PSCredential ($vmusername, $secu
 # Create Key Vault
 # Azure now requires purge protection on AKVs that back a CVM disk-encryption set (KeyVaultNotPurgeProtectionEnabled).
 # Smoketest runs use the 7-day minimum retention to keep the unavoidable HSM-key billing tail as short as possible;
-# non-smoketest runs keep the 10-day retention.
-if ($smoketest) {
-    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 7 -EnablePurgeProtection;
-} else {
-    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 10 -EnablePurgeProtection;
+# non-smoketest runs keep the 10-day retention. -OverrideKeyPurgeProtection drops the purge-protection flag so
+# cleanup can fully purge the vault (caller has been warned upstream that DES creation will likely fail).
+# -ErrorAction Stop turns a tenant-policy rejection into a terminating error so the smoketest trap can fire.
+$akvParams = @{
+    Name                       = $akvname
+    Location                   = $region
+    ResourceGroupName          = $resgrp
+    Sku                        = 'Premium'
+    EnabledForDiskEncryption   = $true
+    DisableRbacAuthorization   = $true
+    SoftDeleteRetentionInDays  = if ($smoketest) { 7 } else { 10 }
+    ErrorAction                = 'Stop'
 }
+if (-not $OverrideKeyPurgeProtection) {
+    $akvParams['EnablePurgeProtection'] = $true
+}
+New-AzKeyVault @akvParams
 
 #TO DO - if the SP hasn't been created in this tenant yet - break here, or prompt to create it (code as follows)
 #Connect-Graph -Tenant "your tenant ID" Application.ReadWrite.All
