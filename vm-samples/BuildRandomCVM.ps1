@@ -105,11 +105,12 @@ function Invoke-SmoketestCleanup {
         Write-Host "Smoketest cleanup: resource group '$ResourceGroup' not found - nothing to clean up." -ForegroundColor DarkGray
         return
     }
-    # Purge the Key Vault first so the HSM-protected key stops billing immediately (no soft-delete tail).
-    # Smoketest vaults are created without purge protection so this is allowed.
+    # Azure requires purge protection on AKVs backing a CVM disk-encryption set, so we can no longer purge the
+    # vault during smoketest cleanup. The HSM-protected key will incur a soft-delete billing tail equal to the
+    # vault's retention period (7 days, the minimum). Try the purge anyway in case the policy is ever relaxed.
     Write-Host "Soft-deleting Key Vault '$KeyVaultName' (if present)..."
     Remove-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroup -Force -ErrorAction SilentlyContinue | Out-Null
-    Write-Host "Purging soft-deleted Key Vault '$KeyVaultName' (if present) to stop HSM key billing..."
+    Write-Host "Attempting to purge soft-deleted Key Vault '$KeyVaultName' (will fail if purge protection is on; HSM key billing tail of 7 days expected in that case)..."
     Remove-AzKeyVault -VaultName $KeyVaultName -Location $Region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
     Write-Host "Removing resource group '$ResourceGroup'..."
     Remove-AzResourceGroup -Name $ResourceGroup -Force -AsJob | Out-Null
@@ -363,10 +364,11 @@ $securePassword = ConvertTo-SecureString -String $vmadminpassword -AsPlainText -
 $cred = New-Object System.Management.Automation.PSCredential ($vmusername, $securePassword);
 
 # Create Key Vault
-# Smoketest runs use the 7-day minimum soft-delete retention and skip purge protection so the cleanup step can purge the vault
-# immediately and avoid the HSM-key billing tail. Non-smoketest runs keep the 10-day retention + purge protection for safety.
+# Azure now requires purge protection on AKVs that back a CVM disk-encryption set (KeyVaultNotPurgeProtectionEnabled).
+# Smoketest runs use the 7-day minimum retention to keep the unavoidable HSM-key billing tail as short as possible;
+# non-smoketest runs keep the 10-day retention.
 if ($smoketest) {
-    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 7;
+    New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 7 -EnablePurgeProtection;
 } else {
     New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 10 -EnablePurgeProtection;
 }
