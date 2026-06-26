@@ -581,7 +581,7 @@ uname -r
 
 echo "--- apt-get update + base deps ---"
 apt-get update -y
-apt-get install -y python3-pip python3-venv git curl jq unzip mokutil ca-certificates
+apt-get install -y python3-pip python3-venv git curl jq unzip mokutil ca-certificates dkms
 
 # Strategy: use Canonical-signed prebuilt NVIDIA kernel modules from the Ubuntu archive
 # instead of building NVIDIA's CUDA-repo DKMS package on top.
@@ -662,6 +662,22 @@ if ! find /lib/modules/${KREL}/ -name 'nvidia*.ko*' -print -quit | grep -q .; th
     find /lib/modules -path '*/kernel/drivers/*' -name 'nvidia*.ko*' 2>/dev/null | head -50 || true
 fi
 
+if ! find /lib/modules/${KREL}/ -name 'nvidia*.ko*' -print -quit | grep -q .; then
+    TARGET_KREL=$(for d in /lib/modules/*; do
+        k=$(basename "$d")
+        if find "$d" -name 'nvidia*.ko*' -print -quit | grep -q .; then
+            echo "$k"
+        fi
+    done | sort -V | tail -1)
+
+    if [ -n "$TARGET_KREL" ] && [ "$TARGET_KREL" != "$KREL" ]; then
+        echo "No NVIDIA module for running kernel ${KREL}; target kernel with module is ${TARGET_KREL}."
+        echo "Removing current edge kernel package so next reboot lands on the module-compatible kernel."
+        apt-get purge -y "linux-image-${KREL}" "linux-modules-${KREL}" || true
+        update-grub || true
+    fi
+fi
+
 echo "--- installing matching userspace: nvidia-utils-${BRANCH}-server (headless) ---"
 apt-get install -y "nvidia-utils-${BRANCH}-server" || apt-get install -y "nvidia-utils-${BRANCH}"
 
@@ -711,6 +727,7 @@ set -e
 echo "--- waiting for nvidia-smi to respond (driver readiness probe) ---"
 DRIVER_READY=0
 for i in $(seq 1 30); do
+    depmod -a >/dev/null 2>&1 || true
     modprobe nvidia >/dev/null 2>&1 || true
     modprobe nvidia_uvm >/dev/null 2>&1 || true
     modprobe nvidia_modeset >/dev/null 2>&1 || true
