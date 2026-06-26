@@ -38,7 +38,7 @@ param (
     [Parameter(Mandatory=$false)]$description = "",
     [Parameter(Mandatory=$false)][switch]$smoketest,
     [Parameter(Mandatory=$false)]$region = "northeurope",
-    [Parameter(Mandatory=$false)]$vmsize = "Standard_DC2as_v5",
+    [Parameter(Mandatory=$false)]$vmsize = "Standard_DC2as_v6",
     [Parameter(Mandatory=$false)]$policyFilePath = "",
     [Parameter(Mandatory=$false)][switch]$DisableBastion,
     [Parameter(Mandatory=$false)][switch]$NoInternetAccess,
@@ -587,8 +587,10 @@ apt-get install -y python3-pip python3-venv git curl jq unzip mokutil ca-certifi
 # instead of building NVIDIA's CUDA-repo DKMS package on top.
 KREL=$(uname -r)
 KFLAV=$(echo "$KREL" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-//')
+KBASE=${KFLAV%-fde}
 echo "kernel release: $KREL"
 echo "kernel flavor:  $KFLAV"
+echo "kernel base:    $KBASE"
 
 echo "--- all linux-modules-nvidia-* matching kernel flavor '$KFLAV' ---"
 apt-cache search "^linux-modules-nvidia-.*${KFLAV}" | sed 's/^/  /' || true
@@ -596,8 +598,18 @@ apt-cache search "^linux-modules-nvidia-.*${KFLAV}" | sed 's/^/  /' || true
 echo "--- preferring 'open' variants (required for H100 CC mode) ---"
 CAND=$(apt-cache search "^linux-modules-nvidia-.*${KFLAV}" | awk '{print $1}' | grep -- '-open' | sort -V)
 if [ -z "$CAND" ]; then
+    if [ "$KBASE" != "$KFLAV" ]; then
+        echo "WARNING: no -open package for flavor $KFLAV; trying base flavor $KBASE"
+        CAND=$(apt-cache search "^linux-modules-nvidia-.*${KBASE}" | awk '{print $1}' | grep -- '-open' | sort -V)
+    fi
+fi
+if [ -z "$CAND" ]; then
     echo "WARNING: no -open variant found for flavor $KFLAV; falling back to non-open prebuilt (may not support H100 CC)"
     CAND=$(apt-cache search "^linux-modules-nvidia-.*${KFLAV}" | awk '{print $1}' | sort -V)
+fi
+if [ -z "$CAND" -a "$KBASE" != "$KFLAV" ]; then
+    echo "WARNING: no package found for flavor $KFLAV; trying non-open base flavor $KBASE"
+    CAND=$(apt-cache search "^linux-modules-nvidia-.*${KBASE}" | awk '{print $1}' | sort -V)
 fi
 echo "$CAND" | sed 's/^/  /'
 
@@ -614,6 +626,17 @@ echo "selected kernel module package: $PKG (branch $BRANCH)"
 
 echo "--- installing $PKG (Canonical-signed prebuilt module) ---"
 apt-get install -y "$PKG"
+
+if ! find /lib/modules/${KREL}/ -name 'nvidia*.ko*' -print -quit | grep -q .; then
+    echo "WARNING: no nvidia modules found under /lib/modules/${KREL} after installing $PKG"
+    if [ "$KBASE" != "$KFLAV" ]; then
+        ALT=$(apt-cache search "^linux-modules-nvidia-.*${KBASE}" | awk '{print $1}' | grep -- '-open' | sort -V | tail -1)
+        if [ -n "$ALT" ] && [ "$ALT" != "$PKG" ]; then
+            echo "Attempting alternate package for base flavor: $ALT"
+            apt-get install -y "$ALT" || true
+        fi
+    fi
+fi
 
 echo "--- installing matching userspace: nvidia-utils-${BRANCH}-server (headless) ---"
 apt-get install -y "nvidia-utils-${BRANCH}-server" || apt-get install -y "nvidia-utils-${BRANCH}"
@@ -662,9 +685,15 @@ set -e
 # take a couple of minutes to initialize. Without this wait, nvmlInit() inside the verifier
 # returns DriverNotLoaded and attestation fails spuriously.
 echo "--- waiting for nvidia-smi to respond (driver readiness probe) ---"
+DRIVER_READY=0
 for i in $(seq 1 30); do
+    modprobe nvidia >/dev/null 2>&1 || true
+    modprobe nvidia_uvm >/dev/null 2>&1 || true
+    modprobe nvidia_modeset >/dev/null 2>&1 || true
+
     if nvidia-smi >/dev/null 2>&1; then
         echo "nvidia driver ready (attempt $i)."
+        DRIVER_READY=1
         break
     fi
     if [ "$i" -eq 30 ]; then
@@ -687,16 +716,23 @@ for i in $(seq 1 30); do
         sleep 10
     fi
 done
+
+if [ "$DRIVER_READY" -ne 1 ]; then
+    echo "ERROR: NVIDIA driver did not load; refusing to run GPU verifier."
+    exit 1
+fi
+
 echo "--- nvidia-smi ---"
-nvidia-smi || echo "nvidia-smi failed (driver may not have loaded; check 'dmesg | grep -i nvidia' on the VM)"
+nvidia-smi
 
 echo ""
 echo "--- /opt/nvtrust/.../local_gpu_verifier : verifier.cc_admin ---"
 if [ -x /opt/gpu-verifier-venv/bin/python3 ] && [ -d /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier ]; then
     cd /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier
-    /opt/gpu-verifier-venv/bin/python3 -m verifier.cc_admin 2>&1 || echo "verifier.cc_admin exited with code $?"
+    /opt/gpu-verifier-venv/bin/python3 -m verifier.cc_admin 2>&1
 else
-    echo "Local GPU verifier was not installed in step 1/3; skipping."
+    echo "Local GPU verifier was not installed in step 1/3; failing."
+    exit 1
 fi
 '@
     $gpuOutput = $null
@@ -718,11 +754,22 @@ fi
 
     write-host "----------------------------------------------------------------------------------------------------------------"
     write-host "--------------Output from NVIDIA local GPU verifier (H100 CC-mode attestation)--------------" -ForegroundColor Magenta
+    $gpuOutputText = ""
     if ($gpuOutput) {
-        foreach ($entry in $gpuOutput.Value) { if ($entry.Message) { write-host $entry.Message } }
+        foreach ($entry in $gpuOutput.Value) {
+            if ($entry.Message) {
+                write-host $entry.Message
+                $gpuOutputText += $entry.Message
+            }
+        }
     } else {
         write-host "(no GPU verifier output was captured)" -ForegroundColor Yellow
     }
+
+    if ($gpuOutputText -match 'ERROR:\s+NVIDIA driver did not load|NVIDIA-SMI has failed|Driver Not Loaded|Attestation Failed|verifier\.cc_admin exited with code\s+[1-9]|no nvidia kernel modules loaded') {
+        throw "GPU attestation failed inside the VM. See NVIDIA verifier output above."
+    }
+
     write-host "----------------------------------------------------------------------------------------------------------------"
 }
 

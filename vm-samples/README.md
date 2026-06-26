@@ -141,7 +141,7 @@ The script will generate a random complex password and output it to the terminal
 - **description**: Optional description added as a tag to the resource group
 - **smoketest**: Optional switch that automatically removes all resources after completion (useful for testing)
 - **region**: Optional Azure region (defaults to `northeurope`; auto-switches to `eastus2` when `-GPU` is set)
-- **vmsize**: Optional VM size SKU (defaults to `Standard_DC2as_v5`). Use SEV-SNP SKUs like `Standard_DC4as_v5` or Intel TDX SKUs like `Standard_DC2es_v6` — the script picks the matching attestation config automatically.
+- **vmsize**: Optional VM size SKU (defaults to `Standard_DC2as_v6`). Use SEV-SNP SKUs like `Standard_DC4as_v5` or Intel TDX SKUs like `Standard_DC2es_v6` — the script picks the matching attestation config automatically.
 - **policyFilePath**: Optional path to a custom key release policy JSON (defaults to `-UseDefaultCVMPolicy`)
 - **DisableBastion**: Optional switch that skips Azure Bastion creation; the VM will only be reachable via private network connectivity (VPN, ExpressRoute, peering)
 - **NoInternetAccess**: Optional switch that skips NAT Gateway setup and keeps the CVM subnet fully offline; attestation download is skipped
