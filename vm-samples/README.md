@@ -167,9 +167,10 @@ The `-GPU` switch builds an NVIDIA H100 SEV-SNP confidential GPU VM (`Standard_N
    - Canonical-signed `linux-modules-nvidia-*` open-kernel driver packages (required for H100 CC mode — the proprietary driver does **not** support CC mode)
    - `git`, `python3-venv`, and supporting tooling
    - clones [`NVIDIA/nvtrust`](https://github.com/NVIDIA/nvtrust) and pip-installs the **local GPU verifier** (`guest_tools/gpu_verifiers/local_gpu_verifier`) into a venv
-7. **Reboots the VM** so the new NVIDIA kernel module loads.
-8. **Runs the GPU CC-mode attestation** (`python3 -m verifier.cc_admin`) and prints the verifier verdict back to the caller. This produces a hardware-rooted attestation report that the H100 is in CC mode, fetched from the GPU's RoT and validated against NVIDIA's reference values.
-9. **Then runs the normal SEV-SNP CPU attestation** with `cvm-attestation-tools` and prints the MAA JWT + decoded claims, exactly like a non-GPU run.
+7. **Converges kernel + module compatibility before reboot**: if the currently running kernel does not have an available NVIDIA module, the script installs the Azure FDE LTS kernel track and matching NVIDIA meta package, then removes the incompatible edge kernel package so the next boot lands on a module-compatible kernel.
+8. **Reboots the VM** so the selected NVIDIA kernel module can load on the active kernel.
+9. **Runs the GPU CC-mode attestation** (`python3 -m verifier.cc_admin`) and prints the verifier verdict back to the caller. This produces a hardware-rooted attestation report that the H100 is in CC mode, fetched from the GPU's RoT and validated against NVIDIA's reference values.
+10. **Then runs the normal SEV-SNP CPU attestation** with `cvm-attestation-tools` and prints the MAA JWT + decoded claims, exactly like a non-GPU run.
 
 > Note: `-GPU` requires outbound internet access to install the NVIDIA verifier tooling, so it cannot be combined with `-NoInternetAccess`.
 
@@ -201,7 +202,7 @@ Reference: [Azure NCCads H100 v5-series](https://learn.microsoft.com/azure/virtu
 ./BuildRandomCVM.ps1 -subsID "your-subscription-id" -basename "h100eu" -osType "Ubuntu" -GPU -region "westeurope" -smoketest -DisableBastion
 ```
 
-> Note: this path takes substantially longer than a normal CVM run because the NVIDIA driver install + reboot + nvtrust verifier setup typically adds 10–15 minutes on top of the base CVM build time. The script changes are also **untested end-to-end** at the time of this PR because the H100 CVM quota request was rejected by the Microsoft.Quota auto-approval API across all candidate regions; the deploy path will be validated once a support ticket grants the quota.
+> Note: this path takes substantially longer than a normal CVM run because NVIDIA driver install, kernel/module convergence checks, reboot, and nvtrust verifier setup can add 10–20 minutes on top of the base CVM build time.
 
 ## Quickstart
 
