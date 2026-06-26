@@ -638,6 +638,30 @@ if ! find /lib/modules/${KREL}/ -name 'nvidia*.ko*' -print -quit | grep -q .; th
     fi
 fi
 
+if ! find /lib/modules/${KREL}/ -name 'nvidia*.ko*' -print -quit | grep -q .; then
+    echo "WARNING: current kernel ${KREL} still has no NVIDIA modules."
+    echo "Installing Azure FDE LTS kernel + matching NVIDIA meta package so next boot uses a compatible kernel/module set..."
+
+    # On some images, the VM boots a newer edge kernel (for example 6.17) while NVIDIA prebuilt
+    # modules are only published for the LTS azure-fde kernel track (for example 6.8).
+    apt-get install -y linux-image-azure-fde-lts-24.04 linux-headers-azure-fde-lts-24.04 || true
+
+    META="linux-modules-nvidia-${BRANCH}-server-open-azure-fde-lts-24.04"
+    if apt-cache show "$META" >/dev/null 2>&1; then
+        apt-get install -y "$META" || true
+    else
+        META="linux-modules-nvidia-${BRANCH}-open-azure-fde-lts-24.04"
+        if apt-cache show "$META" >/dev/null 2>&1; then
+            apt-get install -y "$META" || true
+        fi
+    fi
+
+    echo "--- installed kernels after fallback ---"
+    dpkg -l | grep -E '^ii\s+linux-image-[0-9]|^ii\s+linux-image-azure-fde' | awk '{print $2, $3}' || true
+    echo "--- available nvidia modules under /lib/modules ---"
+    find /lib/modules -path '*/kernel/drivers/*' -name 'nvidia*.ko*' 2>/dev/null | head -50 || true
+fi
+
 echo "--- installing matching userspace: nvidia-utils-${BRANCH}-server (headless) ---"
 apt-get install -y "nvidia-utils-${BRANCH}-server" || apt-get install -y "nvidia-utils-${BRANCH}"
 
