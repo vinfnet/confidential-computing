@@ -43,7 +43,7 @@ Deploy Confidential Virtual Machines (CVMs) with AMD SEV-SNP or Intel TDX hardwa
 
 | Script | Description | Status |
 |--------|-------------|--------|
-| `BuildRandomCVM.ps1` | Deploy CVM with Confidential OS disk encryption + CMK and Bastion | **Stable** |
+| `BuildRandomCVM.ps1` | Deploy CVM with Confidential OS disk encryption + CMK and Bastion. Pass `-GPU` for an H100 confidential GPU VM with NVIDIA driver install + GPU CC-mode attestation. | **Stable** (CPU paths) / **Draft** (GPU path) |
 | `BuildRandomSQLCVM.ps1` | SQL Server 2022 on Confidential VM | **Stable** |
 
 ---
@@ -94,7 +94,7 @@ Basename is a prefix assigned to all resources created by the script and will be
 The script will generate a random complex password and output it to the terminal once; make sure you copy it if you want to login to the CVM.
 
 ```powershell
-./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-vmsize <VM SIZE SKU>] [-policyFilePath <PATH>] [-DisableBastion]
+./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-vmsize <VM SIZE SKU>] [-policyFilePath <PATH>] [-DisableBastion] [-GPU]
 ```
 
 ## Parameters:
@@ -103,10 +103,11 @@ The script will generate a random complex password and output it to the terminal
 - **osType**: The operating system to deploy (required)
 - **description**: Optional description added as a tag to the resource group
 - **smoketest**: Optional switch that automatically removes all resources after completion (useful for testing)
-- **region**: Optional Azure region (defaults to `northeurope`)
+- **region**: Optional Azure region (defaults to `northeurope`; auto-switches to `eastus2` when `-GPU` is set)
 - **vmsize**: Optional VM size SKU (defaults to `Standard_DC2as_v5`). Use SEV-SNP SKUs like `Standard_DC4as_v5` or Intel TDX SKUs like `Standard_DC2es_v6` — the script picks the matching attestation config automatically.
 - **policyFilePath**: Optional path to a custom key release policy JSON (defaults to `-UseDefaultCVMPolicy`)
 - **DisableBastion**: Optional switch that skips Azure Bastion creation; the VM will only be reachable via private network connectivity (VPN, ExpressRoute, peering)
+- **GPU**: Optional switch that builds an NVIDIA H100 confidential GPU VM (`Standard_NCC40ads_H100_v5`, AMD SEV-SNP CPU TEE + H100 in CC mode). Overrides `-vmsize`, forces `-osType Ubuntu`, and switches to the Ubuntu 22.04 CVM image. The script then installs the NVIDIA open-kernel driver and the NVIDIA `nvtrust` local GPU verifier inside the VM and runs **two** attestations: a GPU CC-mode attestation (`verifier.cc_admin`) and the normal SEV-SNP CPU attestation. See [GPU mode](#gpu-mode--h100-confidential-gpu-vm) below.
 
 ## OS Type Options:
 - **Windows**: Windows Server 2022 Datacenter (RDP via Bastion)
@@ -168,6 +169,55 @@ Get-AzComputeResourceSku -Location westeurope |
 ./BuildRandomCVM.ps1 -subsID "your-subscription-id" -basename "tdxci" -osType "Ubuntu" -region "westus3" -vmsize "Standard_DC4es_v6" -smoketest
 ```
 
+## GPU mode — H100 confidential GPU VM
+
+The `-GPU` switch builds an NVIDIA H100 SEV-SNP confidential GPU VM (`Standard_NCC40ads_H100_v5`, family `StandardNCCads2023Family`, 40 vCPUs / 1×H100). When `-GPU` is set the script:
+
+1. **Overrides `-vmsize`** with `Standard_NCC40ads_H100_v5`.
+2. **Forces `-osType Ubuntu`** (H100 CC mode is Linux-only on Azure today). Any other value is ignored with a yellow warning.
+3. **Switches the Ubuntu image** from the default Ubuntu 24.04 CVM (`Canonical/ubuntu-24_04-lts/cvm`) to the documented Ubuntu 22.04 CVM base for NCC H100 v5 (`Canonical/0001-com-ubuntu-confidential-vm-jammy/22_04-lts-cvm`).
+4. **Switches the default region** from `northeurope` to `eastus2` (one of the regions where the H100 CVM SKU is offered without a subscription restriction; `westeurope` is also supported — set `-region westeurope` if you prefer).
+5. **Pre-flight checks the SKU and quota** the same way as the SEV-SNP / TDX path: the script will fail fast if `Standard_NCC40ads_H100_v5` is not offered in the region or the `StandardNCCads2023Family` vCPU quota is below 40 vCPUs.
+6. **Installs NVIDIA components inside the VM** via `Invoke-AzVMRunCommand`:
+   - `nvidia-open` (open-kernel driver, required for H100 CC mode — the proprietary driver does **not** support CC mode)
+   - `git`, `python3-venv`, build tooling
+   - clones [`NVIDIA/nvtrust`](https://github.com/NVIDIA/nvtrust) and pip-installs the **local GPU verifier** (`guest_tools/gpu_verifiers/local_gpu_verifier`) into a venv
+7. **Reboots the VM** so the new NVIDIA kernel module loads.
+8. **Runs the GPU CC-mode attestation** (`python3 -m verifier.cc_admin`) and prints the verifier verdict back to the caller. This produces a hardware-rooted attestation report that the H100 is in CC mode, fetched from the GPU's RoT and validated against NVIDIA's reference values.
+9. **Then runs the normal SEV-SNP CPU attestation** with `cvm-attestation-tools` and prints the MAA JWT + decoded claims, exactly like a non-GPU run.
+
+So a successful `-GPU -smoketest` run produces evidence for both the AMD SEV-SNP TEE (CPU) and the NVIDIA H100 in CC mode (GPU) before tearing the resources down.
+
+### Quota requirement
+
+`Standard_NCC40ads_H100_v5` is one VM = 40 vCPUs in the `StandardNCCads2023Family` quota bucket. Most subscriptions start with `0/0` quota in this family in **every** region and **the Microsoft.Quota auto-approval API will reject the request** with `QuotaNotAvailableForResource`. You must file a regular Azure support ticket to request an H100 GPU CVM quota increase. Until the quota is granted the pre-flight check in this script will fail fast with a clear error and a copy-pasteable `Get-AzVMUsage` command.
+
+Quick quota check:
+
+```powershell
+# Is the H100 CVM SKU offered in your subscription, and where?
+Get-AzComputeResourceSku |
+    Where-Object { $_.ResourceType -eq 'virtualMachines' -and $_.Name -eq 'Standard_NCC40ads_H100_v5' } |
+    Select-Object Name, Family, @{n='Locations';e={$_.Locations -join ','}}, @{n='Restricted';e={if($_.Restrictions){($_.Restrictions | ForEach-Object {$_.ReasonCode}) -join ';'}else{'no'}}}
+
+# Current vCPU usage / limit for the H100 family in a given region
+Get-AzVMUsage -Location 'eastus2' | Where-Object { $_.Name.Value -eq 'StandardNCCads2023Family' } | Format-Table -AutoSize
+```
+
+Reference: [Azure NCCads H100 v5-series](https://learn.microsoft.com/azure/virtual-machines/sizes/gpu-accelerated/nccadsh100v5-series), [NVIDIA H100 confidential computing on Azure](https://learn.microsoft.com/azure/confidential-computing/confidential-vm-overview-gpu) and [`NVIDIA/nvtrust`](https://github.com/NVIDIA/nvtrust). For the up-to-date list of regions that offer `Standard_NCC40ads_H100_v5` see the [Azure products by region](https://azure.microsoft.com/en-gb/explore/global-infrastructure/products-by-region/table) page (filter for *NCCads H100 v5*).
+
+### Examples
+
+```powershell
+# Build an H100 confidential GPU VM and run both GPU and CPU attestations (resources remain)
+./BuildRandomCVM.ps1 -subsID "your-subscription-id" -basename "h100" -osType "Ubuntu" -GPU
+
+# Same, but in West Europe and tear down at the end
+./BuildRandomCVM.ps1 -subsID "your-subscription-id" -basename "h100eu" -osType "Ubuntu" -GPU -region "westeurope" -smoketest -DisableBastion
+```
+
+> Note: this path takes substantially longer than a normal CVM run because the NVIDIA driver install + reboot + nvtrust verifier setup typically adds 10–15 minutes on top of the base CVM build time. The script changes are also **untested end-to-end** at the time of this PR because the H100 CVM quota request was rejected by the Microsoft.Quota auto-approval API across all candidate regions; the deploy path will be validated once a support ticket grants the quota.
+
 The script automatically tags the resource group with:
 - **owner**: Your Azure user principal name
 - **BuiltBy**: The script name that created the resources
@@ -226,7 +276,7 @@ In short, this is the strongest "my data, my key, my hardware boundary" posture 
 If the `-policyFilePath` parameter is not specified when running `BuildRandomCVM.ps1`, the script uses the default CVM key release policy (`-UseDefaultCVMPolicy`), which points at the shared attestation endpoint serving the region where the CVM is created. This provides out-of-the-box attestation-gated key release without requiring custom configuration. For background on attestation-bound key release see the [Azure Key Vault SKR docs](https://learn.microsoft.com/azure/key-vault/keys/policy-grammar) and [`https://aka.ms/accdocs`](https://aka.ms/accdocs).
 
 ## Important Notes:
-Note this will deploy an Azure Keyvault *Premium* SKU [pricing](https://azure.microsoft.com/en-gb/pricing/details/key-vault/#pricing) & enables purge protection for 10 days (you can adjust the purge protection period but AKV Premium with HSM-backed RSA-3072 keys is required for CVMs with **Confidential OS disk encryption** — see [`https://aka.ms/accdocs`](https://aka.ms/accdocs) for the full requirements).
+Note this will deploy an Azure Keyvault *Premium* SKU [pricing](https://azure.microsoft.com/en-gb/pricing/details/key-vault/#pricing) with purge protection enabled and the **platform-minimum 7-day soft-delete retention**. AKV Premium with an HSM-backed RSA-3072 key plus purge protection is required for CVMs with **Confidential OS disk encryption** — the Microsoft.Compute resource provider enforces `KeyVaultNotPurgeProtectionEnabled` at VM-create time, and purge protection is a one-way Key Vault setting (it cannot be disabled once enabled), so the 7-day HSM-key billing tail after teardown is unavoidable on this code path. See [`https://aka.ms/accdocs`](https://aka.ms/accdocs) for the full requirements.
 
 By default the script will create resources in North Europe - you can specify a different region using the `-region` parameter. Make sure to check availability of CVMs in your chosen region first.
 

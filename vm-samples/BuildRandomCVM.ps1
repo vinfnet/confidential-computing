@@ -10,7 +10,7 @@
 # 
 # Clone this repo to a folder (relies on the WindowsAttest.ps1 script being in the same folder as this script)
 #
-# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight]
+# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-SkipSkuPreflight] [-GPU]
 #
 # Basename is a prefix for all resources created, it's used to create unique names for the resources
 # osType specifies which OS to deploy: Windows (Server 2022), Windows11 (Windows 11 Enterprise), Ubuntu (24.04), or RHEL (9.5)
@@ -19,12 +19,20 @@
 # region is an optional parameter that specifies the Azure region (defaults to northeurope)
 # policyFilePath is an optional parameter that specifies the path to a custom policy file for key vault key creation
 # DisableBastion is an optional switch that skips the creation of Azure Bastion (VM will only be accessible via private network)
+# GPU is an optional switch that builds a Confidential VM with an NVIDIA H100 GPU (Standard_NCC40ads_H100_v5,
+#     SEV-SNP + H100 CC mode). When set this overrides -vmsize, forces -osType to Ubuntu (Linux-only),
+#     switches to the Ubuntu 22.04 CVM image which is the documented base for NCC H100 v5, and after the
+#     VM boots installs the NVIDIA open-kernel driver and the NVIDIA local GPU verifier (nvtrust) inside
+#     the VM. The script then runs both a GPU confidential-mode attestation (verifier.cc_admin) and the
+#     normal CPU SEV-SNP attestation (cvm-attestation-tools), and surfaces both outputs to the caller.
 #
 # You'll need to have the latest Azure PowerShell module installed as older versions don't have the parameters for AKV & ACC (update-module -force)
 #
 
 # TODO
 # - look at the credential handling, it's not optimal
+# - look at auto-cleanup of resources for non-smoketest mode (e.g. opt-in tear-down on failure
+#   so non-smoketest runs that fail mid-build don't leave orphaned resources behind)
 
 # handle command line parameters, mandatory, will force you to enter them
 param (
@@ -39,13 +47,77 @@ param (
     [Parameter(Mandatory=$false)]$vmsize = "Standard_DC2as_v5",
     [Parameter(Mandatory=$false)]$policyFilePath = "",
     [Parameter(Mandatory=$false)][switch]$DisableBastion,
-    [Parameter(Mandatory=$false)][switch]$SkipSkuPreflight
+    [Parameter(Mandatory=$false)][switch]$SkipSkuPreflight,
+    [Parameter(Mandatory=$false)][switch]$GPU
 )
+
+# -GPU: Override VM SKU / image / region defaults so we provision a Confidential VM with
+# an NVIDIA H100 GPU running in CC (confidential compute) mode. This SKU is Linux-only
+# (Ubuntu 22.04 CVM is the documented base image), so we also force osType=Ubuntu and
+# warn if the caller asked for something else. Region defaults to eastus2 (which is one
+# of the regions where Standard_NCC40ads_H100_v5 is offered without subscription
+# restriction; the other is westeurope).
+if ($GPU) {
+    $h100Sku    = 'Standard_NCC40ads_H100_v5'
+    $h100Family = 'StandardNCCads2023Family'
+    if ($vmsize -ne 'Standard_DC2as_v5' -and $vmsize -ne $h100Sku) {
+        write-host "-GPU was specified: overriding -vmsize '$vmsize' with '$h100Sku' (NVIDIA H100 SEV-SNP CVM)." -ForegroundColor Yellow
+    }
+    $vmsize = $h100Sku
+    if ($osType -ne 'Ubuntu') {
+        write-host "-GPU was specified: overriding -osType '$osType' with 'Ubuntu' (NVIDIA H100 CC mode is Linux-only on Azure)." -ForegroundColor Yellow
+        $osType = 'Ubuntu'
+    }
+    # Regions where Standard_NCC40ads_H100_v5 is generally offered. If the user picked
+    # something else (or just accepted the default northeurope, which does NOT have H100),
+    # switch to eastus2 and tell them why.
+    $h100Regions = @('eastus2','westeurope','southcentralus','westus3','swedencentral','centraluseuap')
+    if ($h100Regions -notcontains $region) {
+        write-host "-GPU was specified: region '$region' does not offer '$h100Sku'. Switching to 'eastus2'. Pass -region with one of: $($h100Regions -join ', ') to override." -ForegroundColor Yellow
+        $region = 'eastus2'
+    }
+}
 
 if ($subsID -eq "" -or $basename -eq "" -or $osType -eq "") {
     write-host "You must enter a subscription ID, basename, and OS type (Windows, Windows11, Ubuntu, or RHEL)"
     exit
 }# exit if any of the parameters are empty
+
+# basename must be letters only - some downstream resource names (e.g. storage accounts, certain DNS labels)
+# don't accept digits in the prefix, so reject them up front for consistency.
+if ($basename -notmatch '^[A-Za-z]+$') {
+    write-host "ERROR: -basename must contain letters only (A-Z, a-z). No digits, hyphens, or other characters." -ForegroundColor Red
+    write-host "       Provided: '$basename'" -ForegroundColor Red
+    exit 1
+}
+
+# Tear-down helper used by both the success path and the failure trap below.
+# Idempotent: silently no-ops if the resource group / vault don't exist.
+function Invoke-SmoketestCleanup {
+    param(
+        [string]$ResourceGroup,
+        [string]$KeyVaultName,
+        [string]$Region
+    )
+    if (-not $ResourceGroup) { return }
+    $rg = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
+    if (-not $rg) {
+        Write-Host "Smoketest cleanup: resource group '$ResourceGroup' not found - nothing to clean up." -ForegroundColor DarkGray
+        return
+    }
+    # AKV purge protection is mandatory for CVM-DES (Microsoft.Compute enforces this at VM-create time) and is a one-way
+    # Key Vault setting once enabled, so the purge attempt below will be rejected and the HSM-protected key will incur a
+    # soft-delete billing tail equal to the vault's retention period (the script uses the 7-day minimum). We still attempt
+    # the purge for completeness in case a future platform change relaxes the policy.
+    Write-Host "Soft-deleting Key Vault '$KeyVaultName' (if present)..."
+    Remove-AzKeyVault -VaultName $KeyVaultName -ResourceGroupName $ResourceGroup -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Attempting to purge soft-deleted Key Vault '$KeyVaultName' (will be rejected while purge protection is on; expected to fail on the CVM-DES path)..."
+    Remove-AzKeyVault -VaultName $KeyVaultName -Location $Region -InRemovedState -Force -ErrorAction SilentlyContinue | Out-Null
+    Write-Host "Removing resource group '$ResourceGroup'..."
+    Remove-AzResourceGroup -Name $ResourceGroup -Force -AsJob | Out-Null
+    Write-Host "Resource group deletion initiated (running in background)." -ForegroundColor Yellow
+    Write-Host "NOTE: Key Vault '$KeyVaultName' is soft-deleted; its HSM-backed CMK will continue to bill for up to 7 days (AKV soft-delete retention minimum). This is unavoidable on the Confidential-OS-disk-encryption + CMK path." -ForegroundColor Yellow
+}
 
 # mark the start time of the script execution
 $startTime = Get-Date
@@ -67,7 +139,10 @@ if (-not $gitRemoteUrl) {
 # Set PowerShell variables to use in the script
 $basename = $basename + -join ((97..122) | Get-Random -Count 5 | % {[char]$_}) # basename + 5 random lower-case letters
 $vmusername = "azureuser" # you can adjust this if you want
-$vmadminpassword = -join ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%".ToCharArray() | Get-Random -Count 40) # build a random password - note you can't get it back afterwards
+# Alphanumeric-only so the printed password is a single "word" the user can double-click to select and copy.
+# 40 random chars from [A-Za-z0-9] easily satisfies Azure's 3-of-4 complexity rule (upper+lower+digit) without any
+# punctuation chars (!@#$%) that act as word-break boundaries in most terminals.
+$vmadminpassword = -join ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789".ToCharArray() | Get-Random -Count 40)
 $resgrp =  $basename # name of the resource group where all resources will be created, copied from $basename
 $akvname = $basename + "akv"    #Name of the Azure Key Vault
 $desname = $basename + "des"    #Name of the Disk Encryption Set
@@ -98,15 +173,29 @@ if ($region -eq "northeurope") {
 
 write-host "----------------------------------------------------------------------------------------------------------------"
 write-host "Building a Confidential Virtual Machine ($osType) in " $basename " in " $region
+if ($GPU) {
+    write-host "GPU MODE: Provisioning '$vmsize' (NVIDIA H100 SEV-SNP CVM). NVIDIA driver + nvtrust local GPU verifier will be installed inside the VM and a GPU CC-mode attestation will be performed in addition to the CPU SEV-SNP attestation." -ForegroundColor Magenta
+}
 if ($smoketest) {
     write-host "SMOKETEST MODE: Resources will be automatically deleted after completion" -ForegroundColor Yellow
 }
 if ($DisableBastion) {
     write-host "BASTION DISABLED: VM will only be accessible via private network connectivity" -ForegroundColor Yellow
 }
-write-host "IMPORTANT"
-write-host "VM admin username is " $vmusername
-write-host "randomly generated passsword for the VM is " $vmadminpassword " - save this now as you CANNOT retrieve it later"
+write-host "IMPORTANT - save these credentials now, they CANNOT be retrieved later:" -ForegroundColor Yellow
+$credLines = @(
+    ("username: {0}" -f $vmusername),
+    ("password: {0}" -f $vmadminpassword)
+)
+$credInnerWidth = ($credLines | Measure-Object -Maximum -Property Length).Maximum
+$credBorder = ('=' * ($credInnerWidth + 4))
+write-host $credBorder -ForegroundColor Yellow
+foreach ($line in $credLines) {
+    write-host ("| {0} |" -f $line.PadRight($credInnerWidth)) -ForegroundColor Yellow
+}
+write-host $credBorder -ForegroundColor Yellow
+write-host ""
+write-host "(the password is alphanumeric only so you can double-click it to select, then Ctrl+C to copy)" -ForegroundColor DarkGray
 write-host ""
 write-host "Script: $scriptName"
 write-host "Repository URL: $gitRemoteUrl"
@@ -154,8 +243,14 @@ if ($vmSize -match '^Standard_DC\d+s_v[23]$') {
 }
 
 # Warn (but don't fail) if the SKU doesn't look like a known CVM SKU naming pattern.
-if ($vmSize -notmatch '^Standard_(DC|EC)\d+[a-z]+_v\d+$' -or $vmSize -notmatch '_(DC|EC)\d+(a|e)') {
-    write-host "Warning: '$vmSize' does not match a known Confidential VM SKU pattern (DCa*/ECa* for SEV-SNP, DCe*/ECe* for TDX). Continuing, but deployment may fail if this is not a CVM SKU." -ForegroundColor Yellow
+# Recognised CVM patterns:
+#   - DCa*/ECa* (AMD SEV-SNP, e.g. Standard_DC2as_v5)
+#   - DCe*/ECe* (Intel TDX, e.g. Standard_DC2es_v6)
+#   - NCCads*_H100_v5 (NVIDIA H100 SEV-SNP confidential GPU VM, e.g. Standard_NCC40ads_H100_v5)
+$isKnownCvmSku = ($vmSize -match '^Standard_(DC|EC)\d+[a-z]+_v\d+$' -and $vmSize -match '_(DC|EC)\d+(a|e)') `
+              -or ($vmSize -match '^Standard_NCC\d+ads_H100_v\d+$')
+if (-not $isKnownCvmSku) {
+    write-host "Warning: '$vmSize' does not match a known Confidential VM SKU pattern (DCa*/ECa* for SEV-SNP, DCe*/ECe* for TDX, NCCads_H100 for confidential GPU). Continuing, but deployment may fail if this is not a CVM SKU." -ForegroundColor Yellow
 }
 
 $skuInfo = $null
@@ -253,6 +348,26 @@ if ($DisableBastion) {
     $resourceGroupTags.Add("BastionDisabled", "true")
 }
 
+# In smoketest mode, install a trap so any uncaught terminating error during the build
+# (network, VM, key vault, attestation, etc.) tears the resource group down before the
+# script exits. Non-smoketest runs keep the existing behaviour (leave resources for
+# inspection / manual cleanup).
+if ($smoketest) {
+    trap {
+        Write-Host ""
+        Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "----------------------------------------------------------------------------------------------------------------" -ForegroundColor Red
+        Write-Host "SMOKETEST MODE: build failed - cleaning up partially-created resources..." -ForegroundColor Yellow
+        Write-Host "----------------------------------------------------------------------------------------------------------------" -ForegroundColor Red
+        try {
+            Invoke-SmoketestCleanup -ResourceGroup $resgrp -KeyVaultName $akvname -Region $region
+        } catch {
+            Write-Host "Smoketest cleanup error: $($_.Exception.Message)" -ForegroundColor Red
+        }
+        exit 1
+    }
+}
+
 New-AzResourceGroup -Name $resgrp -Location $region -Tag $resourceGroupTags -force
 
 #create a credential object
@@ -260,7 +375,12 @@ $securePassword = ConvertTo-SecureString -String $vmadminpassword -AsPlainText -
 $cred = New-Object System.Management.Automation.PSCredential ($vmusername, $securePassword);
 
 # Create Key Vault
-New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 10 -EnablePurgeProtection;
+# Azure requires purge protection on AKVs that back a CVM disk-encryption set (the Microsoft.Compute RP enforces this
+# at VM-create time with KeyVaultNotPurgeProtectionEnabled). Purge protection is also a one-way Key Vault setting -
+# once enabled it cannot be removed. We always set the platform-minimum 7-day soft-delete retention so the unavoidable
+# HSM-key billing tail after teardown is as short as possible.
+# -ErrorAction Stop turns a tenant-policy rejection into a terminating error so the smoketest trap can fire.
+New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku Premium -EnabledForDiskEncryption -DisableRbacAuthorization -SoftDeleteRetentionInDays 7 -EnablePurgeProtection -ErrorAction Stop
 
 #TO DO - if the SP hasn't been created in this tenant yet - break here, or prompt to create it (code as follows)
 #Connect-Graph -Tenant "your tenant ID" Application.ReadWrite.All
@@ -269,14 +389,50 @@ New-AzKeyVault -Name $akvname -Location $region -ResourceGroupName $resgrp -Sku 
 $cvmAgent = Get-AzADServicePrincipal -ApplicationId 'bf7b6499-ff71-4aa2-97a4-f372087be7f0';
 Set-AzKeyVaultAccessPolicy -VaultName $akvname -ResourceGroupName $resgrp -ObjectId $cvmAgent.id -PermissionsToKeys get,release;
 
-# Add Key vault Key
-if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
-    Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -ReleasePolicyPath $policyFilePath;
-} else {
-    if ($policyFilePath -ne "" -and !(Test-Path $policyFilePath)) {
-        Write-Host "Warning: Policy file path '$policyFilePath' does not exist. Using default CVM policy instead." -ForegroundColor Yellow
+# Wait for the new Key Vault to be visible to the SKR policy service before creating the CMK with -UseDefaultCVMPolicy.
+# Without this, freshly-created vaults can fail Add-AzKeyVaultKey with:
+#   "Fetch default CVM Policy failed, Vault '<name>' does not exist in current subscription"
+# because the policy service has its own ARM cache that lags behind vault creation (especially on first use in a subscription).
+$maxAttempts = 12   # ~2 minutes total
+for ($i = 1; $i -le $maxAttempts; $i++) {
+    try {
+        if (Get-AzKeyVault -VaultName $akvname -ResourceGroupName $resgrp -ErrorAction Stop) {
+            Write-Host "Key Vault '$akvname' is visible (attempt $i)." -ForegroundColor Green
+            break
+        }
+    } catch {
+        Write-Host "Waiting for Key Vault '$akvname' to propagate (attempt $i/$maxAttempts)..." -ForegroundColor Yellow
     }
-    Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -UseDefaultCVMPolicy;
+    Start-Sleep -Seconds 10
+}
+
+# Add Key vault Key (with retry to absorb SKR policy-service propagation lag).
+# On cold/personal subscriptions the SKR policy service ARM cache can lag well past the AKV control-plane (minutes,
+# not seconds), so use a generous window here: 20 attempts * 30s = 10 minutes.
+$keyAttempts = 20
+$keySleep = 30
+for ($i = 1; $i -le $keyAttempts; $i++) {
+    try {
+        if ($policyFilePath -ne "" -and (Test-Path $policyFilePath)) {
+            Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -ReleasePolicyPath $policyFilePath -ErrorAction Stop | Out-Null
+        } else {
+            if ($policyFilePath -ne "" -and !(Test-Path $policyFilePath)) {
+                Write-Host "Warning: Policy file path '$policyFilePath' does not exist. Using default CVM policy instead." -ForegroundColor Yellow
+            }
+            Add-AzKeyVaultKey -VaultName $akvname -Name $KeyName -Size $KeySize -KeyOps wrapKey,unwrapKey -KeyType RSA -Destination HSM -Exportable -UseDefaultCVMPolicy -ErrorAction Stop | Out-Null
+        }
+        Write-Host "Created CMK '$KeyName' in vault '$akvname' (attempt $i)." -ForegroundColor Green
+        break
+    } catch {
+        $msg = $_.Exception.Message
+        if ($i -lt $keyAttempts -and ($msg -match 'does not exist in current subscription' -or $msg -match 'Fetch default CVM Policy failed')) {
+            Write-Host "Add-AzKeyVaultKey transient failure (attempt $i/$keyAttempts): $msg" -ForegroundColor Yellow
+            Write-Host "Retrying in ${keySleep}s (SKR policy service cache may be cold on first use in this subscription)..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $keySleep
+        } else {
+            throw
+        }
+    }
 }
         
 # Capture Key Vault and Key details
@@ -314,9 +470,16 @@ switch ($osType) {
         $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'windowsserver' -Skus '2019-datacenter-smalldisk-g2' -Version "latest";
         $VMIsLinux = $false
     }
-    "Ubuntu" { # updated to use Ubuntu 24.04 LTS
+    "Ubuntu" { # updated to use Ubuntu 24.04 LTS (or Ubuntu 22.04 CVM when -GPU is set, which is the
+              # documented base image for the NVIDIA H100 SEV-SNP confidential VM SKU).
         $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Linux -ComputerName $vmname -Credential $cred;
-        $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer 'ubuntu-24_04-lts' -Skus 'cvm' -Version "latest";
+        if ($GPU) {
+            # H100 CC mode requires Ubuntu 22.04 CVM (jammy). The 24.04 CVM image isn't
+            # listed by Microsoft as a supported base for NCC H100 v5 today.
+            $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer '0001-com-ubuntu-confidential-vm-jammy' -Skus '22_04-lts-cvm' -Version "latest";
+        } else {
+            $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'Canonical' -Offer 'ubuntu-24_04-lts' -Skus 'cvm' -Version "latest";
+        }
         $VMIsLinux = $true
     }
     "RHEL" {
@@ -330,6 +493,28 @@ $subnet = New-AzVirtualNetworkSubnetConfig -Name ($vmsubnetName) -AddressPrefix 
 $vnet = New-AzVirtualNetwork -Force -Name ($vnetname) -ResourceGroupName $resgrp -Location $region -AddressPrefix "10.0.0.0/16" -Subnet $subnet;
 $vnet = Get-AzVirtualNetwork -Name ($vnetname) -ResourceGroupName $resgrp;
 $subnetId = $vnet.Subnets[0].Id;
+
+# NAT Gateway for outbound internet from the VM subnet.
+# Azure retired default outbound access on 30 Sep 2025: a new VM in a new VNet with no
+# public IP / no NAT gateway / no LB outbound rule has zero internet access (it can't
+# reach github.com to download the attest tool, can't apt/yum/winget update, etc).
+# Bastion only provides inbound, so it doesn't help here. A NAT gateway on the subnet
+# gives outbound to every VM in it without exposing any inbound surface, and is the
+# Azure-recommended pattern. See https://learn.microsoft.com/azure/virtual-network/ip-services/default-outbound-access
+write-host "Creating NAT Gateway for outbound internet access on the VM subnet..." -ForegroundColor Cyan
+$natpipName = $basename + "-natgw-pip"
+$natgwName  = $basename + "-natgw"
+$natpip = New-AzPublicIpAddress -ResourceGroupName $resgrp -Name $natpipName -Location $region -Sku Standard -AllocationMethod Static
+$natgw  = New-AzNatGateway -ResourceGroupName $resgrp -Name $natgwName -Location $region -Sku Standard -PublicIpAddress $natpip -IdleTimeoutInMinutes 10
+# Re-fetch vnet, attach NAT gateway to the VM subnet, and push the update.
+$vnet = Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $resgrp
+$vmSubnet = $vnet.Subnets | Where-Object { $_.Name -eq $vmsubnetName }
+$vmSubnet.NatGateway = New-Object Microsoft.Azure.Commands.Network.Models.PSResourceId
+$vmSubnet.NatGateway.Id = $natgw.Id
+Set-AzVirtualNetwork -VirtualNetwork $vnet | Out-Null
+$vnet = Get-AzVirtualNetwork -Name $vnetname -ResourceGroupName $resgrp
+$subnetId = ($vnet.Subnets | Where-Object { $_.Name -eq $vmsubnetName }).Id
+
 #uncomment the below if you want to add a public IP address to the VM
 #$pubip = New-AzPublicIpAddress -Force -Name ($pubIpPrefix + $resgrp) -ResourceGroupName $resgrp -Location $region -AllocationMethod Static -DomainNameLabel $domainNameLabel2;
 #$pubip = Get-AzPublicIpAddress -Name ($pubIpPrefix + $resgrp) -ResourceGroupName $resgrp;
@@ -351,8 +536,11 @@ $VirtualMachine = Set-AzVmSecurityProfile -VM $VirtualMachine -SecurityType $vmS
 $VirtualMachine = Set-AzVmUefi -VM $VirtualMachine -EnableVtpm $true -EnableSecureBoot $true;
 $VirtualMachine = Set-AzVMBootDiagnostic -VM $VirtualMachine -disable #disable boot diagnostics, you can re-enable if required
 
-New-AzVM -ResourceGroupName $resgrp -Location $region -Vm $VirtualMachine;
-$vm = Get-AzVm -ResourceGroupName $resgrp -Name $vmname;
+# -ErrorAction Stop on these two so any deploy-time failure (quota/SKU/policy rejection that slipped past pre-flight)
+# becomes a terminating error and the smoketest cleanup trap fires. Without this, Az PowerShell would emit a
+# non-terminating ErrorRecord and the script would keep running into a string of 404s on a VM that never existed.
+New-AzVM -ResourceGroupName $resgrp -Location $region -Vm $VirtualMachine -ErrorAction Stop;
+$vm = Get-AzVm -ResourceGroupName $resgrp -Name $vmname -ErrorAction Stop;
 
 # Create the Bastion to allow accessing the VM via the Azure portal (unless disabled)
 if (-not $DisableBastion) {
@@ -364,6 +552,174 @@ if (-not $DisableBastion) {
 } else {
     write-host "VM created, Bastion creation skipped due to -DisableBastion parameter"
     write-host "VM is only accessible via private network connectivity (VPN, ExpressRoute, or peered networks)"
+}
+
+#---------GPU mode: install NVIDIA open-kernel driver + nvtrust local GPU verifier and run a GPU CC-mode attestation--
+# Only runs when -GPU was specified. The H100 SKU exposes a GPU running in CC (confidential
+# compute) mode; the NVIDIA local GPU verifier (nvtrust) talks to the GPU's RoT, fetches an
+# attestation report, validates it against NVIDIA's reference values, and prints a verdict.
+# This block is intentionally separate from the CPU SEV-SNP attestation below: with -GPU we
+# do *both* a GPU and a CPU attestation, so the caller sees end-to-end runtime evidence for
+# both the AMD SEV-SNP TEE and the NVIDIA H100 in CC mode.
+if ($GPU) {
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 1/3: installing Canonical-signed NVIDIA kernel module + nvtrust local GPU verifier inside the VM..." -ForegroundColor Magenta
+    $gpuInstallScript = @"
+#!/bin/bash
+# No 'set -e' - each section surfaces its own diagnostics rather than aborting
+# on the first hiccup.
+export DEBIAN_FRONTEND=noninteractive
+
+echo "--- secure boot state (signed modules required if enabled) ---"
+mokutil --sb-state 2>&1 || echo "(mokutil not installed)"
+echo "--- kernel ---"
+uname -r
+
+echo "--- apt-get update + base deps ---"
+apt-get update -y
+apt-get install -y python3-pip python3-venv git curl jq unzip mokutil ca-certificates
+
+# Strategy: use Canonical-signed prebuilt NVIDIA kernel modules from the Ubuntu
+# archive instead of building NVIDIA's CUDA-repo DKMS package on top. Azure CVM
+# Ubuntu uses the '-azure-fde' kernel flavor, for which Canonical ships
+# 'linux-modules-nvidia-<branch>-<flavor>' packages signed with a key already
+# in shim's trust DB - so no MOK enrollment is needed under Secure Boot.
+KREL=`$(uname -r)
+KFLAV=`$(echo "`$KREL" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-//')
+echo "kernel release: `$KREL"
+echo "kernel flavor:  `$KFLAV"
+
+echo "--- all linux-modules-nvidia-* matching kernel flavor '`$KFLAV' ---"
+apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | sed 's/^/  /' || true
+
+echo "--- preferring 'open' variants (required for H100 CC mode) ---"
+CAND=`$(apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | awk '{print `$1}' | grep -- '-open' | sort -V)
+if [ -z "`$CAND" ]; then
+    echo "WARNING: no -open variant found for flavor `$KFLAV; falling back to non-open prebuilt (may not support H100 CC)"
+    CAND=`$(apt-cache search "^linux-modules-nvidia-.*`${KFLAV}" | awk '{print `$1}' | sort -V)
+fi
+echo "`$CAND" | sed 's/^/  /'
+
+if [ -z "`$CAND" ]; then
+    echo "ERROR: no signed prebuilt NVIDIA module package available for kernel flavor '`$KFLAV'."
+    echo "       All linux-modules-nvidia-* in the archive (any flavor):"
+    apt-cache search '^linux-modules-nvidia-' | sed 's/^/  /' | head -40
+    exit 1
+fi
+
+PKG=`$(echo "`$CAND" | tail -1)
+BRANCH=`$(echo "`$PKG" | sed -E 's/^linux-modules-nvidia-([0-9]+).*`$/\1/')
+echo "selected kernel module package: `$PKG (branch `$BRANCH)"
+
+echo "--- installing `$PKG (Canonical-signed prebuilt module) ---"
+apt-get install -y "`$PKG"
+
+echo "--- installing matching userspace: nvidia-utils-`${BRANCH}-server (headless) ---"
+apt-get install -y "nvidia-utils-`${BRANCH}-server" || apt-get install -y "nvidia-utils-`${BRANCH}"
+
+echo "--- post-install verification ---"
+echo ">>> dpkg -l matching nvidia/linux-modules-nvidia"
+dpkg -l 2>/dev/null | grep -E 'nvidia|linux-modules-nvidia' || echo "(none)"
+echo ">>> built kernel modules for `${KREL}"
+find /lib/modules/`${KREL}/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none)"
+echo ">>> module signers (Canonical key expected for SB-trusted load)"
+for f in `$(find /lib/modules/`${KREL}/ -name 'nvidia*.ko*' 2>/dev/null); do
+    echo "  `$f -> `$(modinfo -F signer "`$f" 2>/dev/null | head -1)"
+done
+
+echo "--- cloning NVIDIA nvtrust (local GPU verifier) ---"
+rm -rf /opt/nvtrust
+git clone --depth 1 https://github.com/NVIDIA/nvtrust.git /opt/nvtrust 2>&1 | tail -5
+
+echo "--- creating venv and installing local_gpu_verifier ---"
+python3 -m venv /opt/gpu-verifier-venv
+/opt/gpu-verifier-venv/bin/pip install --quiet --upgrade pip
+/opt/gpu-verifier-venv/bin/pip install --quiet -e /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier 2>&1 | tail -5 || true
+
+echo "--- driver/verifier install complete; the VM will now be rebooted to load the new NVIDIA kernel module ---"
+"@
+    try {
+        $gpuInstallOut = Invoke-AzVMRunCommand -Name $vmname -ResourceGroupName $resgrp -CommandId 'RunShellScript' -ScriptString $gpuInstallScript -ErrorAction Stop
+        foreach ($entry in $gpuInstallOut.Value) { if ($entry.Message) { write-host $entry.Message } }
+    } catch {
+        write-host "GPU step 1/3 failed: $($_.Exception.Message)" -ForegroundColor Red
+    }
+
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 2/3: rebooting VM to load NVIDIA open-kernel module..." -ForegroundColor Magenta
+    Restart-AzVM -ResourceGroupName $resgrp -Name $vmname | Out-Null
+    write-host "Waiting 60s after reboot for the OS + run-command extension to come back up..."
+    Start-Sleep -Seconds 60
+
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "GPU step 3/3: running NVIDIA local GPU verifier (verifier.cc_admin) for H100 CC-mode attestation..." -ForegroundColor Magenta
+    $gpuAttestScript = @"
+#!/bin/bash
+set -e
+# Poll nvidia-smi until the driver is loaded. After reboot, the NVIDIA kernel module
+# can take a couple of minutes to initialize (DKMS rebuilds on first boot, GPU PCI
+# enumeration delay, persistenced startup). Without this wait, nvmlInit() inside the
+# verifier returns DriverNotLoaded and attestation fails spuriously.
+echo "--- waiting for nvidia-smi to respond (driver readiness probe) ---"
+for i in `$(seq 1 30); do
+    if nvidia-smi >/dev/null 2>&1; then
+        echo "nvidia driver ready (attempt `$i)."
+        break
+    fi
+    if [ "`$i" -eq 30 ]; then
+        echo "WARNING: nvidia-smi still not responding after 5 minutes."
+        echo "--- mokutil --sb-state ---"
+        mokutil --sb-state 2>&1 || echo "(mokutil not installed)"
+        echo "--- dkms status ---"
+        dkms status 2>&1 || true
+        echo "--- built nvidia .ko under /lib/modules/`$(uname -r) ---"
+        find /lib/modules/`$(uname -r)/ -name 'nvidia*.ko*' 2>/dev/null | head -20 || echo "(none)"
+        echo "--- modprobe -v nvidia (manual load attempt) ---"
+        modprobe -v nvidia 2>&1 | head -20 || true
+        echo "--- journalctl -b | grep -iE 'nvidia|dkms|secure' (tail) ---"
+        journalctl -b 2>/dev/null | grep -iE 'nvidia|dkms|secure' | tail -50 || true
+        echo "--- dmesg | grep -i nvidia (tail) ---"
+        dmesg 2>/dev/null | grep -i nvidia | tail -50 || true
+        echo "--- lsmod | grep nvidia ---"
+        lsmod | grep -i nvidia || echo "(no nvidia kernel modules loaded)"
+    else
+        sleep 10
+    fi
+done
+echo "--- nvidia-smi ---"
+nvidia-smi || echo "nvidia-smi failed (driver may not have loaded; check 'dmesg | grep -i nvidia' on the VM)"
+
+echo ""
+echo "--- /opt/nvtrust/.../local_gpu_verifier : verifier.cc_admin ---"
+if [ -x /opt/gpu-verifier-venv/bin/python3 ] && [ -d /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier ]; then
+    cd /opt/nvtrust/guest_tools/gpu_verifiers/local_gpu_verifier
+    /opt/gpu-verifier-venv/bin/python3 -m verifier.cc_admin 2>&1 || echo "verifier.cc_admin exited with code `$?"
+else
+    echo "Local GPU verifier was not installed in step 1/3; skipping."
+fi
+"@
+    $gpuOutput = $null
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try {
+            write-host "GPU verifier run-command attempt $attempt of 6..." -ForegroundColor Cyan
+            $gpuOutput = Invoke-AzVMRunCommand -Name $vmname -ResourceGroupName $resgrp -CommandId 'RunShellScript' -ScriptString $gpuAttestScript -ErrorAction Stop
+            break
+        } catch {
+            $msg = $_.Exception.Message
+            if ($attempt -lt 6 -and ($msg -like '*Conflict*' -or $msg -like '*in progress*' -or $msg -like '*409*' -or $msg -like '*not ready*')) {
+                write-host "Run-command extension busy/not ready; waiting 30s..." -ForegroundColor Yellow
+                Start-Sleep -Seconds 30
+            } else { throw }
+        }
+    }
+    write-host "----------------------------------------------------------------------------------------------------------------"
+    write-host "--------------Output from NVIDIA local GPU verifier (H100 CC-mode attestation)--------------" -ForegroundColor Magenta
+    if ($gpuOutput) {
+        foreach ($entry in $gpuOutput.Value) { if ($entry.Message) { write-host $entry.Message } }
+    } else {
+        write-host "(no GPU verifier output was captured)" -ForegroundColor Yellow
+    }
+    write-host "----------------------------------------------------------------------------------------------------------------"
 }
 
 #---------Do attestation check inside the VM using Azure/cvm-attestation-tools-----------------------------------
@@ -398,12 +754,43 @@ if ! command -v unzip >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
 fi
 WORKDIR=`$(mktemp -d)
 cd "`$WORKDIR"
+# Wait for outbound to github.com:443 to come up. A freshly-attached NAT Gateway can
+# take a couple of minutes to become effective on the VM subnet, during which curl
+# fails with exit 28 (TCP connect timeout). Probe with a 5s timeout per attempt and
+# back off; total ~5 minutes.
+echo "Waiting for outbound connectivity to github.com:443..."
+for i in `$(seq 1 30); do
+    if curl -fsS --max-time 5 -o /dev/null https://github.com 2>/dev/null; then
+        echo "Outbound to github.com is up (attempt `$i)."
+        break
+    fi
+    if [ "`$i" -eq 30 ]; then
+        echo "WARNING: github.com still unreachable after 5 minutes; attempting download anyway."
+    else
+        echo "  attempt `$i: outbound not yet ready, sleeping 10s..."
+        sleep 10
+    fi
+done
 echo "Downloading latest attest-lin.zip from cvm-attestation-tools..."
-curl -fsSL -o attest-lin.zip https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-lin.zip
+curl -fsSL --retry 5 --retry-connrefused --retry-delay 10 -o attest-lin.zip https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-lin.zip
 unzip -q attest-lin.zip
 chmod +x attest read_report 2>/dev/null || true
 echo "--------- attest --c $attestConfig ---------"
-./attest --c $attestConfig 2>&1 | tee attest.out || echo "attest exited with code `$?"
+# Retry attest a few times: the attestation provider's internal retry budget is short,
+# and on a brand-new VM the SNAT mapping to the MAA endpoint can take a minute or two
+# to warm up after NAT GW attach, surfacing as ConnectTimeoutError to *.attest.azure.net
+# even though github.com is already reachable.
+for i in `$(seq 1 5); do
+    ./attest --c $attestConfig 2>&1 | tee attest.out
+    rc=`${PIPESTATUS[0]}
+    if [ "`$rc" -eq 0 ]; then break; fi
+    if [ "`$i" -lt 5 ]; then
+        echo "attest attempt `$i exited with code `$rc; sleeping 30s before retry..."
+        sleep 30
+    else
+        echo "attest exited with code `$rc after `$i attempts"
+    fi
+done
 
 # Extract JWT (a single token of the form xxx.yyy.zzz with base64url chars)
 # from the attest output and pretty-print header + payload claims using jq.
@@ -439,7 +826,55 @@ New-Item -ItemType Directory -Path `$work -Force | Out-Null
 Set-Location `$work
 Write-Host "Downloading latest attest-win.zip from cvm-attestation-tools..."
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-Invoke-WebRequest -Uri 'https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-win.zip' -OutFile 'attest-win.zip' -UseBasicParsing
+# Run-command runs as SYSTEM, which has no IE/WinINet proxy config; Invoke-WebRequest then
+# fails with "Unable to connect to the remote server" even though outbound is fine.
+# Prefer curl.exe (in-box on Win10/11/Server2019+, doesn't use WinINet); fall back to
+# Invoke-WebRequest with the default proxy explicitly cleared.
+`$attestUrl = 'https://github.com/Azure/cvm-attestation-tools/releases/latest/download/attest-win.zip'
+`$dlOk = `$false
+`$curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+# Wait for outbound to github.com:443 to come up before the real download. A freshly-attached
+# NAT Gateway on the VM subnet can take a couple of minutes to become effective, during which
+# every connection out of the VM fails with TCP connect timeout (curl exit 28). Probe with a
+# 5s timeout per attempt and back off; total ~5 minutes.
+Write-Host "Waiting for outbound connectivity to github.com:443..."
+for (`$i = 1; `$i -le 30; `$i++) {
+    `$ok = `$false
+    if (`$curl) {
+        & `$curl.Source -fsS --max-time 5 -o NUL https://github.com 2>`$null
+        if (`$LASTEXITCODE -eq 0) { `$ok = `$true }
+    } else {
+        try {
+            `$tnc = Test-NetConnection -ComputerName 'github.com' -Port 443 -WarningAction SilentlyContinue
+            if (`$tnc.TcpTestSucceeded) { `$ok = `$true }
+        } catch { `$ok = `$false }
+    }
+    if (`$ok) { Write-Host "Outbound to github.com is up (attempt `$i)." -ForegroundColor Green; break }
+    if (`$i -eq 30) {
+        Write-Host "WARNING: github.com still unreachable after 5 minutes; attempting download anyway." -ForegroundColor Yellow
+    } else {
+        Write-Host "  attempt `${i}: outbound not yet ready, sleeping 10s..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds 10
+    }
+}
+if (`$curl) {
+    & `$curl.Source -fsSL --retry 5 --retry-connrefused --retry-delay 5 -o 'attest-win.zip' `$attestUrl
+    if (`$LASTEXITCODE -eq 0 -and (Test-Path 'attest-win.zip')) { `$dlOk = `$true }
+    else { Write-Host "curl.exe download failed (exit `$LASTEXITCODE); falling back to Invoke-WebRequest..." -ForegroundColor Yellow }
+}
+if (-not `$dlOk) {
+    [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy
+    for (`$i = 1; `$i -le 5 -and -not `$dlOk; `$i++) {
+        try {
+            Invoke-WebRequest -Uri `$attestUrl -OutFile 'attest-win.zip' -UseBasicParsing
+            `$dlOk = `$true
+        } catch {
+            Write-Host "Invoke-WebRequest attempt `$i failed: `$(`$_.Exception.Message)" -ForegroundColor Yellow
+            if (`$i -lt 5) { Start-Sleep -Seconds 10 }
+        }
+    }
+}
+if (-not `$dlOk) { throw "Failed to download attest-win.zip from `$attestUrl" }
 Expand-Archive -Path 'attest-win.zip' -DestinationPath '.' -Force
 Write-Host "--------- attest.exe --c $attestConfig ---------"
 
@@ -452,8 +887,21 @@ Write-Host "--------- attest.exe --c $attestConfig ---------"
 `$prevEap = `$ErrorActionPreference
 `$ErrorActionPreference = 'Continue'
 if (`$PSVersionTable.PSVersion.Major -ge 7) { `$PSNativeCommandUseErrorActionPreference = `$false }
-`$attestOut = (& .\attest.exe --c $attestConfig 2>&1 | Out-String -Width 16384)
-`$attestExit = `$LASTEXITCODE
+# Retry attest.exe a few times: the attestation provider's internal retry budget is short,
+# and on a brand-new VM the SNAT mapping to the MAA endpoint can take a minute or two to
+# warm up after NAT GW attach, surfacing as ConnectTimeoutError to *.attest.azure.net even
+# though github.com is already reachable by the time we finish downloading.
+`$attestOut = ''
+`$attestExit = -1
+for (`$i = 1; `$i -le 5; `$i++) {
+    `$attestOut = (& .\attest.exe --c $attestConfig 2>&1 | Out-String -Width 16384)
+    `$attestExit = `$LASTEXITCODE
+    if (`$attestExit -eq 0) { break }
+    if (`$i -lt 5) {
+        Write-Host "attest.exe attempt `$i exited with code `$attestExit; sleeping 30s before retry..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 30
+    }
+}
 `$ErrorActionPreference = `$prevEap
 Write-Host `$attestOut
 if (`$attestExit -ne 0) { Write-Host "attest.exe exited with code `$attestExit" -ForegroundColor Yellow }
@@ -567,8 +1015,7 @@ if ($smoketest) {
     } else {
         write-host "`nProceeding with resource deletion..."
         try {
-            Remove-AzResourceGroup -Name $resgrp -Force -AsJob
-            write-host "Resource group deletion initiated successfully (running in background)"
+            Invoke-SmoketestCleanup -ResourceGroup $resgrp -KeyVaultName $akvname -Region $region
             write-host "All resources in resource group '$resgrp' are being removed"
         } catch {
             write-host "Error removing resource group: $($_.Exception.Message)" -ForegroundColor Red
