@@ -1,0 +1,46 @@
+apiVersion: 2021-07-01
+location: northeurope
+name: agent-test
+properties:
+  osType: Linux
+  restartPolicy: Never
+  imageRegistryCredentials:
+    - server: <acr-name>.azurecr.io
+      username: __ACR_USER__
+      password: __ACR_PASS__
+  subnetIds:
+    - id: /subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.Network/virtualNetworks/<name>vnet/subnets/aci-agents-subnet
+  containers:
+    - name: agent-test
+      properties:
+        image: <acr-name>.azurecr.io/ado-confidential-agent:latest
+        resources:
+          requests:
+            cpu: 2
+            memoryInGB: 4
+        environmentVariables:
+          - name: AZP_URL
+            value: https://10.0.0.4/DefaultCollection
+          - name: AZP_POOL
+            value: confidential-build-pool
+          - name: AZP_AGENT_NAME
+            value: agent-test-1
+          - name: AZP_WORK
+            value: /azp/_work
+          - name: AGENT_ALLOW_RUNASROOT
+            value: "1"
+          - name: AZP_TOKEN
+            value: __PAT__
+        command:
+          - /bin/bash
+          - -c
+          - >
+            echo EGRESS-TEST-START;
+            curl -sS -m 25 -o /dev/null -w 'download_host=%{http_code} connect=%{time_connect} total=%{time_total}\n' https://download.agent.dev.azure.com/ || echo EGRESS_CURL_EXIT_$?;
+            echo EGRESS-TEST-END;
+            echo INTERNAL-PKG-START;
+            curl -sSk -m 15 -u user:"${AZP_TOKEN}" -H 'Accept:application/json' -o /dev/null -w 'pkg_code=%{http_code}\n' "${AZP_URL}/_apis/distributedtask/packages/agent?platform=linux-x64&top=1" || echo PKG_CURL_EXIT_$?;
+            echo INTERNAL-PKG-END;
+            echo STARTSH-BEGIN;
+            ./start.sh || echo STARTSH_EXIT_$?;
+            echo STARTSH-END
