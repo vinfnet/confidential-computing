@@ -1,0 +1,16 @@
+{
+  "_comment": "Azure Key Vault Secure Key Release policy for SecretApp. Build-SecretAppSealed.ps1 base64url-encodes the object under 'policy' and attaches it to the wrapping key at import time. All conditions under allOf must hold simultaneously. The hostdata claim binds key release to the exact bytes of the CCE policy: the ACI control plane sets SEV-SNP HOST_DATA to sha256(cce-policy) at SNP_LAUNCH_FINISH, so altering one byte of the policy (or the image it pins) means the key never releases again, even on identical hardware.",
+  "__PLACEHOLDERS__": "__MAA_ENDPOINT__ and __CCE_POLICY_SHA256_HEX__ are substituted per build.",
+  "version": "1.0.0",
+  "anyOf": [
+    {
+      "authority": "https://__MAA_ENDPOINT__",
+      "allOf": [
+        { "claim": "x-ms-attestation-type",       "equals": "sevsnpvm" },
+        { "claim": "x-ms-compliance-status",       "equals": "azure-compliant-uvm" },
+        { "claim": "x-ms-sevsnpvm-is-debuggable",  "equals": "false" },
+        { "claim": "x-ms-sevsnpvm-hostdata",       "equals": "__CCE_POLICY_SHA256_HEX__" }
+      ]
+    }
+  ]
+}

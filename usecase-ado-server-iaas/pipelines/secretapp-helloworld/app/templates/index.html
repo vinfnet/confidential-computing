@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SecretApp — Attestation-Gated Secret</title>
+  <style>
+    :root { --bg:#0b1220; --card:#131c2f; --line:#243149; --ok:#28c76f; --bad:#ff5c5c; --accent:#4f8cff; --text:#e7eefc; --muted:#8ea2c6; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--text); line-height:1.5; }
+    .wrap { max-width:960px; margin:0 auto; padding:32px 20px 64px; }
+    h1 { font-size:26px; margin:0 0 4px; }
+    .sub { color:var(--muted); margin:0 0 24px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px 22px; margin:16px 0; }
+    .badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:13px; font-weight:600; }
+    .badge.ok { background:rgba(40,199,111,.15); color:var(--ok); border:1px solid rgba(40,199,111,.4); }
+    .badge.bad { background:rgba(255,92,92,.15); color:var(--bad); border:1px solid rgba(255,92,92,.4); }
+    .secret { font-size:20px; font-weight:600; background:#0d1830; border:1px dashed var(--accent); border-radius:10px; padding:18px; margin:12px 0; word-break:break-word; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    td, th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+    th { color:var(--muted); font-weight:600; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:#a9c7ff; word-break:break-all; }
+    button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer; }
+    button:disabled { opacity:.5; cursor:default; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12px; color:var(--muted); }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:8px 20px; }
+    .grid div { border-bottom:1px solid var(--line); padding:6px 0; font-size:13px; }
+    .k { color:var(--muted); }
+    pre { background:#0d1830; border:1px solid var(--line); border-radius:8px; padding:14px; overflow:auto; font-size:12px; }
+    .hint { color:var(--muted); font-size:13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🔐 SecretApp</h1>
+    <p class="sub">Attestation-gated secret release on Azure Confidential ACI · v{{ app_version }}</p>
+
+    <div class="card">
+      {% if sealed.unsealed %}
+        <span class="badge ok">✓ SECRET RELEASED</span>
+        <p class="hint" style="margin-top:12px">
+          The secret below was AES-256-GCM encrypted at build time. Its data-encryption key
+          was wrapped to an HSM key in Azure Key Vault whose <em>Secure Key Release</em> policy
+          only releases it after Microsoft Azure Attestation confirms this exact confidential
+          container (SEV-SNP, non-debuggable, matching CCE policy hash). The plaintext exists
+          only in this TEE's in-memory tmpfs.
+        </p>
+        <div class="secret">{{ sealed.welcome_secret or "(welcome.txt not present in bundle)" }}</div>
+      {% else %}
+        <span class="badge bad">✗ SECRET NOT RELEASED</span>
+        <p class="hint" style="margin-top:12px">{{ sealed.reason }}</p>
+      {% endif %}
+    </div>
+
+    {% if sealed.unsealed %}
+    <div class="card">
+      <h3 style="margin-top:0">Secure Key Release manifest</h3>
+      <div class="grid">
+        <div><span class="k">Key Vault</span></div><div><code>{{ sealed.akv_endpoint }}</code></div>
+        <div><span class="k">Key name</span></div><div><code>{{ sealed.key_name }}</code></div>
+        <div><span class="k">Key version</span></div><div><code>{{ sealed.key_version }}</code></div>
+        <div><span class="k">Release policy SHA-256</span></div><div><code>{{ sealed.release_policy_sha256 }}</code></div>
+        <div><span class="k">Wrap algorithm</span></div><div><code>{{ sealed.wrap_algorithm }}</code></div>
+        <div><span class="k">Ciphertext SHA-256</span></div><div><code>{{ sealed.ciphertext_sha256 }}</code></div>
+        <div><span class="k">Sealed at</span></div><div><code>{{ sealed.sealed_at }}</code></div>
+        <div><span class="k">Unsealed at</span></div><div><code>{{ sealed.unsealed_at }}</code></div>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3 style="margin-top:0">Live SEV-SNP attestation</h3>
+      <p class="hint">Fetch a fresh AMD SEV-SNP report from this container and verify it with
+        Microsoft Azure Attestation (<code>{{ maa_endpoint }}</code>).</p>
+      <button id="attestBtn" onclick="attest()">Run attestation</button>
+      <div id="attestOut" style="margin-top:16px"></div>
+    </div>
+
+    <p class="mono">Rendered {{ now }}</p>
+  </div>
+
+  <script>
+    async function attest() {
+      const btn = document.getElementById('attestBtn');
+      const out = document.getElementById('attestOut');
+      btn.disabled = true; out.innerHTML = '<p class="hint">Fetching SNP report and calling MAA…</p>';
+      try {
+        const r = await fetch('/api/attest', { method:'POST', headers:{'Content-Type':'application/json'}, body:'{}' });
+        const j = await r.json();
+        if (!j.ok) { out.innerHTML = '<span class="badge bad">Attestation failed</span><pre>'+escapeHtml(j.error)+'</pre>'; return; }
+        const claims = j.attestation.claims || [];
+        let rows = claims.map(c => '<tr><td><code>'+escapeHtml(c.key)+'</code></td><td><code>'+escapeHtml(JSON.stringify(c.value))+'</code></td><td class="hint">'+escapeHtml(c.explanation)+'</td></tr>').join('');
+        out.innerHTML = '<span class="badge ok">✓ MAA verified</span>'
+          + '<table style="margin-top:12px"><tr><th>Claim</th><th>Value</th><th>Meaning</th></tr>'+rows+'</table>';
+      } catch (e) {
+        out.innerHTML = '<span class="badge bad">Error</span><pre>'+escapeHtml(String(e))+'</pre>';
+      } finally { btn.disabled = false; }
+    }
+    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  </script>
+</body>
+</html>

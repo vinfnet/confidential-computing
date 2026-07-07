@@ -2,16 +2,31 @@
 # SecretApp - build a hello-world container and deploy it to Azure Container
 # Instances, driven entirely inside Azure DevOps.
 #
-# Runs on the self-hosted "confidential-build-pool" (confidential ACI agents).
-# Those agents have NO local Docker daemon, so the container image is built
-# server-side with `az acr build`. Deployment uses an ARM template + `az`.
+# Two deployment modes, selected with the `aciSku` parameter at queue time:
 #
-# Prerequisites (see README.md in this folder):
-#   * Agent pool           : confidential-build-pool  (already registered)
-#   * Service connection   : an ARM service connection to your subscription
-#   * Azure Container Reg.  : Basic+ SKU with the admin user enabled
-#   * The values below are set as pipeline variables (Edit > Variables) or
-#     overridden at queue time - do NOT hardcode secrets here.
+#   Standard      - plain ACI. Build server-side with `az acr build`, deploy the
+#                   freshly built tag. Runs on the dockerless confidential build
+#                   pool.
+#
+#   Confidential  - attestation-gated Secure Key Release (SKR). The welcome
+#                   secret is SEALED with a per-run RSA-4096 wrap key, baked into
+#                   the image (so the image digest - and therefore the CCE policy
+#                   hash - covers it), the wrap key is imported into Key Vault
+#                   under a release policy bound to that CCE hash, and the
+#                   confidential container group is deployed with identity-based
+#                   ACR pull (NO admin credentials). Only the exact attested
+#                   image running under the exact CCE policy on genuine AMD
+#                   SEV-SNP hardware can obtain the key and unseal the secret.
+#
+#                   This mode runs the end-to-end orchestrator
+#                   helper-scripts/Build-SecretAppSealed.ps1, which needs a
+#                   Docker daemon (acipolicygen inspects image layers) and
+#                   PowerShell 7 (.NET AES-GCM). It therefore runs on a
+#                   Docker-capable pool (see `skrPool`), NOT the dockerless
+#                   confidential build pool.
+#
+# No secrets are hardcoded here. Set the values below as pipeline variables
+# (Pipeline > Edit > Variables) or override them at queue time.
 # =============================================================================
 
 trigger:
@@ -22,7 +37,7 @@ trigger:
     include:
       - usecase-ado-server-iaas/pipelines/secretapp-helloworld/**
 
-# Let the operator override any of these when queueing the pipeline.
+# Let the operator override this when queueing the pipeline.
 parameters:
   - name: aciSku
     displayName: ACI SKU
@@ -36,24 +51,37 @@ variables:
   # --- Set these as pipeline variables in the ADO UI (Pipeline > Edit > Variables) ---
   # azureServiceConnection : name of the ARM service connection
   # acrName                : name of your Azure Container Registry (no .azurecr.io)
-  # resourceGroup          : resource group that holds the ACR and will hold the ACI
+  # resourceGroup          : resource group that holds the ACR/KV and will hold the ACI
   # location               : Azure region, e.g. northeurope
+  #
+  # --- Confidential (SKR) mode only ---
+  # skrPool                : agent pool with Docker + PowerShell 7 + az CLI (for acipolicygen)
+  # keyVaultName           : Premium Key Vault (HSM, purge-protection) that holds the wrap key
+  # managedIdentityName    : user-assigned identity on the container group (AcrPull + KV get/release)
+  # maaEndpoint            : Microsoft Azure Attestation endpoint, e.g. sharedneu.neu.attest.azure.net
+  # importerObjectId       : object ID of the service connection's service principal
+  #                          (granted get+import+delete on the wrap key; SPNs cannot use
+  #                          `az ad signed-in-user show`)
+  # containerGroupName     : name for the confidential container group, e.g. secretapp-cg
+  # dnsNameLabel           : public DNS label for the container group, e.g. secretapp
   # -----------------------------------------------------------------------------------
   imageName: 'secretapp'
   imageTag: '$(Build.BuildId)'
   workDir: 'usecase-ado-server-iaas/pipelines/secretapp-helloworld'
 
-pool: confidential-build-pool
-
 stages:
-  - stage: Build
-    displayName: Build image (az acr build)
+  # ---------------------------------------------------------------------------
+  # STANDARD: build + deploy plain ACI on the dockerless confidential build pool.
+  # ---------------------------------------------------------------------------
+  - stage: Standard
+    displayName: 'Standard ACI (build + deploy)'
+    condition: eq('${{ parameters.aciSku }}', 'Standard')
+    pool: confidential-build-pool
     jobs:
-      - job: acr_build
+      - job: build
         displayName: Server-side container build
         steps:
           - checkout: self
-
           - task: AzureCLI@2
             displayName: 'az acr build'
             inputs:
@@ -70,16 +98,12 @@ stages:
                   --file "$(workDir)/app/Dockerfile" \
                   "$(workDir)/app"
 
-  - stage: Deploy
-    displayName: Deploy to ACI
-    dependsOn: Build
-    condition: succeeded()
-    jobs:
-      - job: aci_deploy
+      - job: deploy
         displayName: Deploy container group
+        dependsOn: build
+        condition: succeeded()
         steps:
           - checkout: self
-
           - task: AzureCLI@2
             displayName: 'az deployment group create -> ACI'
             inputs:
@@ -88,12 +112,6 @@ stages:
               scriptLocation: inlineScript
               inlineScript: |
                 set -euo pipefail
-
-                SKU="${{ parameters.aciSku }}"
-                if [ "$SKU" != "Standard" ]; then
-                  echo "##vso[task.logissue type=warning]Confidential ACI needs a per-image CCE policy generated by 'az confcom acipolicygen', which requires a Docker daemon. The confidential ACI build agents are dockerless, so this pipeline deploys Standard ACI. Run the Confidential path from a Docker-capable agent (see README)."
-                fi
-
                 LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
                 ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
                 ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
@@ -133,11 +151,128 @@ stages:
                 echo "Waiting for $URL ..."
                 for i in $(seq 1 24); do
                   CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-                  if [ "$CODE" = "200" ]; then
-                    echo "OK - $URL returned 200"
-                    exit 0
-                  fi
+                  if [ "$CODE" = "200" ]; then echo "OK - $URL returned 200"; exit 0; fi
                   echo "  attempt $i: HTTP $CODE, retrying in 5s..."
                   sleep 5
                 done
                 echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
+
+  # ---------------------------------------------------------------------------
+  # CONFIDENTIAL: attestation-gated Secure Key Release. Runs the end-to-end
+  # orchestrator (seal -> build -> CCE policy -> import wrap key -> deploy),
+  # then verifies the CCE-hash binding and smoke-tests the sealed endpoint.
+  # Requires a Docker-capable pool (acipolicygen) - see `skrPool`.
+  # ---------------------------------------------------------------------------
+  - stage: Confidential
+    displayName: 'Confidential ACI (Secure Key Release)'
+    condition: eq('${{ parameters.aciSku }}', 'Confidential')
+    pool: $(skrPool)
+    jobs:
+      - job: skr
+        displayName: Seal, attest-gate, and deploy
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: 'Run SKR orchestrator (Build-SecretAppSealed.ps1)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference = 'Stop'
+                az extension add --name confcom --only-show-errors --yes 2>$null | Out-Null
+                & "$(workDir)/helper-scripts/Build-SecretAppSealed.ps1" `
+                  -ResourceGroup      "$(resourceGroup)" `
+                  -Location           "$(location)" `
+                  -Acr                "$(acrName)" `
+                  -KeyVault           "$(keyVaultName)" `
+                  -Identity           "$(managedIdentityName)" `
+                  -MaaEndpoint        "$(maaEndpoint)" `
+                  -ContainerGroupName "$(containerGroupName)" `
+                  -DnsNameLabel       "$(dnsNameLabel)" `
+                  -ImporterObjectId   "$(importerObjectId)"
+
+          - task: AzureCLI@2
+            displayName: 'Verify gate: CCE hash == Key Vault release-policy hostdata'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference = 'Stop'
+
+                # 1. hostdata the enclave will actually launch with =
+                #    sha256(base64-decode(deployed CCE policy)).
+                $cceB64 = az container show `
+                  --resource-group "$(resourceGroup)" `
+                  --name "$(containerGroupName)" `
+                  --query "confidentialComputeProperties.ccePolicy" -o tsv
+                if (-not $cceB64) { throw "Deployed container group exposes no CCE policy." }
+                $cceBytes = [Convert]::FromBase64String($cceB64)
+                $enclaveHostData = [BitConverter]::ToString(
+                  [System.Security.Cryptography.SHA256]::HashData($cceBytes)).Replace('-','').ToLower()
+
+                # 2. hostdata the Key Vault release policy DEMANDS. The container's
+                #    SKR_KEY_NAME env rule pins which key it may unseal with.
+                $keyName = (az container show `
+                  --resource-group "$(resourceGroup)" `
+                  --name "$(containerGroupName)" `
+                  --query "containers[0].environmentVariables[?name=='SKR_KEY_NAME'].value | [0]" -o tsv)
+                if (-not $keyName) { throw "Container group has no SKR_KEY_NAME env var." }
+
+                $policyB64 = az keyvault key show `
+                  --vault-name "$(keyVaultName)" --name $keyName `
+                  --query "release_policy.data" -o tsv
+                if (-not $policyB64) { throw "Key '$keyName' has no release policy." }
+                # Key Vault returns base64url without padding.
+                $pad = $policyB64.Replace('-','+').Replace('_','/')
+                switch ($pad.Length % 4) { 2 { $pad += '==' } 3 { $pad += '=' } }
+                $policyJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($pad))
+                $policy = $policyJson | ConvertFrom-Json
+
+                $demanded = $null
+                foreach ($any in $policy.anyOf) {
+                  foreach ($claim in $any.allOf) {
+                    if ($claim.claim -eq 'x-ms-sevsnpvm-hostdata') { $demanded = $claim.equals }
+                  }
+                }
+                if (-not $demanded) { throw "Release policy has no x-ms-sevsnpvm-hostdata claim." }
+
+                Write-Host "enclave hostdata (sha256 of deployed CCE policy): $enclaveHostData"
+                Write-Host "release-policy demanded hostdata               : $demanded"
+                if ($enclaveHostData -ne $demanded) {
+                  throw "CCE-hash binding MISMATCH: the deployed policy hash does not match the Key Vault release policy. The enclave would NOT be able to release the key (or the binding was tampered with). Failing the pipeline."
+                }
+                Write-Host "OK - CCE policy hash is bound to the Key Vault release policy."
+
+          - task: AzureCLI@2
+            displayName: 'Smoke test (sealed endpoint)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: pscore
+              scriptLocation: inlineScript
+              inlineScript: |
+                $ErrorActionPreference = 'Stop'
+                $fqdn = az container show `
+                  --resource-group "$(resourceGroup)" `
+                  --name "$(containerGroupName)" `
+                  --query "ipAddress.fqdn" -o tsv
+                $url = "http://${fqdn}:8080/api/sealed"
+                Write-Host "Waiting for $url ..."
+                for ($i = 1; $i -le 30; $i++) {
+                  try {
+                    $r = Invoke-WebRequest -Uri $url -TimeoutSec 10 -UseBasicParsing
+                    if ($r.StatusCode -eq 200) {
+                      $body = $r.Content | ConvertFrom-Json
+                      if ($body.unsealed -eq $true) {
+                        Write-Host "OK - enclave unsealed the secret via Secure Key Release."
+                        exit 0
+                      }
+                    }
+                  } catch { }
+                  Write-Host "  attempt $i: not ready, retrying in 5s..."
+                  Start-Sleep -Seconds 5
+                }
+                Write-Host "##vso[task.logissue type=error]$url did not report unsealed=true within timeout."
+                exit 1
