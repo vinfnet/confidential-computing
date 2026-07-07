@@ -48,6 +48,9 @@ param(
     [string]$NatGatewayName = "",
 
     [Parameter(Mandatory = $false)]
+    [string]$UserAssignedIdentityResourceId = "",
+
+    [Parameter(Mandatory = $false)]
     [switch]$AllowStdio
 )
 
@@ -96,6 +99,7 @@ if ($AgentCount -lt 1) { throw "-AgentCount must be at least 1." }
 $useVnet = -not [string]::IsNullOrWhiteSpace($VnetName)
 if ($useVnet -and [string]::IsNullOrWhiteSpace($VnetResourceGroup)) { $VnetResourceGroup = $ResourceGroupName }
 $subnetResourceId = ""
+$useIdentity = -not [string]::IsNullOrWhiteSpace($UserAssignedIdentityResourceId)
 
 if ([string]::IsNullOrWhiteSpace($AcrName)) {
     $AcrName = New-SafeName -Raw ("$prefixSafe" + "acr" + (Get-Random -Minimum 10000 -Maximum 99999)) -MaxLength 50 -Fallback "adocaciacr"
@@ -156,6 +160,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     jq \
     libicu70 \
+    && curl -sL https://aka.ms/InstallAzureCLIDeb | bash \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /azp
@@ -285,6 +290,14 @@ if ($useVnet) {
     $subnetPropBlock = ""
 }
 
+if ($useIdentity) {
+    $identityParamDef = '"userAssignedIdentityId": { "type": "string" }, '
+    $identityBlock = "`"identity`": { `"type`": `"UserAssigned`", `"userAssignedIdentities`": { `"[parameters('userAssignedIdentityId')]`": {} } },`n      "
+} else {
+    $identityParamDef = ""
+    $identityBlock = ""
+}
+
 $template = @"
 {
   "`$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -299,7 +312,7 @@ $template = @"
     "azpUrl": { "type": "string" },
     "azpPool": { "type": "string" },
     "azpToken": { "type": "securestring" },
-    $subnetParamDef"azpAgentName": { "type": "string" }
+    $identityParamDef$subnetParamDef"azpAgentName": { "type": "string" }
   },
   "resources": [
     {
@@ -307,7 +320,7 @@ $template = @"
       "apiVersion": "2023-05-01",
       "name": "[parameters('containerGroupName')]",
       "location": "[parameters('location')]",
-      "properties": {
+      $identityBlock"properties": {
         $subnetPropBlock"sku": "Confidential",
         "confidentialComputeProperties": {
           "ccePolicy": ""
@@ -378,6 +391,9 @@ function New-AgentParams {
     if ($useVnet) {
         $p.parameters.subnetResourceId = @{ value = $subnetResourceId }
         $p.parameters.agentSubnetName = @{ value = $AgentSubnetName }
+    }
+    if ($useIdentity) {
+        $p.parameters.userAssignedIdentityId = @{ value = $UserAssignedIdentityResourceId }
     }
     return $p
 }

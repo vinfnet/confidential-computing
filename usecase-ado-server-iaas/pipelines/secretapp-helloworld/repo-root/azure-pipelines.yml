@@ -1,0 +1,150 @@
+# =============================================================================
+# SecretApp - build a hello-world container and deploy it to Azure Container
+# Instances, driven entirely inside Azure DevOps.
+#
+# This is the copy that lives at the ROOT of the SecretApp repo. Repo layout:
+#   /azure-pipelines.yml   <- this file
+#   /app/Dockerfile
+#   /app/index.html
+#   /deploy/aci-helloworld.json
+#
+# Runs on the self-hosted "confidential-build-pool" (confidential ACI agents),
+# which have NO local Docker daemon - so the image is built server-side with
+# `az acr build`. Deployment uses an ARM template + `az`.
+#
+# AUTH: the confidential ACI build agents have a user-assigned managed identity
+# attached (id-secretapp-pipeline). Every Azure step authenticates with
+# `az login --identity --client-id $(identityClientId)` - no service connection,
+# no secrets in YAML. The identity holds:
+#   - AcrPush on the ACR (build/push images)
+#   - a custom "SecretApp Pipeline Deployer" role on the RG (deploy ACI)
+#
+# Pipeline variables to set (Pipeline > Edit > Variables), no secrets in YAML:
+#   acrName            : Azure Container Registry name (no .azurecr.io)
+#   resourceGroup      : RG holding the ACR and the ACI
+#   location           : Azure region, e.g. northeurope
+#   identityClientId   : client ID of the user-assigned managed identity
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: aciSku
+    displayName: ACI SKU
+    type: string
+    default: Standard
+    values:
+      - Standard
+      - Confidential
+
+variables:
+  imageName: 'secretapp'
+  imageTag: '$(Build.BuildId)'
+
+pool: confidential-build-pool
+
+stages:
+  - stage: Build
+    displayName: Build image (az acr build)
+    jobs:
+      - job: acr_build
+        displayName: Server-side container build
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              echo "Logging in with managed identity $(identityClientId)..."
+              az login --identity --client-id "$(identityClientId)" --allow-no-subscriptions 1>/dev/null
+              echo "Building $(imageName):$(imageTag) in registry $(acrName)..."
+              az acr build \
+                --registry "$(acrName)" \
+                --image "$(imageName):$(imageTag)" \
+                --image "$(imageName):latest" \
+                --file "app/Dockerfile" \
+                "app"
+            displayName: 'az login --identity + az acr build'
+
+  - stage: Deploy
+    displayName: Deploy to ACI
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: aci_deploy
+        displayName: Deploy container group
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              echo "Logging in with managed identity $(identityClientId)..."
+              az login --identity --client-id "$(identityClientId)" 1>/dev/null
+
+              LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+              ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+              ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+              echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+
+              STAMP=$(date +%m%d%H%M)
+              CG_NAME="secretapp-$STAMP"
+              DNS_LABEL="secretapp-$STAMP"
+
+              SKU="${{ parameters.aciSku }}"
+              if [ "$SKU" = "Confidential" ]; then
+                # Confidential ACI runs a per-image CCE policy that must be generated
+                # with 'az confcom acipolicygen' (needs Docker). These build agents are
+                # dockerless, so we deploy the PRE-GENERATED policy baked into
+                # deploy/aci-helloworld-confidential.json. That policy is bound to the
+                # image digest pinned as the template's default appImage - we intentionally
+                # do NOT pass appImage here so the attested digest is used (not the freshly
+                # built :$(Build.BuildId) tag). Regenerate the policy + digest whenever the
+                # image changes (see deploy/README-confidential.md).
+                echo "Deploying container group $CG_NAME on Confidential ACI (pinned + attested image)..."
+                FQDN=$(az deployment group create \
+                  --resource-group "$(resourceGroup)" \
+                  --template-file "deploy/aci-helloworld-confidential.json" \
+                  --parameters \
+                      containerGroupName="$CG_NAME" \
+                      location="$(location)" \
+                      registryServer="$LOGIN_SERVER" \
+                      registryUsername="$ACR_USER" \
+                      registryPassword="$ACR_PASS" \
+                      dnsNameLabel="$DNS_LABEL" \
+                  --query "properties.outputs.fqdn.value" -o tsv)
+              else
+                IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+                echo "Deploying container group $CG_NAME on Standard ACI (image: $IMAGE)..."
+                FQDN=$(az deployment group create \
+                  --resource-group "$(resourceGroup)" \
+                  --template-file "deploy/aci-helloworld.json" \
+                  --parameters \
+                      containerGroupName="$CG_NAME" \
+                      location="$(location)" \
+                      appImage="$IMAGE" \
+                      registryServer="$LOGIN_SERVER" \
+                      registryUsername="$ACR_USER" \
+                      registryPassword="$ACR_PASS" \
+                      dnsNameLabel="$DNS_LABEL" \
+                  --query "properties.outputs.fqdn.value" -o tsv)
+              fi
+
+              echo "Deployed. App URL: http://$FQDN"
+              echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+            displayName: 'az login --identity + deploy ACI'
+
+          - bash: |
+              set -euo pipefail
+              URL="http://$(appFqdn)"
+              echo "Waiting for $URL ..."
+              for i in $(seq 1 24); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                if [ "$CODE" = "200" ]; then
+                  echo "OK - $URL returned 200"
+                  exit 0
+                fi
+                echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                sleep 5
+              done
+              echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
+            displayName: 'Smoke test (HTTP 200)'

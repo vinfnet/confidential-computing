@@ -250,6 +250,24 @@ read from `$env:AZP_TOKEN`:
   -AgentSubnetName 'aci-agents-subnet'
 ```
 
+> **Agent image prerequisites — bake in the Azure CLI.** The sample pipeline
+> ([`pipelines/secretapp-helloworld`](pipelines/secretapp-helloworld/README.md))
+> calls `az` **on the agent** (`az login --identity`, `az acr build`,
+> `az deployment group create`). The default agent Dockerfile in
+> `Build-ConfidentialAciAdoAgent.ps1` is `ubuntu:22.04` with only
+> `curl`/`git`/`jq`, so a pipeline run fails with `az: command not found`.
+> The container also runs as the non-root user `azp`, so installing `az` at
+> pipeline runtime is not viable — it must be part of the image. Add the Azure
+> CLI to the Dockerfile before building, e.g.:
+>
+> ```dockerfile
+> RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+> ```
+>
+> Because the agents run as **Confidential** ACI, rebuilding the image changes
+> the measured layers, so the CCE policy is regenerated and both agents are
+> redeployed as part of re-running this step.
+
 ### Step 8 — Verify the agents registered
 
 ```powershell
