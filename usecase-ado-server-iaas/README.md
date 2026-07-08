@@ -68,6 +68,17 @@ overhead of running it yourself.
    └───────────────────────────────────────────────┘
 ```
 
+> **Hybrid option — keep the ADO Server on-premises.** This sample runs the Azure
+> DevOps Server and its database on an Azure Confidential VM, but that's not a
+> requirement. The **ADO Server and its SQL database can instead live in your own
+> on-premises datacenter** and still drive the **confidential ACI build agents** in
+> Azure — as long as the on-prem network is connected to this Azure VNet over
+> **ExpressRoute** or a **site-to-site / VPN gateway**. The agents self-register to
+> the server over that private path exactly as they do here, so you keep your
+> existing on-prem ADO investment while gaining attested, confidential build
+> compute in the cloud. (In that topology the CVM in the diagram is replaced by
+> your on-prem server reachable across the ExpressRoute/VPN link.)
+
 ## Prerequisites
 
 - **Azure CLI** signed in to the target subscription:
