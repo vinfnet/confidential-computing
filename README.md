@@ -165,6 +165,7 @@ Confidential Virtual Machine (CVM) deployment scripts:
 ### [AKS Samples](/aks-samples/README.md)
 Azure Kubernetes Service with AMD SEV-SNP confidential computing:
 - **BuildRandomAKS.ps1** - AKS cluster with Customer Managed Keys and confidential node pools
+- **[AKS Virtual Nodes on Confidential AKS](/aks-samples/virtual%20nodes/README.md)** - End-to-end sample that deploys AKS with virtual nodes backed by ACI, validates hello-world scheduling on the virtual node, and links to a confidential ACI follow-on manifest.
 
 ### [Attestation Samples](/attestation-samples/README.md)
 Microsoft Azure Attestation (MAA) provider management:

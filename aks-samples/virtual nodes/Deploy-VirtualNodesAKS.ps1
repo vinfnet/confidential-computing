@@ -37,6 +37,15 @@ Node count for the confidential pool. Default: 1.
 .PARAMETER SkipExternalSmokeTest
 Skip the external HTTP check against the public load balancer.
 
+.PARAMETER VisualAttestationUrl
+Optional explicit URL (or FQDN) for the visual attestation container to display in the final summary.
+
+.PARAMETER VisualAttestationResourceGroup
+Resource group used to auto-discover a visual attestation container FQDN when VisualAttestationUrl is not provided.
+
+.PARAMETER VisualAttestationContainerPrefix
+Container name prefix used to auto-discover a visual attestation container FQDN.
+
 .PARAMETER AutoActivatePim
 Automatically submit a native Azure PowerShell PIM self-activation request for the first eligible role.
 #>
@@ -52,6 +61,9 @@ param(
     [int]$SystemNodeCount = 1,
     [int]$ConfidentialNodeCount = 1,
     [switch]$SkipExternalSmokeTest,
+    [string]$VisualAttestationUrl = "",
+    [string]$VisualAttestationResourceGroup = "sgall-acrqlyusoeg-rg",
+    [string]$VisualAttestationContainerPrefix = "cc-attest-conf-",
     [switch]$AutoActivatePim
 )
 
@@ -730,6 +742,47 @@ function Invoke-ExternalSmokeTest {
     Write-Warning "The external load balancer endpoint '$Endpoint' did not respond in time. This is common in restricted network environments (VPN, corp firewall). The in-cluster smoke test already confirmed the workload is healthy."
 }
 
+function Resolve-VisualAttestationLink {
+    param(
+        [string]$ExplicitUrl,
+        [string]$ResourceGroup,
+        [string]$ContainerPrefix
+    )
+
+    if ($ExplicitUrl) {
+        $trimmed = $ExplicitUrl.Trim()
+        if ($trimmed -match '^https?://') {
+            return $trimmed
+        }
+        return "http://$trimmed"
+    }
+
+    if (-not $ResourceGroup -or -not $ContainerPrefix) {
+        return $null
+    }
+
+    try {
+        $containers = az container list --resource-group $ResourceGroup --query "[?starts_with(name, '$ContainerPrefix')].{name:name,fqdn:ipAddress.fqdn}" --output json 2>$null | ConvertFrom-Json
+        if ($LASTEXITCODE -ne 0 -or -not $containers) {
+            return $null
+        }
+
+        $candidate = $containers |
+            Where-Object { $_.fqdn } |
+            Sort-Object name -Descending |
+            Select-Object -First 1
+
+        if (-not $candidate) {
+            return $null
+        }
+
+        return "http://$($candidate.fqdn)"
+    }
+    catch {
+        return $null
+    }
+}
+
 Write-Header "Preparing deployment"
 
 Ensure-AzureCli
@@ -869,6 +922,8 @@ if (-not $SkipExternalSmokeTest -and $externalEndpoint) {
     Invoke-ExternalSmokeTest -Endpoint $externalEndpoint
 }
 
+$visualAttestationLink = Resolve-VisualAttestationLink -ExplicitUrl $VisualAttestationUrl -ResourceGroup $VisualAttestationResourceGroup -ContainerPrefix $VisualAttestationContainerPrefix
+
 Write-Header "Deployment summary"
 Write-Host "Resource group:            $resourceGroupName"
 Write-Host "Region:                    $deploymentLocation"
@@ -885,11 +940,19 @@ if ($externalEndpoint) {
 } else {
     Write-Host "Public endpoint:           Pending. Run 'kubectl get service $serviceName -n $namespaceName' to watch for assignment."
 }
+if ($visualAttestationLink) {
+    Write-Host "Visual attestation link:   $visualAttestationLink"
+} else {
+    Write-Host "Visual attestation link:   Not detected. Pass -VisualAttestationUrl to set it explicitly."
+}
 
 Write-Host ""
 Write-Host "How to access the sample:" -ForegroundColor Green
 if ($externalEndpoint) {
     Write-Host "- Browse to http://$externalEndpoint"
+}
+if ($visualAttestationLink) {
+    Write-Host "- Browse to $visualAttestationLink"
 }
 Write-Host "- Inspect the pod placement with: kubectl get pods -n $namespaceName -o wide"
 Write-Host "- Inspect the virtual node with: kubectl get nodes -l type=virtual-kubelet -o wide"

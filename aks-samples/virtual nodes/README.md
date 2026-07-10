@@ -8,6 +8,25 @@ This sample creates a fresh AKS cluster with:
 - The AKS virtual nodes add-on backed by Azure Container Instances
 - A public hello-world deployment scheduled onto the virtual node
 
+## What AKS Virtual Nodes are
+
+AKS Virtual Nodes let you run Kubernetes pods on Azure Container Instances (ACI) without adding or managing more AKS VM nodes. The virtual node appears as a Kubernetes node, but the pod runtime is provided by ACI.
+
+This is useful when you want rapid burst capacity, simpler operations for specific pod classes, or to run selected workloads in ACI while keeping Kubernetes control and scheduling in AKS.
+
+### Typical scenarios
+
+- Burst or spiky workloads where you do not want to scale VM node pools up and down
+- Event-driven or short-lived jobs that benefit from ACI startup and billing behavior
+- Isolating selected workloads from regular AKS node pools while keeping a single Kubernetes API surface
+- Hybrid AKS + ACI patterns where most services run on AKS nodes and overflow or special workloads run on virtual nodes
+
+### Official documentation
+
+- AKS Virtual Nodes overview: https://learn.microsoft.com/azure/aks/virtual-nodes
+- AKS Virtual Nodes CLI walkthrough: https://learn.microsoft.com/azure/aks/virtual-nodes-cli
+- Azure Container Instances overview: https://learn.microsoft.com/azure/container-instances/container-instances-overview
+
 The script lives entirely in this folder and follows the repo's usual naming and tagging pattern:
 
 - Resource group name: `<prefix><5 random lowercase letters>`
