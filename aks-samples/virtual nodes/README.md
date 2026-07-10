@@ -16,7 +16,8 @@ The script lives entirely in this folder and follows the repo's usual naming and
 ## Files
 
 - `Deploy-VirtualNodesAKS.ps1`: end-to-end deployment script
-- `virtual-node-hello-world.yaml`: hello-world workload scheduled onto the virtual node
+- `virtual-node-hello-world.yaml`: hello-world workload scheduled onto the virtual node (standard ACI)
+- `virtual-node-confidential.yaml`: confidential ACI workload template with CCE policy annotation scaffold
 
 ## What the script checks
 
@@ -67,6 +68,12 @@ Optional parameters:
 This first sample validates the virtual-nodes plumbing on top of a confidential-node AKS cluster and uses the standard `mcr.microsoft.com/azuredocs/aci-helloworld` image as the smoke test.
 
 That gives you a working foundation for the next step: replacing the sample manifest with a confidential ACI deployment that includes a generated Confidential Computing Enforcement policy and any attestation sidecars you want to test.
+
+`virtual-node-confidential.yaml` is the starting point for that step. It includes the `microsoft.containerinstance.virtualnode.ccepolicy` annotation with an allow-all debug policy. Replace the policy value with the output of:
+
+```bash
+az confcom acipolicygen --image <your-image> --print-policy
+```
 
 ## References
 
