@@ -68,6 +68,42 @@ overhead of running it yourself.
    └───────────────────────────────────────────────┘
 ```
 
+The same topology as a rendered diagram — everything stays inside the VNet, and only
+outbound HTTPS leaves through the NAT gateway:
+
+```mermaid
+flowchart TB
+    ws["Your workstation<br/>(Azure CLI + Bastion tunnel)"]
+
+    subgraph vnet["VNet &lt;name&gt;vnet — 10.0.0.0/16"]
+        direction TB
+        subgraph bsub["AzureBastionSubnet"]
+            bastion["Azure Bastion<br/>(Standard, tunneling)"]
+        end
+        subgraph dsub["default subnet"]
+            cvm["ADO Server CVM<br/>10.0.0.4 · no public IP<br/>AMD SEV-SNP TEE<br/>IIS · HTTPS 443"]
+            kv["Key Vault<br/>(PAT + CMK)"]
+        end
+        subgraph asub["aci-agents-subnet — 10.0.1.0/24 (delegated)"]
+            a1["Confidential ACI agent 1<br/>AMD SEV-SNP TEE"]
+            a2["Confidential ACI agent 2<br/>AMD SEV-SNP TEE"]
+        end
+        nat["NAT gateway<br/>(outbound only)"]
+    end
+
+    ws -->|"RDP / tunnel over Bastion"| bastion
+    bastion --> cvm
+    a1 -->|"self-register · HTTPS 443"| cvm
+    a2 -->|"self-register · HTTPS 443"| cvm
+    a1 -.->|"fetch PAT via managed identity"| kv
+    a2 -.->|"fetch PAT via managed identity"| kv
+    a1 --> nat
+    a2 --> nat
+
+    classDef tee fill:#e8f0fe,stroke:#1a56db,stroke-width:1px;
+    class cvm,a1,a2 tee;
+```
+
 > **Hybrid option — keep the ADO Server on-premises.** This sample runs the Azure
 > DevOps Server and its database on an Azure Confidential VM, but that's not a
 > requirement. The **ADO Server and its SQL database can instead live in your own
@@ -110,6 +146,29 @@ Throughout this guide, replace the placeholders:
 ---
 
 ## End-to-end installation
+
+The eight steps below move from an empty subscription to confidential build agents
+registered and ready. Blue steps run **on your workstation**; green steps run **on the
+CVM** (through `az vm run-command` or an RDP session):
+
+```mermaid
+flowchart TD
+    s1["Step 1 · Deploy CVM + network<br/>Build-AdoServerCvm.ps1"]
+    s2["Step 2 · Connect over Bastion (RDP)"]
+    s3["Step 3 · Install ADO Server (manual GUI)"]
+    s4["Step 4 · Enable HTTPS<br/>enable-ado-https.ps1"]
+    s5["Step 5 · Create PAT (Agent Pools: manage)"]
+    s6["Step 6 · Create agent pool<br/>create-ado-pool.ps1"]
+    s7["Step 7 · Build + deploy ACI agents<br/>Build-ConfidentialAciAdoAgent.ps1"]
+    s8["Step 8 · Verify registration<br/>check-ado-agents.ps1"]
+
+    s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8
+
+    classDef ws fill:#e8f0fe,stroke:#1a56db,stroke-width:1px;
+    classDef vm fill:#e6f4ea,stroke:#137333,stroke-width:1px;
+    class s1,s7 ws;
+    class s3,s4,s6,s8 vm;
+```
 
 ### Step 1 — Deploy the Confidential VM and network
 
@@ -242,6 +301,15 @@ az vm run-command invoke -g <resource-group> -n <vm-name> `
 Note the pool `id` from the output (`POOL-CREATED` / `POOL-EXISTS` — typically `id=2`); you
 use it to verify agents in Step 8.
 
+> **Why the script targets the collection, not the deployment root.** On Azure DevOps
+> Server the PAT authenticates at the **collection** host, so the agent-pool REST API must be
+> called through the collection path
+> (`http://localhost/DefaultCollection/_apis/distributedtask/pools`). Calling the bare
+> deployment root (`http://localhost/_apis/...`) returns **401** even with a valid PAT.
+> `create-ado-pool.ps1` builds its base URL from the collection (default `DefaultCollection`,
+> override with `Collection=<name>`); if you see `POOL-CREATED`/`POOL-EXISTS` the PAT and
+> scope are correct.
+
 ### Step 7 — Build and deploy the confidential ACI agents
 
 Builds the agent container image, pushes it to ACR, and deploys the confidential ACI agents
@@ -260,6 +328,105 @@ read from `$env:AZP_TOKEN`:
   -VnetName '<vnet-name>' `
   -AgentSubnetName 'aci-agents-subnet'
 ```
+
+In this mode the PAT is passed to the deployment as an ARM `securestring` and injected into
+the container as the `AZP_TOKEN` environment variable. It is protected in transit, but it does
+land in the deployment's parameter values. For a stronger posture, keep the PAT out of the
+template entirely and have each agent fetch it at runtime from Key Vault — see below.
+
+#### Key Vault-backed PAT retrieval (recommended)
+
+Instead of handing the PAT to the ARM deployment, store it once in the CVM's **Key Vault** and
+let each confidential agent fetch it **at runtime, from inside the SEV-SNP TEE**, using its
+**user-assigned managed identity**. With this option:
+
+- The PAT never appears in the container image, the ARM template, the deployment history, or
+  the container's environment variables. Only the (non-secret) vault name, secret name, and
+  managed-identity client ID are passed to the deployment.
+- The token materializes **only in-memory inside the attested TEE**, is written to a
+  short-lived `/azp/.token` file for `config.sh`, and the environment variable is unset
+  immediately after.
+- Access is least-privilege: the managed identity is granted only `get` on the secret (RBAC
+  role **Key Vault Secrets User** on RBAC-enabled vaults, or a `get`-only access policy on
+  classic vaults).
+
+Prerequisites:
+
+1. A **user-assigned managed identity** for the agents (create one, or reuse an existing one),
+   and its resource ID.
+2. A **Key Vault** the agents can reach over the private VNet (the CVM build already
+   provisions one for CMK disk encryption — you can reuse it).
+
+Deploy with `-KeyVaultName` and `-UserAssignedIdentityResourceId`. Use `-StorePatInKeyVault`
+to seed the secret from `$env:AZP_TOKEN` on the first run (the script also grants the identity
+`get` access automatically):
+
+```powershell
+.\Build-ConfidentialAciAdoAgent.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName <resource-group> `
+  -Prefix <name> `
+  -AzpUrl 'https://10.0.0.4/DefaultCollection' `
+  -AzpPool 'confidential-build-pool' `
+  -AcrName <acr-name> `
+  -AgentCount 2 `
+  -VnetName '<vnet-name>' `
+  -AgentSubnetName 'aci-agents-subnet' `
+  -UserAssignedIdentityResourceId '<managed-identity-resource-id>' `
+  -KeyVaultName '<key-vault-name>' `
+  -PatSecretName 'ado-agent-pat' `
+  -StorePatInKeyVault
+```
+
+On subsequent runs, drop `-StorePatInKeyVault` (and you no longer need `$env:AZP_TOKEN` set) —
+the agents read the existing secret straight from the vault:
+
+```powershell
+.\Build-ConfidentialAciAdoAgent.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName <resource-group> `
+  -Prefix <name> `
+  -AzpUrl 'https://10.0.0.4/DefaultCollection' `
+  -AzpPool 'confidential-build-pool' `
+  -AcrName <acr-name> `
+  -AgentCount 2 `
+  -VnetName '<vnet-name>' `
+  -AgentSubnetName 'aci-agents-subnet' `
+  -UserAssignedIdentityResourceId '<managed-identity-resource-id>' `
+  -KeyVaultName '<key-vault-name>' `
+  -PatSecretName 'ado-agent-pat'
+```
+
+At startup the agent's entrypoint runs `az login --identity` with its assigned identity, calls
+`az keyvault secret show` to read the PAT, registers with `config.sh`, and clears the token
+from memory. Because this only changes how the PAT is *acquired* (not what runs), the agent
+image and CCE policy are still produced exactly as in the default flow.
+
+The PAT never touches the ARM template or the container environment — it materializes only
+in-memory inside the attested TEE:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent as Confidential ACI agent<br/>(SEV-SNP TEE)
+    participant MI as Managed identity<br/>(Entra ID)
+    participant KV as Key Vault
+    participant ADO as ADO Server CVM<br/>(HTTPS 443)
+
+    Agent->>MI: az login --identity (client-id)
+    MI-->>Agent: access token
+    Agent->>KV: az keyvault secret show (get PAT)
+    KV-->>Agent: PAT (in-memory only)
+    Agent->>ADO: config.sh --auth PAT (self-register)
+    ADO-->>Agent: agent registered in pool
+    Agent->>Agent: unset AZP_TOKEN · delete .token
+    Agent->>ADO: Listening for Jobs
+```
+
+> **Rotation tip.** Treat the registration PAT as short-lived: use a narrowly-scoped
+> **Agent Pools (read, manage)** token, and rotate it in Key Vault
+> (`az keyvault secret set`) after the agents are registered. Existing agents keep running on
+> their established connection; a new PAT is only needed for re-registration.
 
 > **Agent image prerequisites — bake in the Azure CLI.** The sample pipeline
 > ([`pipelines/secretapp-helloworld`](pipelines/secretapp-helloworld/README.md))
