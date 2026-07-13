@@ -1,0 +1,64 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "containerGroupName": { "type": "string" },
+    "location":           { "type": "string", "defaultValue": "[resourceGroup().location]" },
+    "appImage":           { "type": "string" },
+    "registryServer":     { "type": "string" },
+    "registryUsername":   { "type": "string" },
+    "registryPassword":   { "type": "securestring" },
+    "dnsNameLabel":       { "type": "string" },
+    "maaEndpoint":        { "type": "string", "defaultValue": "sharedeus.eus.attest.azure.net" }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerInstance/containerGroups",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('containerGroupName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": "Confidential",
+        "osType": "Linux",
+        "restartPolicy": "Always",
+        "confidentialComputeProperties": {
+          "ccePolicy": ""
+        },
+        "containers": [
+          {
+            "name": "cc-attest",
+            "properties": {
+              "image": "[parameters('appImage')]",
+              "ports": [ { "protocol": "TCP", "port": 80 } ],
+              "environmentVariables": [
+                { "name": "ACI_SKU",      "value": "Confidential" },
+                { "name": "MAA_ENDPOINT", "value": "[parameters('maaEndpoint')]" }
+              ],
+              "resources": {
+                "requests": { "memoryInGB": 2, "cpu": 1 }
+              }
+            }
+          }
+        ],
+        "imageRegistryCredentials": [
+          {
+            "server":   "[parameters('registryServer')]",
+            "username": "[parameters('registryUsername')]",
+            "password": "[parameters('registryPassword')]"
+          }
+        ],
+        "ipAddress": {
+          "type": "Public",
+          "dnsNameLabel": "[parameters('dnsNameLabel')]",
+          "ports": [ { "protocol": "TCP", "port": 80 } ]
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "fqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerInstance/containerGroups', parameters('containerGroupName'))).ipAddress.fqdn]"
+    }
+  }
+}

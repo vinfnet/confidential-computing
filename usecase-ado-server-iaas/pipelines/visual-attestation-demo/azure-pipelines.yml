@@ -1,0 +1,279 @@
+# =============================================================================
+# Visual Attestation Demo v2 - build a container on the confidential build
+# runners and deploy it to Azure Container Instances, driven entirely inside
+# Azure DevOps.
+#
+# The image source lives in aci-samples/visual-attestation-demo-v2. This
+# pipeline builds it SERVER-SIDE with `az acr build` (so the dockerless
+# confidential ACI build agents can produce it), then deploys the freshly built
+# tag to a public ACI container group.
+#
+# Two deployment modes, selected with the `aciSku` parameter at queue time:
+#
+#   Standard      - plain ACI (no TEE). The app's Attest button fails by design
+#                   (no /dev/sev-guest) - the educational point of the sample -
+#                   but the container starts and serves the UI on port 80.
+#
+#   Confidential  - AMD SEV-SNP ACI. A per-image CCE policy is generated with
+#                   `az confcom acipolicygen` and injected into the ARM template
+#                   before deploy, so attestation succeeds on genuine hardware.
+#
+# BOTH modes run on the dockerless `confidential-build-pool`. `acipolicygen`
+# does NOT need a local Docker daemon here: because the image already lives in
+# ACR (pushed by `az acr build`), confcom pulls the layers straight from the
+# registry to compute the dm-verity hashes. The only requirement is registry
+# auth, which the pipeline supplies by writing ~/.docker/config.json with the
+# ACR admin credentials - no Docker install involved. See the confcom docs:
+# https://github.com/Azure/azure-cli-extensions/blob/main/src/confcom/azext_confcom/README.md
+# ("the confcom extension CLI tool attempts to fetch the image remotely if it
+#  is not locally available").
+#
+# No secrets are hardcoded here. Set the values below as pipeline variables
+# (Pipeline > Edit > Variables) or override them at queue time.
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - usecase-ado-server-iaas/pipelines/visual-attestation-demo/**
+      - aci-samples/visual-attestation-demo-v2/**
+
+# Let the operator override this when queueing the pipeline.
+parameters:
+  - name: aciSku
+    displayName: ACI SKU
+    type: string
+    default: Standard
+    values:
+      - Standard
+      - Confidential
+
+variables:
+  # --- Set these as pipeline variables in the ADO UI (Pipeline > Edit > Variables) ---
+  # azureServiceConnection : name of the ARM service connection
+  # acrName                : name of your Azure Container Registry (no .azurecr.io)
+  # resourceGroup          : resource group that holds the ACR and will hold the ACI
+  # location               : Azure region, e.g. northeurope
+  # -----------------------------------------------------------------------------------
+  imageName: 'cc-attest'
+  imageTag: '$(Build.BuildId)'
+  # Microsoft Azure Attestation endpoint for the Confidential mode. Match your
+  # region: eastus -> sharedeus.eus.attest.azure.net,
+  #          northeurope -> sharedneu.neu.attest.azure.net, etc.
+  maaEndpoint: 'sharedeus.eus.attest.azure.net'
+  # Container image source (Dockerfile + app) lives in the aci-samples tree.
+  sourceDir: 'aci-samples/visual-attestation-demo-v2'
+  # Deploy ARM templates live alongside this pipeline.
+  deployDir: 'usecase-ado-server-iaas/pipelines/visual-attestation-demo/deploy'
+
+stages:
+  # ---------------------------------------------------------------------------
+  # BUILD: server-side image build on the dockerless confidential build pool.
+  # Shared by both SKUs.
+  # ---------------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build image (az acr build)'
+    pool: confidential-build-pool
+    jobs:
+      - job: build
+        displayName: Server-side container build
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: 'az acr build'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                echo "Building $(imageName):$(imageTag) in registry $(acrName)..."
+                az acr build \
+                  --registry "$(acrName)" \
+                  --image "$(imageName):$(imageTag)" \
+                  --image "$(imageName):latest" \
+                  --file "$(sourceDir)/Dockerfile" \
+                  "$(sourceDir)"
+
+  # ---------------------------------------------------------------------------
+  # STANDARD: deploy plain ACI. Attestation fails by design (educational).
+  # ---------------------------------------------------------------------------
+  - stage: DeployStandard
+    displayName: 'Deploy Standard ACI'
+    dependsOn: Build
+    condition: and(succeeded(), eq('${{ parameters.aciSku }}', 'Standard'))
+    pool: confidential-build-pool
+    jobs:
+      - job: deploy
+        displayName: Deploy container group
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: 'az deployment group create -> ACI (Standard)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+                ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+                ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+                echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+
+                STAMP=$(date +%m%d%H%M)
+                CG_NAME="cc-attest-$STAMP"
+                DNS_LABEL="cc-attest-$STAMP"
+                IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+
+                echo "Deploying container group $CG_NAME (image: $IMAGE)..."
+                FQDN=$(az deployment group create \
+                  --resource-group "$(resourceGroup)" \
+                  --template-file "$(deployDir)/aci-visual-attestation.json" \
+                  --parameters \
+                      containerGroupName="$CG_NAME" \
+                      location="$(location)" \
+                      appImage="$IMAGE" \
+                      registryServer="$LOGIN_SERVER" \
+                      registryUsername="$ACR_USER" \
+                      registryPassword="$ACR_PASS" \
+                      dnsNameLabel="$DNS_LABEL" \
+                  --query "properties.outputs.fqdn.value" -o tsv)
+
+                echo "Deployed. App URL: http://$FQDN"
+                echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+
+          - task: AzureCLI@2
+            displayName: 'Smoke test (HTTP 200)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                URL="http://$(appFqdn)"
+                echo "Waiting for $URL ..."
+                for i in $(seq 1 24); do
+                  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                  if [ "$CODE" = "200" ]; then echo "OK - $URL returned 200"; exit 0; fi
+                  echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                  sleep 5
+                done
+                echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
+
+  # ---------------------------------------------------------------------------
+  # CONFIDENTIAL: generate a per-image CCE policy (dockerless - confcom pulls
+  # the image from ACR remotely) and deploy on the AMD SEV-SNP SKU so runtime
+  # attestation succeeds.
+  # ---------------------------------------------------------------------------
+  - stage: DeployConfidential
+    displayName: 'Deploy Confidential ACI (SEV-SNP)'
+    dependsOn: Build
+    condition: and(succeeded(), eq('${{ parameters.aciSku }}', 'Confidential'))
+    pool: confidential-build-pool
+    jobs:
+      - job: deploy
+        displayName: Generate CCE policy + deploy
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: 'Generate CCE policy (dockerless) + deploy'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+
+                # confcom extension is what turns the image + ARM template into a
+                # CCE policy. It ships a static dmverity-vhd binary, so no Docker.
+                az extension add --name confcom --only-show-errors --yes 2>/dev/null || \
+                  az extension update --name confcom --only-show-errors 2>/dev/null || true
+
+                LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+                ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+                ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+                echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+
+                # --- The Docker workaround -------------------------------------
+                # acipolicygen needs to READ the image layers to hash them. With
+                # no Docker daemon it fetches them straight from ACR over HTTPS -
+                # it just needs registry credentials, which we hand it via a
+                # standard docker config.json (base64 user:pass). No daemon runs.
+                mkdir -p "$HOME/.docker"
+                AUTH=$(printf '%s:%s' "$ACR_USER" "$ACR_PASS" | base64 -w0)
+                cat > "$HOME/.docker/config.json" <<EOF
+                { "auths": { "$LOGIN_SERVER": { "auth": "$AUTH" } } }
+                EOF
+                # ---------------------------------------------------------------
+
+                STAMP=$(date +%m%d%H%M)
+                CG_NAME="cc-attest-conf-$STAMP"
+                DNS_LABEL="cc-attest-conf-$STAMP"
+                IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+
+                TEMPLATE="$(deployDir)/aci-visual-attestation-confidential.json"
+                WORK_TEMPLATE="$(Agent.TempDirectory)/aci-conf.json"
+                PARAMS="$(Agent.TempDirectory)/aci-conf.params.json"
+                cp "$TEMPLATE" "$WORK_TEMPLATE"
+
+                # Parameters file for confcom (it resolves the image reference
+                # from here) and for the deployment.
+                cat > "$PARAMS" <<EOF
+                {
+                  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "containerGroupName": { "value": "$CG_NAME" },
+                    "location":           { "value": "$(location)" },
+                    "appImage":           { "value": "$IMAGE" },
+                    "registryServer":     { "value": "$LOGIN_SERVER" },
+                    "registryUsername":   { "value": "$ACR_USER" },
+                    "registryPassword":   { "value": "$ACR_PASS" },
+                    "dnsNameLabel":       { "value": "$DNS_LABEL" },
+                    "maaEndpoint":        { "value": "$(maaEndpoint)" }
+                  }
+                }
+                EOF
+
+                echo "Generating CCE policy for $IMAGE (pulling layers from ACR, no Docker)..."
+                az confcom acipolicygen \
+                  -a "$WORK_TEMPLATE" \
+                  --parameters "$PARAMS" \
+                  --disable-stdio \
+                  --approve-wildcards
+
+                echo "Deploying confidential container group $CG_NAME..."
+                FQDN=$(az deployment group create \
+                  --resource-group "$(resourceGroup)" \
+                  --template-file "$WORK_TEMPLATE" \
+                  --parameters "$PARAMS" \
+                  --query "properties.outputs.fqdn.value" -o tsv)
+
+                echo "Deployed. App URL: http://$FQDN"
+                echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+
+          - task: AzureCLI@2
+            displayName: 'Smoke test (HTTP 200)'
+            inputs:
+              azureSubscription: '$(azureServiceConnection)'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                URL="http://$(appFqdn)"
+                echo "Waiting for $URL ..."
+                for i in $(seq 1 36); do
+                  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                  if [ "$CODE" = "200" ]; then
+                    echo "OK - $URL returned 200. Click Attest in the UI for a live SEV-SNP token."
+                    exit 0
+                  fi
+                  echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                  sleep 5
+                done
+                echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; a confidential container group can take a few minutes to boot the UVM."

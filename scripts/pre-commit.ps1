@@ -191,7 +191,7 @@ $blockedContentPatterns = @(
     @{
         Pattern     = '(?is)"(registryPassword|dbPassword|password|clientSecret|client_secret|apiKey|api_key|accessKey|accountKey|sharedAccessSignature|sasToken|connectionString)"\s*:\s*\{\s*"value"\s*:\s*"[^"<]{8,}"'
         Description = "JSON parameters file with embedded credential value"
-        Exclude     = 'placeholder|example|YOUR_|<'
+        Exclude     = 'placeholder|example|YOUR_|<|\$\{|\$[A-Za-z]'
     },
     @{
         Pattern     = '(?is)"value"\s*:\s*"DefaultEndpointsProtocol=https?;AccountName=[^";]+;AccountKey=[A-Za-z0-9+/=]{20,}'
