@@ -28,15 +28,14 @@ prevent unauthorized access to data in use, including from the cloud operator.
 
 **When to use this pattern**
 
-- The Azure PaaS/SaaS service you'd use doesn't (yet) offer a confidential option.
+- The Azure PaaS/SaaS service you'd use doesn't (yet) offer a confidential option but there is a compatible or equivalent service you can install into a virtual machine.
 - You want full ownership and control of the confidentiality boundary end-to-end.
 - Regulatory or contractual obligations call for data to stay protected even while in use.
 
 > ACC provides *even more robust* protection for data in use; it is not a replacement for
 > Azure's existing security. Its confidentiality guarantees depend on the customer correctly
 > configuring customer-managed keys and attestation/verification policies. ACC is not
-> available in all geographies and does not apply to every workload (for example, it does not
-> apply to Microsoft 365 or Dynamics 365).
+> available in all geographies and does not apply to every workload.
 
 **The trade-off.** With a managed PaaS/SaaS service, confidentiality (where available),
 patching, and upgrades "just happen." This self-hosted pattern hands that responsibility back
