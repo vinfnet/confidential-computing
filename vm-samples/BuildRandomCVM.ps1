@@ -400,8 +400,10 @@ $VirtualMachine = New-AzVMConfig -VMName $VMName -VMSize $vmSize;
 # Configure OS based on the selected type
 switch ($osType) {
     "Windows" {
+        # New Windows Server 2022 offer (windowsserver2022) excludes deprecated .NET 6; replaces the legacy 'windowsserver' offer.
+        # https://techcommunity.microsoft.com/blog/azurecompute/incoming-changes-for-window-server-2022-marketplace-image-users/4262423
         $VirtualMachine = Set-AzVMOperatingSystem -VM $VirtualMachine -Windows -ComputerName $vmname -Credential $cred -ProvisionVMAgent -EnableAutoUpdate;
-        $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'windowsserver' -Skus '2022-datacenter-smalldisk-g2' -Version "latest";
+        $VirtualMachine = Set-AzVMSourceImage -VM $VirtualMachine -PublisherName 'MicrosoftWindowsServer' -Offer 'windowsserver2022' -Skus '2022-datacenter-smalldisk-g2' -Version "latest";
         $VMIsLinux = $false
     }
     "Windows11" {
