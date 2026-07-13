@@ -21,6 +21,78 @@ This is useful when you want rapid burst capacity, simpler operations for specif
 - Isolating selected workloads from regular AKS node pools while keeping a single Kubernetes API surface
 - Hybrid AKS + ACI patterns where most services run on AKS nodes and overflow or special workloads run on virtual nodes
 
+## Logical architecture
+
+```mermaid
+flowchart LR
+	U[User Browser] --> LB[Public LoadBalancer Service]
+	LB --> APISVC[Kubernetes Service in AKS]
+
+	subgraph AKS[AKS Cluster]
+		SYSP[System pool VMSS]
+		CCP[Confidential pool VMSS]
+		VN[virtual-node-aci-linux]
+		APISVC --> VN
+	end
+
+	subgraph VNET[Virtual Network]
+		AKSSN[aks-subnet]
+		ACISN[aci-subnet]
+		NSG[ACI subnet NSG]
+	end
+
+	VN --> ACISN
+	ACISN --> ACI[ACI container group backing virtual-node pod]
+	NSG -. enforced on .- ACISN
+
+	MI[aciConnector managed identity]
+	MI -. Network Contributor .-> ACISN
+	MI -. Network Contributor .-> VNET
+	MI -. Network Contributor .-> NSG
+```
+
+## Deployment sequence
+
+```mermaid
+sequenceDiagram
+	participant User
+	participant Script as Deploy-VirtualNodesAKS.ps1
+	participant Azure as Azure Control Plane
+	participant AKS as AKS Cluster
+	participant MI as aciConnector Identity
+	participant ACI as ACI Virtual Node Backend
+
+	User->>Script: Run deployment script
+	Script->>Azure: Create RG, VNet, aks-subnet, aci-subnet
+	Script->>Azure: Create AKS cluster
+	Script->>Azure: Add confidential node pool
+	Script->>Azure: Wait for AKS update to finish
+	Script->>Azure: Enable virtual-node addon
+	Azure-->>MI: Create aciConnector managed identity
+	Script->>Azure: Assign Network Contributor on subnet, VNet, subnet NSG
+	Script->>AKS: Restart aci-connector pod
+	ACI-->>AKS: Register virtual-node-aci-linux
+	Script->>AKS: Apply workload manifest
+	AKS->>ACI: Schedule virtual-node pod as ACI container group
+```
+
+## Runtime sequence
+
+```mermaid
+sequenceDiagram
+	participant Browser
+	participant LB as Public LoadBalancer
+	participant K8s as Kubernetes Service
+	participant VN as virtual-node-aci-linux
+	participant CG as ACI Container Group
+
+	Browser->>LB: HTTP request
+	LB->>K8s: Forward to service
+	K8s->>VN: Route to selected virtual-node pod
+	VN->>CG: Deliver traffic to backing ACI container
+	CG-->>Browser: HTTP response
+```
+
 ### Official documentation
 
 - AKS Virtual Nodes overview: https://learn.microsoft.com/azure/aks/virtual-nodes
@@ -57,7 +129,9 @@ The script requires an active subscription-scope role that can both create resou
 
 If one of those roles is only eligible through Microsoft Entra PIM, the script pauses and asks you to activate it before retrying the permission check.
 
-During live validation, the AKS virtual-nodes connector identity needed `Network Contributor` on both the `aci-subnet` and the parent virtual network to stabilize quickly, so the script assigns both scopes before restarting the connector.
+During live validation, the AKS virtual-nodes connector identity needed `Network Contributor` on the `aci-subnet`, the parent virtual network, and the subnet NSG that AKS links to the ACI subnet. Without the NSG scope, the connector can fail with `LinkedAuthorizationFailed` on `Microsoft.Network/networkSecurityGroups/join/action`.
+
+The script now assigns all three scopes before restarting the connector.
 
 ## Usage
 
@@ -87,6 +161,10 @@ Optional parameters:
 This first sample validates the virtual-nodes plumbing on top of a confidential-node AKS cluster and uses the standard `mcr.microsoft.com/azuredocs/aci-helloworld` image as the smoke test.
 
 That gives you a working foundation for the next step: replacing the sample manifest with a confidential ACI deployment that includes a generated Confidential Computing Enforcement policy and any attestation sidecars you want to test.
+
+Live validation update: the attestation v2 container image was successfully scheduled through the virtual node and the backing container group was created, but the resulting ACI container group came up as `sku=Standard` with `confidentialComputeProperties=null`. The app started and served HTTP, but runtime attestation failed because `/dev/sev-guest` was absent, which is the expected non-confidential behavior.
+
+Treat `virtual-node-confidential.yaml` as a scaffold for ongoing validation rather than a confirmed end-to-end confidential ACI-on-AKS sample until the virtual-node path is shown to preserve confidential ACI properties for the backing container group.
 
 `virtual-node-confidential.yaml` is the starting point for that step. It includes the `microsoft.containerinstance.virtualnode.ccepolicy` annotation with an allow-all debug policy. Replace the policy value with the output of:
 
