@@ -231,6 +231,156 @@ function Wait-ForContainer {
     return $false
 }
 
+function New-ComparePage {
+        param(
+                [string]$ConfidentialUrl,
+                [string]$StandardUrl,
+                [string]$OutputPath
+        )
+
+        $html = @"
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ACI Attestation Compare</title>
+    <style>
+        :root {
+            --bg: #0b1020;
+            --panel: #131a2f;
+            --text: #f3f6ff;
+            --muted: #9fb0d3;
+            --ok: #2ac769;
+            --warn: #ffb020;
+            --border: #2a3558;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Segoe UI, Helvetica, Arial, sans-serif;
+            background: radial-gradient(1200px 500px at 20% -10%, #1f2a4a 0%, var(--bg) 60%);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(11, 16, 32, 0.8);
+            backdrop-filter: blur(6px);
+        }
+        h1 {
+            margin: 0 0 6px 0;
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .meta {
+            color: var(--muted);
+            font-size: 13px;
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            padding: 12px;
+            flex: 1;
+            min-height: 0;
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .bar {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+        .bar .left {
+            font-weight: 700;
+        }
+        .pill {
+            display: inline-block;
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .pill.ok {
+            background: rgba(42, 199, 105, 0.18);
+            color: var(--ok);
+            border: 1px solid rgba(42, 199, 105, 0.35);
+        }
+        .pill.warn {
+            background: rgba(255, 176, 32, 0.18);
+            color: var(--warn);
+            border: 1px solid rgba(255, 176, 32, 0.35);
+        }
+        iframe {
+            border: 0;
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+            background: #fff;
+        }
+        @media (max-width: 1100px) {
+            .grid { grid-template-columns: 1fr; }
+            .card { min-height: 55vh; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>ACI Runtime Attestation Compare</h1>
+        <div class="meta">
+            <span>Left: Confidential SKU (expected attestation success)</span>
+            <span>Right: Standard SKU (expected attestation failure)</span>
+        </div>
+    </header>
+
+    <main class="grid">
+        <section class="card">
+            <div class="bar">
+                <div class="left">Confidential</div>
+                <div>
+                    <span class="pill ok">SEV-SNP expected</span>
+                    <span>$ConfidentialUrl</span>
+                </div>
+            </div>
+            <iframe src="$ConfidentialUrl" title="Confidential ACI"></iframe>
+        </section>
+
+        <section class="card">
+            <div class="bar">
+                <div class="left">Standard</div>
+                <div>
+                    <span class="pill warn">Expected /dev/sev-guest missing</span>
+                    <span>$StandardUrl</span>
+                </div>
+            </div>
+            <iframe src="$StandardUrl" title="Standard ACI"></iframe>
+        </section>
+    </main>
+</body>
+</html>
+"@
+
+        Set-Content -Path $OutputPath -Value $html -Encoding UTF8
+}
+
 # ============================================================================
 # Deploy phase (single container group)
 # ============================================================================
@@ -362,15 +512,38 @@ function Invoke-Compare {
     Wait-ForContainer -Fqdn $fqdn_std  | Out-Null
 
     Write-Header "Both containers deployed"
-    Write-Host "Confidential (attestation succeeds): http://$fqdn_conf"
-    Write-Host "Standard     (attestation FAILS)   : http://$fqdn_std"
+    
+    # Retrieve SKU info
+    $confSku = az container show -g $cfg.resourceGroup -n $name_conf --query "sku" -o tsv
+    $stdSku  = az container show -g $cfg.resourceGroup -n $name_std  --query "sku" -o tsv
+    
+    # Output summary table
     Write-Host ""
-    Write-Host "Open both side-by-side, click 'Run Attestation' on each, and compare."
+    Write-Host "╔════════════════════════════════════════════════════════════════╗"
+    Write-Host "║ Compare Deployment Summary                                    ║"
+    Write-Host "╠════════════════════════════════════════════════════════════════╣"
+    Write-Host "║ Confidential SKU (Attestation succeeds)                        ║"
+    Write-Host "║   SKU: $($confSku.PadRight(54)) ║"
+    Write-Host "║   URL: http://$($fqdn_conf.PadRight(49)) ║"
+    Write-Host "╠════════════════════════════════════════════════════════════════╣"
+    Write-Host "║ Standard SKU (Attestation FAILS)                              ║"
+    Write-Host "║   SKU: $($stdSku.PadRight(54)) ║"
+    Write-Host "║   URL: http://$($fqdn_std.PadRight(49)) ║"
+    Write-Host "╚════════════════════════════════════════════════════════════════╝"
+    Write-Host ""
+    Write-Host "Click 'Attest' on each pane to see the difference:"
+    Write-Host "  • Confidential: Hardware-rooted SEV-SNP attestation succeeds"
+    Write-Host "  • Standard:     Attestation fails (no /dev/sev-guest)"
+    Write-Host ""
 
     if (-not $SkipBrowser) {
-        Start-Process "http://$fqdn_conf"
-        Start-Sleep -Seconds 1
-        Start-Process "http://$fqdn_std"
+        $confUrl = "http://$fqdn_conf"
+        $stdUrl = "http://$fqdn_std"
+        $comparePage = Join-Path $PSScriptRoot 'side-by-side-compare.html'
+        New-ComparePage -ConfidentialUrl $confUrl -StandardUrl $stdUrl -OutputPath $comparePage
+        Write-Success "Generated: $comparePage"
+        Write-Host "Opening in new browser window..."
+        Start-Process $comparePage
     }
 }
 

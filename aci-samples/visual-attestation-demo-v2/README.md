@@ -134,8 +134,9 @@ prints the last 25 lines of container logs for inspection.
 ./Deploy-VisualAttestationV2.ps1 -Compare
 ```
 
-Deploys both flavors in the same resource group and opens both URLs. Same
-image, same code path, opposite result - the cleanest way to demo why
+Deploys both flavors in the same resource group and opens a generated
+`side-by-side-compare.html` page that embeds both live endpoints in one view.
+Same image, same code path, opposite result - the cleanest way to demo why
 attestation matters.
 
 ### 5. Cleanup
@@ -171,6 +172,14 @@ out before MAA is ever called. That deterministic failure is the educational
 contrast - it proves the success case really did need confidential hardware.
 
 ![Standard SKU - attestation fails - /dev/sev-guest absent on non-CC SKU](images/screenshot-standard.png)
+
+### Side-by-side compare view
+
+The compare page below is generated automatically by
+`Deploy-VisualAttestationV2.ps1 -Compare` and opens both live deployments in
+one browser window.
+
+![Confidential and Standard side-by-side compare view](images/screenshot-side-by-side.png)
 
 ## Why two SKUs?
 
