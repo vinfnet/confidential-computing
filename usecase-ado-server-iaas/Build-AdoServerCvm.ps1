@@ -15,6 +15,9 @@ param(
     [int]$ExtraDiskSizeGB = 1024,
 
     [Parameter(Mandatory = $false)]
+    [int]$OSDiskSizeGB = 1024,
+
+    [Parameter(Mandatory = $false)]
     [string]$description = "ADO Server CVM use case",
 
     [Parameter(Mandatory = $false)]
@@ -127,11 +130,54 @@ Write-Host "Disk initialized and mounted as S: with label DATA"
     Invoke-AzVMRunCommand -ResourceGroupName $ResourceGroupName -Name $VmName -CommandId "RunPowerShellScript" -ScriptString $script | Out-Null
 }
 
+function Ensure-OSDiskExpanded {
+    param(
+        [string]$ResourceGroupName,
+        [string]$VmName,
+        [int]$TargetSizeGB
+    )
+
+    $vm = Get-AzVM -ResourceGroupName $ResourceGroupName -Name $VmName
+    $osDiskName = $vm.StorageProfile.OsDisk.Name
+    $osDisk = Get-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $osDiskName
+
+    if ($osDisk.DiskSizeGB -ge $TargetSizeGB) {
+        Write-Host "OS disk '$osDiskName' is already $($osDisk.DiskSizeGB) GB (>= $TargetSizeGB GB); skipping resize." -ForegroundColor Yellow
+    } else {
+        Write-Host "Resizing OS disk '$osDiskName' from $($osDisk.DiskSizeGB) GB to $TargetSizeGB GB..." -ForegroundColor Cyan
+        $osDisk.DiskSizeGB = $TargetSizeGB
+        try {
+            # Managed disks support online expansion (no deallocation) in most regions.
+            Update-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $osDiskName -Disk $osDisk | Out-Null
+        } catch {
+            Write-Host "Online resize failed ($($_.Exception.Message)); deallocating VM and retrying..." -ForegroundColor Yellow
+            Stop-AzVM -ResourceGroupName $ResourceGroupName -Name $VmName -Force | Out-Null
+            Update-AzDisk -ResourceGroupName $ResourceGroupName -DiskName $osDiskName -Disk $osDisk | Out-Null
+            Start-AzVM -ResourceGroupName $ResourceGroupName -Name $VmName | Out-Null
+        }
+        Write-Host "OS disk resized to $TargetSizeGB GB." -ForegroundColor Green
+    }
+
+    # Extend the C: partition inside the guest to consume the newly available space.
+    $extendScript = @"
+`$ErrorActionPreference = 'Stop'
+`$max = (Get-PartitionSupportedSize -DriveLetter C).SizeMax
+`$cur = (Get-Partition -DriveLetter C).Size
+if (`$max -gt `$cur + 1GB) {
+    Resize-Partition -DriveLetter C -Size `$max
+    Write-Host "C: extended to `$([math]::Round(`$max/1GB)) GB"
+} else {
+    Write-Host "C: already spans the OS disk (`$([math]::Round(`$cur/1GB)) GB); nothing to extend"
+}
+"@
+    Invoke-AzVMRunCommand -ResourceGroupName $ResourceGroupName -Name $VmName -CommandId "RunPowerShellScript" -ScriptString $extendScript | Out-Null
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $buildRandomCvmScript = Join-Path $repoRoot "vm-samples\BuildRandomCVM.ps1"
 
 if ($ExistingResourceGroup) {
-    Write-Host "=== Step 1/4: Skipping VM build — using existing resource group: $ExistingResourceGroup ===" -ForegroundColor Yellow
+    Write-Host "=== Step 1/5: Skipping VM build — using existing resource group: $ExistingResourceGroup ===" -ForegroundColor Yellow
     $resourceGroupName = $ExistingResourceGroup
 } else {
     # Enforce one-CVM-at-a-time for this basename to avoid quota churn from parallel/leftover runs.
@@ -146,7 +192,7 @@ if ($ExistingResourceGroup) {
         throw "Required script not found: $buildRandomCvmScript"
     }
 
-    Write-Host "=== Step 1/4: Build Windows CVM using existing vm-samples/BuildRandomCVM.ps1 ===" -ForegroundColor Cyan
+    Write-Host "=== Step 1/5: Build Windows CVM using existing vm-samples/BuildRandomCVM.ps1 ===" -ForegroundColor Cyan
 
     $buildArgs = @{
         subsID = $subsID
@@ -190,7 +236,10 @@ $vmName = $resourceGroupName
 Write-Host "Detected resource group: $resourceGroupName" -ForegroundColor Green
 Write-Host "Detected VM name: $vmName" -ForegroundColor Green
 
-Write-Host "=== Step 2/4: Create and attach 1TB CMK-protected data disk ===" -ForegroundColor Cyan
+Write-Host "=== Step 2/5: Expand OS disk to $OSDiskSizeGB GB and extend C: in guest ===" -ForegroundColor Cyan
+Ensure-OSDiskExpanded -ResourceGroupName $resourceGroupName -VmName $vmName -TargetSizeGB $OSDiskSizeGB
+
+Write-Host "=== Step 3/5: Create and attach 1TB CMK-protected data disk ===" -ForegroundColor Cyan
 
 $dataDesName = "$vmName-data-des"
 $dataDes = Get-AzDiskEncryptionSet -ResourceGroupName $resourceGroupName -Name $dataDesName -ErrorAction SilentlyContinue
@@ -234,10 +283,10 @@ if (-not $existingDataDisk) {
     Write-Host "A $ExtraDiskSizeGB GB data disk is already attached at LUN $attachedLun" -ForegroundColor Yellow
 }
 
-Write-Host "=== Step 3/4: Format disk in guest as S: drive labeled DATA ===" -ForegroundColor Cyan
+Write-Host "=== Step 4/5: Format disk in guest as S: drive labeled DATA ===" -ForegroundColor Cyan
 Ensure-DataDiskFormattedAsS -ResourceGroupName $resourceGroupName -VmName $vmName -Lun $attachedLun -ExpectedSizeGB $ExtraDiskSizeGB
 
-Write-Host "=== Step 4/4: Create/upgrade Bastion to Standard with native client support ===" -ForegroundColor Cyan
+Write-Host "=== Step 5/5: Create/upgrade Bastion to Standard with native client support ===" -ForegroundColor Cyan
 
 $vnetName = "$vmName" + "vnet"
 $bastionName = "$vnetName-bastion"
