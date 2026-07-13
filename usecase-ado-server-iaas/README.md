@@ -461,6 +461,17 @@ compiled, packaged, and signed*** — the window where a build normally exposes
 plaintext code and secrets to the host. The policy pins exactly what may run and
 closes the usual operator escape hatches:
 
+Beyond confidentiality, the policy protects the **integrity** of those artifacts
+by making the build environment tamper-evident and tamper-resistant. Because the
+image and its filesystem layers are cryptographically measured (dm-verity) and
+attested before any code runs, and because no one can exec in, stream stdio, or
+inject processes/environment into a running job, an attacker or even the cloud
+operator cannot silently alter the toolchain, swap dependencies, or modify the
+compiled output in flight. Any such tampering changes the measurements and fails
+attestation, so the container simply never starts — giving you strong assurance
+that the artifacts that come out are exactly the ones your trusted pipeline
+produced.
+
 | Policy setting | Value | What it enforces during a build |
 | --- | --- | --- |
 | **Image + layer hashes** | pinned (dm-verity) | Only the exact, measured agent image can run; a swapped or tampered image fails attestation and never starts, so builds can't be hijacked by a modified toolchain. |
