@@ -1,0 +1,111 @@
+# Azure DevOps build agents as CONFIDENTIAL ACI on AKS Virtual Nodes
+# ------------------------------------------------------------------
+# This manifest replaces standalone confidential ACI build agents with the
+# same agents scheduled onto an AKS **virtual node**. The pod runtime is
+# provided by Azure Container Instances, and the
+#   microsoft.containerinstance.virtualnode.ccepolicy
+# annotation turns each backing container group into a confidential
+# (AMD SEV-SNP) ACI instance governed by a CCE policy.
+#
+# The placeholders below (__UPPER_CASE__) are substituted by
+# Build-AksVirtualNodesAdoAgent.ps1 at deploy time. You can also copy this
+# file, replace the placeholders by hand, and `kubectl apply -f` it.
+#
+# Key pieces
+# ----------
+#   annotations:
+#     microsoft.containerinstance.virtualnode.ccepolicy
+#       Base64-encoded Rego CCE policy. The value baked in here by the script
+#       is either:
+#         * the allow-all DEBUG policy (foundation / plumbing validation), or
+#         * a restrictive policy generated with:
+#             az confcom acipolicygen --virtual-node-yaml <this-file> --print-policy
+#       The allow-all policy still runs the agent as confidential ACI, but does
+#       NOT enforce image/identity. Regenerate a restrictive policy before
+#       trusting the agent with secrets.
+#
+#   nodeSelector / tolerations
+#       Target the virtual node (type=virtual-kubelet) so the pod runs on ACI
+#       instead of a regular AKS VM node.
+#
+#   AZP_* environment
+#       The agent self-registers to the self-hosted Azure DevOps Server over
+#       the private VNet (AZP_URL points at the server's private IP on 443).
+#       AZP_AGENT_NAME is omitted on purpose: start.sh falls back to the pod
+#       hostname, which is unique per replica.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ado-agents
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ado-pat
+  namespace: ado-agents
+type: Opaque
+stringData:
+  # Azure DevOps Personal Access Token used for unattended agent registration.
+  AZP_TOKEN: "__AZP_TOKEN__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ado-confidential-agent
+  namespace: ado-agents
+  labels:
+    app: ado-confidential-agent
+spec:
+  replicas: __REPLICAS__
+  selector:
+    matchLabels:
+      app: ado-confidential-agent
+  template:
+    metadata:
+      labels:
+        app: ado-confidential-agent
+      annotations:
+        # -------------------------------------------------------------------
+        # CCE policy (REQUIRED for confidential ACI on virtual nodes).
+        # Replace with a generated restrictive policy before production:
+        #   az confcom acipolicygen --virtual-node-yaml <this-file> --print-policy
+        # The value baked here by the script is the allow-all DEBUG policy.
+        # -------------------------------------------------------------------
+        microsoft.containerinstance.virtualnode.ccepolicy: "__CCE_POLICY__"
+    spec:
+      imagePullSecrets:
+        - name: acr-pull
+      nodeSelector:
+        kubernetes.io/os: linux
+        kubernetes.io/role: agent
+        type: virtual-kubelet
+      tolerations:
+        - key: virtual-kubelet.io/provider
+          operator: Exists
+        - key: azure.com/aci
+          effect: NoSchedule
+      containers:
+        - name: ado-agent
+          image: __ACR_IMAGE__
+          env:
+            - name: AZP_URL
+              value: "__AZP_URL__"
+            - name: AZP_POOL
+              value: "__AZP_POOL__"
+            - name: AZP_WORK
+              value: "/azp/_work"
+            - name: AGENT_ALLOW_RUNASROOT
+              value: "1"
+            - name: AZP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ado-pat
+                  key: AZP_TOKEN
+          resources:
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
