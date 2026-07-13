@@ -128,7 +128,9 @@ flowchart TB
   ```
 - **Docker** running locally (used to build and push the agent image to ACR).
 - The **Azure DevOps Server installer** `.exe` (you supply this — for example
-  `mul_azure_devops_server_x64_web_installer_1758aa41.exe`).
+  `mul_azure_devops_server_x64_web_installer_1758aa41.exe`). Download it from the
+  [Azure DevOps Server download page](https://learn.microsoft.com/en-us/azure/devops/server/download/azuredevopsserver?view=azure-devops);
+  grab the **latest release** for current security and platform fixes.
 - Quota for the confidential VM size (default `Standard_DC8as_v5`) in your region.
 
 Throughout this guide, replace the placeholders:
