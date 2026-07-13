@@ -115,6 +115,24 @@ flowchart TB
 > compute in the cloud. (In that topology the CVM in the diagram is replaced by
 > your on-prem server reachable across the ExpressRoute/VPN link.)
 
+### How data is protected — at rest, in transit, and in use
+
+The pattern covers all three data states across both tiers. The ADO Server is a
+**Confidential VM** and the build runners are **confidential ACI**, so both get
+hardware-based memory encryption (data **in use**) on top of the usual at-rest
+and in-transit protections:
+
+| Data state | ADO Server (Confidential VM) | Build runners (confidential ACI) |
+| --- | --- | --- |
+| **At rest** | OS and data disks encrypted with a **customer-managed key (CMK)** in Key Vault; the SQL database (repos, work items, pipeline metadata) lives on those encrypted disks. VM guest state is protected by confidential OS-disk encryption bound to the vTPM. | Container **scratch/overlay is encrypted** — the CCE policy enforces `allow_unencrypted_scratch = false`, so source checkout, package cache, and build artifacts under `/azp/_work` are encrypted on the ephemeral volume. Base image layers are integrity-pinned via dm-verity. |
+| **In transit** | All access is over the **private VNet** (no public IP); admin reaches it only through **Azure Bastion** (TLS-tunnelled RDP). ADO web/REST is served over **HTTPS 443**. Egress leaves via NAT gateway only. | Agents **self-register and poll over HTTPS 443** to the server across the private VNet. PAT is fetched from Key Vault over TLS; secrets/artifacts pushed to ADO/ACR travel over HTTPS. No inbound exposure. |
+| **In use** | **AMD SEV-SNP** encrypts VM memory with a per-VM key the host/hypervisor can't read; boot integrity is attested (vTPM + guest attestation). Data being processed in RAM is protected from the cloud operator. | **AMD SEV-SNP** encrypts container memory; the workload is **attested against the CCE policy** before it starts. In-flight source, secrets, and artifacts in RAM stay confidential, and **no exec/stdio** means the operator can't read live build state. |
+
+> Because the registration PAT is retrieved at runtime from Key Vault **inside the
+> TEE** (see Step 7), the credential itself is only ever present in encrypted
+> memory on the runner — it isn't written to the ARM template, the image, or the
+> container's environment.
+
 ## Prerequisites
 
 - **Azure CLI** signed in to the target subscription:
