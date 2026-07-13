@@ -57,7 +57,9 @@ The script requires an active subscription-scope role that can both create resou
 
 If one of those roles is only eligible through Microsoft Entra PIM, the script pauses and asks you to activate it before retrying the permission check.
 
-During live validation, the AKS virtual-nodes connector identity needed `Network Contributor` on both the `aci-subnet` and the parent virtual network to stabilize quickly, so the script assigns both scopes before restarting the connector.
+During live validation, the AKS virtual-nodes connector identity needed `Network Contributor` on the `aci-subnet`, the parent virtual network, and the subnet NSG that AKS links to the ACI subnet. Without the NSG scope, the connector can fail with `LinkedAuthorizationFailed` on `Microsoft.Network/networkSecurityGroups/join/action`.
+
+The script now assigns all three scopes before restarting the connector.
 
 ## Usage
 

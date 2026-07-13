@@ -862,6 +862,7 @@ Invoke-Az "az network vnet subnet create --resource-group $resourceGroupName --v
 
 $aksSubnetId = (Invoke-Az "az network vnet subnet show --resource-group $resourceGroupName --vnet-name $vnetName --name $aksSubnetName --query id --output tsv").Trim()
 $aciSubnetId = (Invoke-Az "az network vnet subnet show --resource-group $resourceGroupName --vnet-name $vnetName --name $aciSubnetName --query id --output tsv").Trim()
+$aciSubnetNsgId = (Invoke-Az "az network vnet subnet show --resource-group $resourceGroupName --vnet-name $vnetName --name $aciSubnetName --query networkSecurityGroup.id --output tsv").Trim()
 $vnetId = (Invoke-Az "az network vnet show --resource-group $resourceGroupName --name $vnetName --query id --output tsv").Trim()
 
 Write-Header "Creating AKS cluster"
@@ -874,6 +875,9 @@ Invoke-Az @"
 az aks nodepool add --resource-group $resourceGroupName --cluster-name $aksName --name $confidentialPoolName --node-count $ConfidentialNodeCount --node-vm-size $ConfidentialVmSize --os-sku Ubuntu --mode User --labels workload=confidential sku=amd-sev-snp --tags owner=$ownerUpn BuiltBy=$scriptName Workload=virtual-nodes CCType=AMD-SEV-SNP --only-show-errors
 "@
 
+Write-Header "Waiting for AKS operation to complete"
+Invoke-Az "az aks wait --resource-group $resourceGroupName --name $aksName --updated --interval 15 --timeout 1800"
+
 Write-Header "Enabling virtual nodes"
 Invoke-Az "az aks enable-addons --resource-group $resourceGroupName --name $aksName --addons virtual-node --subnet-name $aciSubnetName --only-show-errors"
 
@@ -884,6 +888,9 @@ $aciConnectorPrincipalId = Wait-ForManagedIdentity -ResourceGroup $nodeResourceG
 Write-Header "Assigning subnet rights to the virtual nodes identity"
 Ensure-RoleAssignment -AssigneeObjectId $aciConnectorPrincipalId -RoleName "Network Contributor" -Scope $aciSubnetId
 Ensure-RoleAssignment -AssigneeObjectId $aciConnectorPrincipalId -RoleName "Network Contributor" -Scope $vnetId
+if ($aciSubnetNsgId) {
+    Ensure-RoleAssignment -AssigneeObjectId $aciConnectorPrincipalId -RoleName "Network Contributor" -Scope $aciSubnetNsgId
+}
 
 Write-Header "Connecting kubectl"
 Invoke-Az "az aks get-credentials --resource-group $resourceGroupName --name $aksName --overwrite-existing --only-show-errors"
