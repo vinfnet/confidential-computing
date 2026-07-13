@@ -448,6 +448,42 @@ sequenceDiagram
 > the measured layers, so the CCE policy is regenerated and both agents are
 > redeployed as part of re-running this step.
 
+#### Confidential Enforcement (CCE) policy — protecting artifacts while they are built
+
+Each agent is deployed as **Confidential** ACI with an auto-generated **CCE
+(Confidential Enforcement) policy**. The script produces it with
+`az confcom acipolicygen ... --disable-stdio --approve-wildcards`
+(see [`Build-ConfidentialAciAdoAgent.ps1`](Build-ConfidentialAciAdoAgent.ps1)),
+and the AMD SEV-SNP hardware measures and enforces it at launch. This is what
+keeps the **source, dependencies, intermediate objects, and finished build
+artifacts confidential and tamper-resistant *while they are being fetched,
+compiled, packaged, and signed*** — the window where a build normally exposes
+plaintext code and secrets to the host. The policy pins exactly what may run and
+closes the usual operator escape hatches:
+
+| Policy setting | Value | What it enforces during a build |
+| --- | --- | --- |
+| **Image + layer hashes** | pinned (dm-verity) | Only the exact, measured agent image can run; a swapped or tampered image fails attestation and never starts, so builds can't be hijacked by a modified toolchain. |
+| **`command`** | locked to `./start.sh` | The container can only launch the agent entrypoint — no alternate binary or injected startup command. |
+| **`exec_processes`** | `[]` (empty) — **no exec** | Nobody (including the cloud operator) can `az container exec` / shell into a running build to read or alter source, secrets, or artifacts in flight. |
+| **`allow_stdio_access`** | `false` — **no stdio** | Console stdout/stderr can't be streamed off the container, so build logs and any secrets they might print stay inside the TEE. |
+| **`signals`** | `[]` | No arbitrary signals to build processes (no external pause/kill to manipulate a running job). |
+| **`allow_elevated`** | `false` | Builds run unprivileged — no privileged escalation from inside the container. |
+| **`allow_unencrypted_scratch`** | `false` | The scratch/temp filesystem where code is checked out and compiled is **encrypted**, protecting intermediate build state at rest. |
+| **`env_rules`** | strict allow-list | Only the expected `AZP_*` / identity variables are accepted; unexpected environment injection is rejected. |
+| **`allow_dump_stacks` / `allow_runtime_logging`** | `false` | Process stack dumps and runtime logging that could leak in-memory build data are blocked. |
+
+Because the PAT is fetched at runtime from Key Vault inside the TEE (see above),
+it isn't part of the measured environment either — so neither the build inputs,
+the credentials, nor the produced artifacts are exposed to the host while the
+job runs. You can inspect the live policy on a running agent with:
+
+```powershell
+az container show --resource-group <resource-group> --name <prefix>-caci-agent-1 `
+  --query "confidentialComputeProperties.ccePolicy" -o tsv |
+  ForEach-Object { [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+```
+
 ### Step 8 — Verify the agents registered
 
 ```powershell
