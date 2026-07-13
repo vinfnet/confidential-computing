@@ -54,6 +54,11 @@ Builds a CVM with **Confidential OS disk encryption bound to a Customer Managed 
 
 Supported images: Windows Server 2022, Windows Server 2019, Windows 11 Enterprise, Ubuntu 24.04 LTS, and RHEL 9.5 CVM. The script tags the resource group with the GitHub repo URL (auto-detected from git remote) for traceability.
 
+For Windows Server 2022 deployments, use the refreshed Marketplace offer published under `windowsserver2022` rather than the legacy `windowsserver` offer. Microsoft announced that the legacy Windows Server 2022 images are being deprecated; the refreshed offer is the supported path for new deployments and reimages.
+
+- [Azure Compute blog announcement](https://techcommunity.microsoft.com/blog/azurecompute/incoming-changes-for-window-server-2022-marketplace-image-users/4262423)
+- [Deprecated Azure Marketplace images guidance](https://learn.microsoft.com/en-us/azure/virtual-machines/deprecated-images)
+
 ### Prerequisites
 
 Before running `BuildRandomCVM.ps1`, ensure you have the following:
@@ -147,7 +152,7 @@ The script will generate a random complex password and output it to the terminal
 - **NoInternetAccess**: Optional switch that skips NAT Gateway setup and keeps the CVM subnet fully offline; attestation download is skipped
 
 ## OS Type Options:
-- **Windows**: Windows Server 2022 Datacenter (RDP via Bastion)
+- **Windows**: Windows Server 2022 Datacenter using the refreshed `windowsserver2022` Marketplace offer (RDP via Bastion)
 - **Windows2019**: Windows Server 2019 Datacenter (RDP via Bastion)
 - **Windows11**: Windows 11 Enterprise 24H2 (RDP via Bastion)
 - **Ubuntu**: Ubuntu 24.04 LTS CVM (SSH via Bastion)
