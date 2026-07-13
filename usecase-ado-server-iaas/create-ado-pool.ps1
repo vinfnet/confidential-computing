@@ -1,10 +1,15 @@
 param(
     [string]$Pool,
-    [string]$Pat
+    [string]$Pat,
+    [string]$Collection = 'DefaultCollection'
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$base = 'http://localhost'
+# On Azure DevOps Server, the PAT authenticates at the COLLECTION host, not the
+# deployment root. The distributedtask/pools API must therefore be reached through
+# the collection path (http://localhost/<Collection>/_apis/...); the bare root path
+# (http://localhost/_apis/...) returns 401 for a collection-scoped PAT.
+$base = "http://localhost/$Collection"
 $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$Pat"))
 # Accept-Encoding: identity prevents the on-prem ADO Server from gzip-compressing
 # the response body (Windows PowerShell 5.1 does not auto-decompress, which
@@ -25,25 +30,18 @@ function Invoke-Ado {
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("RESULT-START")
 
-# 1. Verify connectivity + auth
-try {
-    $conn = Invoke-Ado -Method GET -Uri "$base/_apis/connectionData?api-version=7.0"
-    $lines.Add("AUTH-OK user='" + $conn.authenticatedUser.providerDisplayName + "'")
-} catch {
-    $lines.Add("AUTH-FAIL " + ($_.Exception.Message -replace '\s+', ' '))
-}
-
-# 2. List existing pools (server/deployment level)
+# 1. List existing pools (collection scope). A 200 here confirms the PAT authenticates.
 $existing = $null
 try {
     $pools = Invoke-Ado -Method GET -Uri "$base/_apis/distributedtask/pools?api-version=7.0"
+    $lines.Add("AUTH-OK poolcount=" + $pools.count)
     foreach ($p in $pools.value) { $lines.Add(("POOL name='{0}' id={1}" -f $p.name, $p.id)) }
     $existing = $pools.value | Where-Object { $_.name -eq $Pool }
 } catch {
     $lines.Add("LIST-FAIL " + ($_.Exception.Message -replace '\s+', ' '))
 }
 
-# 3. Create pool if missing
+# 2. Create pool if missing
 if ($existing) {
     $lines.Add(("POOL-EXISTS name='{0}' id={1}" -f $Pool, $existing.id))
 } else {

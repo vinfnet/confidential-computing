@@ -9,7 +9,7 @@ param(
     [string]$region = "northeurope",
 
     [Parameter(Mandatory = $false)]
-    [string]$vmsize = "Standard_DC8as_v5",
+    [string]$vmsize = "Standard_DC8as_v6",
 
     [Parameter(Mandatory = $false)]
     [int]$ExtraDiskSizeGB = 1024,

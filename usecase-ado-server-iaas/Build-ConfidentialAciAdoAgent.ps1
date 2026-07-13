@@ -51,6 +51,15 @@ param(
     [string]$UserAssignedIdentityResourceId = "",
 
     [Parameter(Mandatory = $false)]
+    [string]$KeyVaultName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$PatSecretName = "ado-agent-pat",
+
+    [Parameter(Mandatory = $false)]
+    [switch]$StorePatInKeyVault,
+
+    [Parameter(Mandatory = $false)]
     [switch]$AllowStdio
 )
 
@@ -83,11 +92,18 @@ function New-SafeName {
     return $value
 }
 
-if ([string]::IsNullOrWhiteSpace($AzpToken)) {
-    if (-not [string]::IsNullOrWhiteSpace($env:AZP_TOKEN)) {
-        $AzpToken = $env:AZP_TOKEN
-    } else {
-        throw "Provide -AzpToken (or set AZP_TOKEN env var) for Azure DevOps agent registration."
+$useKeyVault = -not [string]::IsNullOrWhiteSpace($KeyVaultName)
+
+# The PAT is required when it is passed directly to the container (non-Key Vault mode),
+# or when we are asked to seed it into Key Vault. In pure Key Vault-retrieval mode the
+# secret is assumed to already exist in the vault, so no PAT needs to be supplied here.
+if ((-not $useKeyVault) -or $StorePatInKeyVault) {
+    if ([string]::IsNullOrWhiteSpace($AzpToken)) {
+        if (-not [string]::IsNullOrWhiteSpace($env:AZP_TOKEN)) {
+            $AzpToken = $env:AZP_TOKEN
+        } else {
+            throw "Provide -AzpToken (or set AZP_TOKEN env var) for Azure DevOps agent registration."
+        }
     }
 }
 
@@ -100,6 +116,44 @@ $useVnet = -not [string]::IsNullOrWhiteSpace($VnetName)
 if ($useVnet -and [string]::IsNullOrWhiteSpace($VnetResourceGroup)) { $VnetResourceGroup = $ResourceGroupName }
 $subnetResourceId = ""
 $useIdentity = -not [string]::IsNullOrWhiteSpace($UserAssignedIdentityResourceId)
+
+# --- Key Vault-backed PAT retrieval (PAT never enters the ARM template or container env) ---
+# When -KeyVaultName is supplied, the agent fetches the PAT at runtime from Key Vault using
+# its user-assigned managed identity, so the token only ever exists in-memory inside the
+# confidential (SEV-SNP) TEE. This requires the managed identity to be attached to the ACI.
+$miClientId = ""
+if ($useKeyVault) {
+    if (-not $useIdentity) {
+        throw "Key Vault PAT retrieval (-KeyVaultName) requires -UserAssignedIdentityResourceId so the confidential agent can authenticate to Key Vault via managed identity."
+    }
+
+    Write-Host "=== Step 0/7: Configure Key Vault-backed PAT retrieval ===" -ForegroundColor Cyan
+
+    $identity = Invoke-AzCli "az identity show --ids $UserAssignedIdentityResourceId --output json" | ConvertFrom-Json
+    $miClientId = $identity.clientId
+    $miPrincipalId = $identity.principalId
+    Write-Host "Managed identity clientId=$miClientId principalId=$miPrincipalId" -ForegroundColor DarkGray
+
+    $kv = Invoke-AzCli "az keyvault show --name $KeyVaultName --output json" | ConvertFrom-Json
+    $kvId = $kv.id
+
+    if ($StorePatInKeyVault) {
+        Write-Host "Storing PAT in Key Vault '$KeyVaultName' as secret '$PatSecretName'..." -ForegroundColor DarkGray
+        Invoke-AzCli "az keyvault secret set --vault-name $KeyVaultName --name $PatSecretName --value $AzpToken --output none"
+        # Drop the plaintext PAT from this process now that it lives in the vault.
+        $AzpToken = ""
+    }
+
+    # Grant the managed identity read-only access to the secret, honouring the vault's
+    # authorization model (RBAC vs. classic access policies).
+    if ($kv.properties.enableRbacAuthorization) {
+        Write-Host "Vault uses RBAC; assigning 'Key Vault Secrets User' to the managed identity..." -ForegroundColor DarkGray
+        az role assignment create --assignee-object-id $miPrincipalId --assignee-principal-type ServicePrincipal --role "Key Vault Secrets User" --scope $kvId --output none 2>$null
+    } else {
+        Write-Host "Vault uses access policies; granting secret 'get' to the managed identity..." -ForegroundColor DarkGray
+        Invoke-AzCli "az keyvault set-policy --name $KeyVaultName --object-id $miPrincipalId --secret-permissions get --output none"
+    }
+}
 
 if ([string]::IsNullOrWhiteSpace($AcrName)) {
     $AcrName = New-SafeName -Raw ("$prefixSafe" + "acr" + (Get-Random -Minimum 10000 -Maximum 99999)) -MaxLength 50 -Fallback "adocaciacr"
@@ -186,14 +240,32 @@ fi
 
 if [ -z "${AZP_TOKEN_FILE}" ]; then
   if [ -z "${AZP_TOKEN}" ]; then
-    echo 1>&2 "error: missing AZP_TOKEN environment variable"
-    exit 1
+    if [ -n "${AZP_KEYVAULT_NAME}" ] && [ -n "${AZP_TOKEN_SECRET_NAME}" ]; then
+      # Confidential retrieval: pull the PAT from Key Vault using this container's
+      # user-assigned managed identity. The token only ever lives in-memory inside
+      # the SEV-SNP TEE; it is never baked into the image or the ARM deployment.
+      echo "Retrieving PAT from Key Vault ${AZP_KEYVAULT_NAME} via managed identity..."
+      if [ -n "${AZP_MI_CLIENT_ID}" ]; then
+        az login --identity --client-id "${AZP_MI_CLIENT_ID}" --allow-no-subscriptions --output none
+      else
+        az login --identity --allow-no-subscriptions --output none
+      fi
+      AZP_TOKEN="$(az keyvault secret show --vault-name "${AZP_KEYVAULT_NAME}" --name "${AZP_TOKEN_SECRET_NAME}" --query value -o tsv)"
+      az logout --output none 2>/dev/null || true
+      if [ -z "${AZP_TOKEN}" ]; then
+        echo 1>&2 "error: failed to retrieve PAT from Key Vault ${AZP_KEYVAULT_NAME} (secret ${AZP_TOKEN_SECRET_NAME})"
+        exit 1
+      fi
+    else
+      echo 1>&2 "error: missing AZP_TOKEN environment variable"
+      exit 1
+    fi
   fi
   AZP_TOKEN_FILE=/azp/.token
   echo -n "${AZP_TOKEN}" > "${AZP_TOKEN_FILE}"
 fi
 
-unset AZP_TOKEN
+unset AZP_TOKEN AZP_MI_CLIENT_ID
 
 if [ -n "${AZP_WORK}" ]; then
   mkdir -p "${AZP_WORK}"
@@ -298,6 +370,17 @@ if ($useIdentity) {
     $identityBlock = ""
 }
 
+if ($useKeyVault) {
+    # Key Vault mode: no PAT is placed in the template. Only the (non-secret) vault name,
+    # secret name and managed-identity clientId are passed so the agent can fetch the PAT
+    # itself at runtime inside the TEE.
+    $tokenParamDef = '"azpKeyVaultName": { "type": "string" }, "azpTokenSecretName": { "type": "string" }, "azpMiClientId": { "type": "string" }, '
+    $tokenEnvBlock = "{ `"name`": `"AZP_KEYVAULT_NAME`", `"value`": `"[parameters('azpKeyVaultName')]`" },`n                { `"name`": `"AZP_TOKEN_SECRET_NAME`", `"value`": `"[parameters('azpTokenSecretName')]`" },`n                { `"name`": `"AZP_MI_CLIENT_ID`", `"value`": `"[parameters('azpMiClientId')]`" },"
+} else {
+    $tokenParamDef = '"azpToken": { "type": "securestring" }, '
+    $tokenEnvBlock = "{ `"name`": `"AZP_TOKEN`", `"secureValue`": `"[parameters('azpToken')]`" },"
+}
+
 $template = @"
 {
   "`$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -311,8 +394,7 @@ $template = @"
     "registryPassword": { "type": "securestring" },
     "azpUrl": { "type": "string" },
     "azpPool": { "type": "string" },
-    "azpToken": { "type": "securestring" },
-    $identityParamDef$subnetParamDef"azpAgentName": { "type": "string" }
+    $tokenParamDef$identityParamDef$subnetParamDef"azpAgentName": { "type": "string" }
   },
   "resources": [
     {
@@ -334,7 +416,7 @@ $template = @"
                 { "name": "AZP_URL", "value": "[parameters('azpUrl')]" },
                 { "name": "AZP_POOL", "value": "[parameters('azpPool')]" },
                 { "name": "AZP_AGENT_NAME", "value": "[parameters('azpAgentName')]" },
-                { "name": "AZP_TOKEN", "secureValue": "[parameters('azpToken')]" },
+                $tokenEnvBlock
                 { "name": "AZP_WORK", "value": "/azp/_work" },
                 { "name": "AGENT_ALLOW_RUNASROOT", "value": "1" }
               ],
@@ -384,9 +466,15 @@ function New-AgentParams {
             registryPassword = @{ value = $acrPassword }
             azpUrl = @{ value = $AzpUrl }
             azpPool = @{ value = $AzpPool }
-            azpToken = @{ value = $AzpToken }
             azpAgentName = @{ value = $AgentName }
         }
+    }
+    if ($useKeyVault) {
+        $p.parameters.azpKeyVaultName = @{ value = $KeyVaultName }
+        $p.parameters.azpTokenSecretName = @{ value = $PatSecretName }
+        $p.parameters.azpMiClientId = @{ value = $miClientId }
+    } else {
+        $p.parameters.azpToken = @{ value = $AzpToken }
     }
     if ($useVnet) {
         $p.parameters.subnetResourceId = @{ value = $subnetResourceId }
@@ -441,6 +529,9 @@ foreach ($cg in $deployed) { Write-Host "  Container Group: $cg" }
 Write-Host "Image: $imageRef"
 Write-Host "Azure DevOps URL: $AzpUrl"
 Write-Host "Pool: $AzpPool"
+if ($useKeyVault) {
+    Write-Host "PAT source: Key Vault '$KeyVaultName' secret '$PatSecretName' (fetched at runtime via managed identity inside the TEE)"
+}
 if ($useVnet) {
     Write-Host "VNet: $VnetName ($VnetResourceGroup)"
     Write-Host "ACI subnet: $AgentSubnetName ($AgentSubnetPrefix)"

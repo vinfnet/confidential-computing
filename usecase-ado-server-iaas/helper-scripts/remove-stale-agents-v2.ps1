@@ -1,11 +1,13 @@
 param(
   [int]$PoolId = 2,
   [string]$Pat,
-  [string]$NamePattern = "agent-test"
+  [string]$NamePattern = "agent-test",
+  [string]$Collection = 'DefaultCollection'
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$base = 'http://localhost'
+# The PAT authenticates at the collection host, not the deployment root.
+$base = "http://localhost/$Collection"
 $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(":$Pat"))
 $headers = @{
     Authorization     = "Basic $b64"
