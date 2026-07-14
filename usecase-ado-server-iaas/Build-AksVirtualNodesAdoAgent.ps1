@@ -110,6 +110,9 @@ param(
     [int]$AgentCount = 2,
 
     [Parameter(Mandatory = $false)]
+    [string]$RunnerSetName = "default",
+
+    [Parameter(Mandatory = $false)]
     [string]$SystemVmSize = "Standard_D2as_v7",
 
     [Parameter(Mandatory = $false)]
@@ -529,6 +532,13 @@ $manifest = $manifest.Replace("__AZP_URL__", $AzpUrl)
 $manifest = $manifest.Replace("__AZP_POOL__", $AzpPool)
 $manifest = $manifest.Replace("__REPLICAS__", "$AgentCount")
 
+# Runner-set name lets multiple independent agent pools coexist in the same
+# cluster/namespace (distinct Deployment + labels per set).
+$runnerSetSafe = ($RunnerSetName.ToLower() -replace "[^a-z0-9-]", "-").Trim("-")
+if ([string]::IsNullOrWhiteSpace($runnerSetSafe)) { $runnerSetSafe = "default" }
+$manifest = $manifest.Replace("__RUNNER_SET__", $runnerSetSafe)
+$deploymentName = "ado-confidential-agent-$runnerSetSafe"
+
 if ($PolicyMode -eq "none") {
     # Remove the ccepolicy annotation line entirely -> standard ACI on virtual node.
     $manifest = ($manifest -split "`n" | Where-Object { $_ -notmatch "microsoft\.containerinstance\.virtualnode\.ccepolicy" }) -join "`n"
@@ -549,7 +559,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Failed to apply the agent Deployment manifest." }
 
     Write-Host "Waiting for the agent pods to roll out (confidential ACI cold start can take several minutes)..." -ForegroundColor DarkGray
-    kubectl rollout status deployment/ado-confidential-agent -n $namespace --timeout=1200s
+    kubectl rollout status deployment/$deploymentName -n $namespace --timeout=1200s
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Rollout did not complete in time. Inspect with:" -ForegroundColor Yellow
         Write-Host "  kubectl describe pods -n $namespace" -ForegroundColor Yellow
@@ -561,6 +571,39 @@ try {
 
 kubectl get pods -n $namespace -o wide
 
+# --- Confidential-SKU validation gate ---------------------------------------
+# Virtual-node scheduling of a confidential pod is only trustworthy if the
+# backing Azure Container Instance actually came up as sku=Confidential. On some
+# clusters/regions the virtual node has been observed to fall back to a Standard
+# (non-SEV-SNP) container group, in which case there is NO hardware TEE and
+# attestation would be impossible. Assert the SKU here and fail loudly.
+if ($PolicyMode -ne "none") {
+    Write-Step "Validating backing container groups are Confidential SKU"
+    $podNames = @()
+    try {
+        $raw = kubectl get pods -n $namespace -l app=$deploymentName -o jsonpath='{.items[*].metadata.name}'
+        $podNames = ($raw -split '\s+') | Where-Object { $_ }
+    } catch { }
+    $cgs = @()
+    try { $cgs = Invoke-AzCli "az container list --resource-group $nodeResourceGroup -o json" | ConvertFrom-Json } catch { }
+    $checked = @()
+    $bad = @()
+    foreach ($pod in $podNames) {
+        foreach ($cg in ($cgs | Where-Object { $_.name -like "*$pod*" })) {
+            $checked += "$($cg.name) (sku=$($cg.sku))"
+            if ($cg.sku -ne "Confidential") { $bad += "$($cg.name) (sku=$($cg.sku))" }
+        }
+    }
+    if ($checked.Count -eq 0) {
+        Write-Host "WARNING: could not map any backing container group to the agent pods. Verify manually:" -ForegroundColor Yellow
+        Write-Host "  az container list --resource-group $nodeResourceGroup --query `"[].{name:name,sku:sku}`" -o table" -ForegroundColor Yellow
+    } elseif ($bad.Count -gt 0) {
+        throw "Confidential-SKU validation FAILED: $($bad -join ', '). The virtual node did not produce a SEV-SNP confidential container group, so these runners have NO hardware TEE. Do not trust them with secrets; investigate confidential ACI capacity/region for this cluster."
+    } else {
+        Write-Host "Confidential-SKU validation passed: $($checked -join ', ')" -ForegroundColor Green
+    }
+}
+
 Write-Step "Deployment summary"
 Write-Host "Resource group:        $ResourceGroupName"
 Write-Host "AKS cluster:           $AksName"
@@ -569,6 +612,7 @@ Write-Host "Virtual node:          $virtualNodeName"
 Write-Host "ACI subnet:            $aciSubnetId"
 Write-Host "Registry image:        $imageRef"
 Write-Host "Agent pool:            $AzpPool"
+Write-Host "Runner set:            $runnerSetSafe (deployment $deploymentName)"
 Write-Host "Agent replicas:        $AgentCount"
 Write-Host "CCE policy mode:       $PolicyMode"
 Write-Host ""

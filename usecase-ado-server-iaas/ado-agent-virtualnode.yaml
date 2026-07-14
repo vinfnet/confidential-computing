@@ -52,19 +52,21 @@ stringData:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ado-confidential-agent
+  name: ado-confidential-agent-__RUNNER_SET__
   namespace: ado-agents
   labels:
-    app: ado-confidential-agent
+    app: ado-confidential-agent-__RUNNER_SET__
+    runner-set: "__RUNNER_SET__"
 spec:
   replicas: __REPLICAS__
   selector:
     matchLabels:
-      app: ado-confidential-agent
+      app: ado-confidential-agent-__RUNNER_SET__
   template:
     metadata:
       labels:
-        app: ado-confidential-agent
+        app: ado-confidential-agent-__RUNNER_SET__
+        runner-set: "__RUNNER_SET__"
       annotations:
         # -------------------------------------------------------------------
         # CCE policy (REQUIRED for confidential ACI on virtual nodes).
