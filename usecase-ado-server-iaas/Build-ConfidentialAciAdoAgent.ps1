@@ -548,7 +548,9 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path $tempRoot "start.sh"), $startSh, $utf8NoBom)
 
 $imageRef = "$acrLoginServer/$ImageName`:$ImageTag"
-Invoke-AzCli "az acr build --registry $AcrName --resource-group $ResourceGroupName --image $ImageName`:$ImageTag $tempRoot --output none"
+# --no-logs: still waits for the build to finish, but skips the streaming log
+# output that crashes the Azure CLI's colorama writer on non-UTF-8 Windows consoles.
+Invoke-AzCli "az acr build --registry $AcrName --resource-group $ResourceGroupName --image $ImageName`:$ImageTag $tempRoot --no-logs --output none"
 Invoke-AzCli "az acr login --name $AcrName --output none"
 & docker pull $imageRef | Out-Null
 if ($LASTEXITCODE -ne 0) {
