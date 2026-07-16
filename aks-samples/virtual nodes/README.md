@@ -1,0 +1,180 @@
+# AKS Virtual Nodes on a Confidential AKS Cluster
+
+This sample creates a fresh AKS cluster with:
+
+- Azure CNI networking and dedicated AKS plus ACI subnets
+- A standard system node pool
+- An AMD SEV-SNP confidential node pool
+- The AKS virtual nodes add-on backed by Azure Container Instances
+- A public hello-world deployment scheduled onto the virtual node
+
+## What AKS Virtual Nodes are
+
+AKS Virtual Nodes let you run Kubernetes pods on Azure Container Instances (ACI) without adding or managing more AKS VM nodes. The virtual node appears as a Kubernetes node, but the pod runtime is provided by ACI.
+
+This is useful when you want rapid burst capacity, simpler operations for specific pod classes, or to run selected workloads in ACI while keeping Kubernetes control and scheduling in AKS.
+
+### Typical scenarios
+
+- Burst or spiky workloads where you do not want to scale VM node pools up and down
+- Event-driven or short-lived jobs that benefit from ACI startup and billing behavior
+- Isolating selected workloads from regular AKS node pools while keeping a single Kubernetes API surface
+- Hybrid AKS + ACI patterns where most services run on AKS nodes and overflow or special workloads run on virtual nodes
+
+## Logical architecture
+
+```mermaid
+flowchart LR
+	U[User Browser] --> LB[Public LoadBalancer Service]
+	LB --> APISVC[Kubernetes Service in AKS]
+
+	subgraph AKS[AKS Cluster]
+		SYSP[System pool VMSS]
+		CCP[Confidential pool VMSS]
+		VN[virtual-node-aci-linux]
+		APISVC --> VN
+	end
+
+	subgraph VNET[Virtual Network]
+		AKSSN[aks-subnet]
+		ACISN[aci-subnet]
+		NSG[ACI subnet NSG]
+	end
+
+	VN --> ACISN
+	ACISN --> ACI[ACI container group backing virtual-node pod]
+	NSG -. enforced on .- ACISN
+
+	MI[aciConnector managed identity]
+	MI -. Network Contributor .-> ACISN
+	MI -. Network Contributor .-> VNET
+	MI -. Network Contributor .-> NSG
+```
+
+## Deployment sequence
+
+```mermaid
+sequenceDiagram
+	participant User
+	participant Script as Deploy-VirtualNodesAKS.ps1
+	participant Azure as Azure Control Plane
+	participant AKS as AKS Cluster
+	participant MI as aciConnector Identity
+	participant ACI as ACI Virtual Node Backend
+
+	User->>Script: Run deployment script
+	Script->>Azure: Create RG, VNet, aks-subnet, aci-subnet
+	Script->>Azure: Create AKS cluster
+	Script->>Azure: Add confidential node pool
+	Script->>Azure: Wait for AKS update to finish
+	Script->>Azure: Enable virtual-node addon
+	Azure-->>MI: Create aciConnector managed identity
+	Script->>Azure: Assign Network Contributor on subnet, VNet, subnet NSG
+	Script->>AKS: Restart aci-connector pod
+	ACI-->>AKS: Register virtual-node-aci-linux
+	Script->>AKS: Apply workload manifest
+	AKS->>ACI: Schedule virtual-node pod as ACI container group
+```
+
+## Runtime sequence
+
+```mermaid
+sequenceDiagram
+	participant Browser
+	participant LB as Public LoadBalancer
+	participant K8s as Kubernetes Service
+	participant VN as virtual-node-aci-linux
+	participant CG as ACI Container Group
+
+	Browser->>LB: HTTP request
+	LB->>K8s: Forward to service
+	K8s->>VN: Route to selected virtual-node pod
+	VN->>CG: Deliver traffic to backing ACI container
+	CG-->>Browser: HTTP response
+```
+
+### Official documentation
+
+- AKS Virtual Nodes overview: https://learn.microsoft.com/azure/aks/virtual-nodes
+- AKS Virtual Nodes CLI walkthrough: https://learn.microsoft.com/azure/aks/virtual-nodes-cli
+- Azure Container Instances overview: https://learn.microsoft.com/azure/container-instances/container-instances-overview
+
+The script lives entirely in this folder and follows the repo's usual naming and tagging pattern:
+
+- Resource group name: `<prefix><5 random lowercase letters>`
+- Tags: `owner`, `BuiltBy`, `GitRepo`, `Workload`, `Scenario`
+
+## Files
+
+- `Deploy-VirtualNodesAKS.ps1`: end-to-end deployment script
+- `virtual-node-hello-world.yaml`: hello-world workload scheduled onto the virtual node (standard ACI)
+- `virtual-node-confidential.yaml`: confidential ACI workload template with CCE policy annotation scaffold
+
+## What the script checks
+
+- Azure CLI installed and logged in
+- Azure PowerShell `Az` modules installed and logged in
+- `kubectl` installed, with an option to install via `az aks install-cli`
+- `aks-preview` Azure CLI extension installed, with an option to install it
+- Required Azure resource providers registered
+- Active RBAC capable of creating role assignments at subscription scope
+- PIM eligibility for the required roles if the active role is missing, using native Az PowerShell cmdlets
+- Confidential VM SKU visibility in the target region
+
+The script requires an active subscription-scope role that can both create resources and assign RBAC on the virtual-node network resources. In practice, that means one of:
+
+- `Owner`
+- `User Access Administrator`
+- `Role Based Access Control Administrator`
+
+If one of those roles is only eligible through Microsoft Entra PIM, the script pauses and asks you to activate it before retrying the permission check.
+
+During live validation, the AKS virtual-nodes connector identity needed `Network Contributor` on the `aci-subnet`, the parent virtual network, and the subnet NSG that AKS links to the ACI subnet. Without the NSG scope, the connector can fail with `LinkedAuthorizationFailed` on `Microsoft.Network/networkSecurityGroups/join/action`.
+
+The script now assigns all three scopes before restarting the connector.
+
+## Usage
+
+```powershell
+./Deploy-VirtualNodesAKS.ps1 -Prefix sgall
+```
+
+Optional parameters:
+
+```powershell
+./Deploy-VirtualNodesAKS.ps1 -Prefix sgall -Region eastus2 -SubscriptionId <subscription-id>
+./Deploy-VirtualNodesAKS.ps1 -Prefix sgall -ConfidentialVmSize Standard_DC2as_v5 -SystemVmSize Standard_D2as_v7
+./Deploy-VirtualNodesAKS.ps1 -Prefix sgall -Region eastus2 -AutoActivatePim
+```
+
+## Default behavior
+
+- If `-Region` is omitted, the script prefers `eastus2` and falls back across a short candidate list until it finds visible availability for the confidential node SKU.
+- The default system node pool size is `Standard_D2as_v7`, which aligns with the currently allowed SKUs in the target subscription and region used during validation.
+- The cluster uses Azure CNI because virtual nodes require advanced networking.
+- The hello-world pod is scheduled onto the virtual node using node selectors and tolerations from the AKS virtual nodes guidance.
+- The RBAC and PIM preflight uses native Azure PowerShell cmdlets. If you pass `-AutoActivatePim`, the script can submit a native `SelfActivate` request for the first eligible role instead of waiting for manual confirmation.
+- The script performs an internal smoke test from inside the cluster and, when possible, an external HTTP test through the public load balancer.
+
+## Notes on confidential ACI
+
+This first sample validates the virtual-nodes plumbing on top of a confidential-node AKS cluster and uses the standard `mcr.microsoft.com/azuredocs/aci-helloworld` image as the smoke test.
+
+That gives you a working foundation for the next step: replacing the sample manifest with a confidential ACI deployment that includes a generated Confidential Computing Enforcement policy and any attestation sidecars you want to test.
+
+Live validation update: the attestation v2 container image was successfully scheduled through the virtual node and the backing container group was created, but the resulting ACI container group came up as `sku=Standard` with `confidentialComputeProperties=null`. The app started and served HTTP, but runtime attestation failed because `/dev/sev-guest` was absent, which is the expected non-confidential behavior.
+
+Treat `virtual-node-confidential.yaml` as a scaffold for ongoing validation rather than a confirmed end-to-end confidential ACI-on-AKS sample until the virtual-node path is shown to preserve confidential ACI properties for the backing container group.
+
+`virtual-node-confidential.yaml` is the starting point for that step. It includes the `microsoft.containerinstance.virtualnode.ccepolicy` annotation with an allow-all debug policy. Replace the policy value with the output of:
+
+```bash
+az confcom acipolicygen --image <your-image> --print-policy
+```
+
+## References
+
+- https://learn.microsoft.com/en-us/azure/aks/virtual-nodes
+- https://learn.microsoft.com/en-us/azure/aks/virtual-nodes-cli
+- https://learn.microsoft.com/en-us/azure/container-instances/container-instances-confidential-overview
+- https://learn.microsoft.com/en-us/azure/aks/confidential-containers-overview
