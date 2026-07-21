@@ -13,8 +13,13 @@
 #
 # AUTHENTICATION: there is NO ARM service connection. The build agent runs as a
 # confidential ACI container with a user-assigned managed identity attached, so
-# every step logs in with `az login --identity`. The MI holds a least-privilege
-# custom role ("ACI Pipeline Deployer") scoped to the resource group.
+# every step logs in with `az login --identity`. The MI holds the built-in
+# Contributor role scoped to the resource group (least-privilege built-in role
+# that still covers `az acr build` + ACI deployment).
+#
+# The confidential build agent image is a minimal Debian image (curl, git,
+# python3) with NO Azure CLI, so each job first bootstraps the Azure CLI via the
+# official Debian install script (egress is available through the subnet NAT).
 #
 # Pick the SKU at queue time with the `aciSku` parameter (default Confidential).
 # =============================================================================
@@ -64,6 +69,14 @@ stages:
           - checkout: self
           - bash: |
               set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                echo "Azure CLI not found on agent; installing (Debian)..."
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az version -o none && echo "Azure CLI ready."
+            displayName: 'Ensure Azure CLI'
+          - bash: |
+              set -euo pipefail
               echo "Logging in with the agent's managed identity..."
               az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
               az account set --subscription "$(subscriptionId)" --only-show-errors
@@ -91,6 +104,14 @@ stages:
         timeoutInMinutes: 30
         steps:
           - checkout: self
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                echo "Azure CLI not found on agent; installing (Debian)..."
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az version -o none && echo "Azure CLI ready."
+            displayName: 'Ensure Azure CLI'
           - bash: |
               set -euo pipefail
               az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
@@ -151,6 +172,14 @@ stages:
         timeoutInMinutes: 40
         steps:
           - checkout: self
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                echo "Azure CLI not found on agent; installing (Debian)..."
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az version -o none && echo "Azure CLI ready."
+            displayName: 'Ensure Azure CLI'
           - bash: |
               set -euo pipefail
               az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
