@@ -39,15 +39,21 @@ the target tenant.
 
 There is **no ARM service connection**. The confidential ACI build agent has a
 **user-assigned managed identity** attached. Every pipeline step runs
-`az login --identity --client-id <miClientId>`. The MI holds a **least-privilege
-custom role** — `ACI Pipeline Deployer` — scoped to the resource group, granting
-only what the pipeline needs:
+`az login --identity --client-id <miClientId>`. The MI is granted the built-in
+**`Contributor`** role **scoped to the single resource group** (`sgallado6uprct`),
+which is the least-privilege built-in role that still covers everything the
+pipeline does:
 
-- `Microsoft.ContainerRegistry/registries/scheduleRun/action` + read +
-  `listBuildSourceUploadUrl` + `listCredentials` (for `az acr build` and image
-  pull creds), and
-- `Microsoft.Resources/deployments/*` + `Microsoft.ContainerInstance/containerGroups/*`
-  (to deploy the ACI container group).
+- `az acr build` (server-side image build) — needs the registry management
+  actions `scheduleRun`, `listBuildSourceUploadUrl`, and `listCredentials`, and
+- `az deployment group create` for the ACI container group —
+  `Microsoft.Resources/deployments/*` + `Microsoft.ContainerInstance/containerGroups/*`.
+
+> A tighter custom role (`ACI Pipeline Deployer`) was the original intent, but
+> the target subscription has hit its custom-role-definition limit, so an
+> RG-scoped built-in `Contributor` assignment is used instead. It stays confined
+> to a single resource group and grants no `Microsoft.Authorization/*` (role
+> assignment) rights.
 
 ## Repo layout (self-contained)
 
