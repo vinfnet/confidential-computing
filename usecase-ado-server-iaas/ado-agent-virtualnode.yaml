@@ -3,7 +3,7 @@
 # This manifest replaces standalone confidential ACI build agents with the
 # same agents scheduled onto an AKS **virtual node**. The pod runtime is
 # provided by Azure Container Instances, and the
-#   microsoft.containerinstance.virtualnode.ccepolicy
+#   virtual-kubelet.io/confidential-compute-cce-policy
 # annotation turns each backing container group into a confidential
 # (AMD SEV-SNP) ACI instance governed by a CCE policy.
 #
@@ -14,8 +14,11 @@
 # Key pieces
 # ----------
 #   annotations:
-#     microsoft.containerinstance.virtualnode.ccepolicy
-#       Base64-encoded Rego CCE policy. The value baked in here by the script
+#     virtual-kubelet.io/confidential-compute-cce-policy
+#       Base64-encoded Rego CCE policy. This is the annotation key the
+#       azure-aci virtual-kubelet provider reads to set SKU=Confidential and
+#       attach the CCE policy (see setConfidentialComputeProperties). The
+#       value baked in here by the script
 #       is either:
 #         * the allow-all DEBUG policy (foundation / plumbing validation), or
 #         * a restrictive policy generated with:
@@ -70,11 +73,17 @@ spec:
       annotations:
         # -------------------------------------------------------------------
         # CCE policy (REQUIRED for confidential ACI on virtual nodes).
+        # The azure-aci virtual-kubelet provider reads these two annotations:
+        #   virtual-kubelet.io/container-sku                    -> "confidential"
+        #   virtual-kubelet.io/confidential-compute-cce-policy  -> base64 Rego
+        # When the cce-policy annotation is present the provider sets the
+        # backing container group SKU to Confidential and attaches the policy.
         # Replace with a generated restrictive policy before production:
         #   az confcom acipolicygen --virtual-node-yaml <this-file> --print-policy
         # The value baked here by the script is the allow-all DEBUG policy.
         # -------------------------------------------------------------------
-        microsoft.containerinstance.virtualnode.ccepolicy: "__CCE_POLICY__"
+        virtual-kubelet.io/container-sku: "confidential"
+        virtual-kubelet.io/confidential-compute-cce-policy: "__CCE_POLICY__"
     spec:
       imagePullSecrets:
         - name: acr-pull

@@ -16,7 +16,7 @@ Instead of deploying standalone confidential ACI container groups, it:
      subnet and the VNet.
   5. Deploys a Kubernetes Deployment that schedules the agent pods onto the
      virtual node as CONFIDENTIAL ACI (AMD SEV-SNP) using the
-     microsoft.containerinstance.virtualnode.ccepolicy annotation.
+     virtual-kubelet.io/confidential-compute-cce-policy annotation.
   6. The agents self-register to the self-hosted Azure DevOps Server over the
      private VNet and appear in the target pool.
 
@@ -153,9 +153,16 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Allow-all DEBUG CCE policy (base64 Rego). Runs the pod as confidential ACI but
-# does NOT enforce image/identity. Identical to the value used by the
-# aks-samples/virtual nodes/virtual-node-confidential.yaml starter manifest.
-$DebugAllowAllPolicy = "cGFja2FnZSBwb2xpY3kKYXBpX3ZlcnNpb24gOj0gIjAuMS4wIgppbXBvcnQgZnV0dXJlLmtleXdvcmRzLmV2ZXJ5CmltcG9ydCBmdXR1cmUua2V5d29yZHMuaW4KZnJhZ21lbnRzIDo9IFtdCmNvbnRhaW5lcnMgOj0gW10KYWxsb3dfcHJvcGVydGllc19hY2Nlc3MgOj0gdHJ1ZQphbGxvd19kdW1wX3N0YWNrcyA6PSB0cnVlCmFsbG93X3J1bnRpbWVfbG9nZ2luZyA6PSB0cnVlCmFsbG93X2Vudmlyb25tZW50X3ZhcmlhYmxlX2Ryb3BwaW5nIDo9IHRydWUKYWxsb3dfdW5lbmNyeXB0ZWRfc2NyYXRjaCA6PSB0cnVlCmFsbG93X2NhcGFiaWxpdHlfZHJvcHBpbmcgOj0gdHJ1ZQ=="
+# does NOT enforce image/identity. Decodes to:
+#   package policy
+#   api_version := "0.1.0"
+#
+#   allow_all := true
+# NOTE: a true allow-all requires the top-level `allow_all := true` rule. An
+# "empty" policy (containers := [] with no mount_device/allow_all rule) is
+# rejected at runtime by the SEV-SNP guest ("rule for mount_device is missing
+# from policy"), which fails the container storage mount.
+$DebugAllowAllPolicy = "cGFja2FnZSBwb2xpY3kKYXBpX3ZlcnNpb24gOj0gIjAuMS4wIgoKYWxsb3dfYWxsIDo9IHRydWUK"
 
 function Invoke-AzCli {
     param([string]$CommandText)
