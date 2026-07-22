@@ -148,9 +148,6 @@ stages:
               fi
               "$TOOLDIR/crane" version || true
 
-              STAMP=$(date +%m%d%H%M)
-              CG_NAME="hello-world-conf-$STAMP"
-              DNS_LABEL="hello-world-conf-$STAMP"
               IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
 
               TEMPLATE="$(deployDir)/aci-hello-world-confidential.json"
@@ -158,23 +155,31 @@ stages:
               PARAMS="$(Agent.TempDirectory)/aci-conf.params.json"
               cp "$TEMPLATE" "$WORK_TEMPLATE"
 
-              cat > "$PARAMS" <<EOF
+              BASE_STAMP=$(date +%m%d%H%M)
+
+              # Writes the deployment parameters file for a given CG name / DNS label.
+              # The CCE policy is image-bound and does NOT depend on the CG name or
+              # DNS label, so we can regenerate this per attempt after policygen.
+              write_params() {
+                cat > "$PARAMS" <<EOF
               {
                 "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
                 "contentVersion": "1.0.0.0",
                 "parameters": {
-                  "containerGroupName": { "value": "$CG_NAME" },
+                  "containerGroupName": { "value": "$1" },
                   "location":           { "value": "$(location)" },
                   "appImage":           { "value": "$IMAGE" },
                   "registryServer":     { "value": "$LOGIN_SERVER" },
                   "registryUsername":   { "value": "$ACR_USER" },
                   "registryPassword":   { "value": "$ACR_PASS" },
-                  "dnsNameLabel":       { "value": "$DNS_LABEL" }
+                  "dnsNameLabel":       { "value": "$2" }
                 }
               }
               EOF
+              }
 
               echo "Generating CCE policy for $IMAGE (dockerless via crane tarball)..."
+              write_params "hello-world-conf-$BASE_STAMP" "hello-world-conf-$BASE_STAMP"
               IMAGE_TAR="$(Agent.TempDirectory)/hello-world-image.tar"
               "$TOOLDIR/crane" pull --format=tarball "$IMAGE" "$IMAGE_TAR"
               az confcom acipolicygen \
@@ -184,22 +189,60 @@ stages:
                 --disable-stdio \
                 --approve-wildcards
 
-              echo "Deploying confidential container group $CG_NAME..."
-              FQDN=$(az deployment group create \
-                --resource-group "$(resourceGroup)" \
-                --template-file "$WORK_TEMPLATE" \
-                --parameters "$PARAMS" \
-                --query "properties.outputs.fqdn.value" -o tsv)
+              # Deploy with retry. westus2 confidential-host (SEV-SNP) allocation
+              # occasionally stalls: the container group sticks in "Pending" and a
+              # synchronous `az deployment group create` would block until the
+              # server-side 30-min DeploymentTimeout. Instead we deploy async
+              # (--no-wait), poll for "Running" on our own ~8-min budget, and on a
+              # stall/failure tear down and retry on a fresh host + unique name.
+              # Each attempt uses a UNIQUE deployment + CG name (BASE_STAMP + attempt)
+              # so re-runs never collide with a still-active deployment
+              # ("DeploymentActive").
+              FQDN=""
+              for attempt in 1 2 3; do
+                CG_NAME="hello-world-conf-${BASE_STAMP}-a${attempt}"
+                DNS_LABEL="$CG_NAME"
+                write_params "$CG_NAME" "$DNS_LABEL"
+                echo "Deploy attempt $attempt: container group $CG_NAME ..."
+                az deployment group create \
+                  --name "$CG_NAME" \
+                  --resource-group "$(resourceGroup)" \
+                  --template-file "$WORK_TEMPLATE" \
+                  --parameters "$PARAMS" \
+                  --no-wait
+                state=""
+                for i in $(seq 1 48); do
+                  state=$(az container show -g "$(resourceGroup)" -n "$CG_NAME" \
+                    --query "instanceView.state" -o tsv 2>/dev/null || echo "")
+                  if [ "$state" = "Running" ]; then break; fi
+                  if [ "$state" = "Failed" ]; then echo "  container group entered Failed state."; break; fi
+                  echo "  [$i/48] state=${state:-provisioning}, waiting 10s..."
+                  sleep 10
+                done
+                if [ "$state" = "Running" ]; then
+                  FQDN="${DNS_LABEL}.$(location).azurecontainer.io"
+                  echo "Deploy attempt $attempt succeeded. App URL: http://$FQDN:8080"
+                  break
+                fi
+                echo "##vso[task.logissue type=warning]Deploy attempt $attempt did not reach Running (state=${state:-timeout}); tearing down and retrying on a fresh host."
+                az container delete -g "$(resourceGroup)" -n "$CG_NAME" --yes 2>/dev/null || true
+              done
 
-              echo "Deployed. App URL: http://$FQDN"
+              if [ -z "$FQDN" ]; then
+                echo "##[error]All deploy attempts failed to reach a Running confidential container group."
+                exit 1
+              fi
               echo "##vso[task.setvariable variable=appFqdn]$FQDN"
             displayName: 'Generate CCE policy (dockerless) + deploy'
           - bash: |
               set -euo pipefail
-              URL="http://$(appFqdn)"
+              # The app listens on 8080 (see app/Dockerfile + ARM ipAddress ports).
+              # Port 80 is NOT exposed on the ACI, so a request to it is dropped
+              # (not refused) and would hang forever without --connect-timeout.
+              URL="http://$(appFqdn):8080/healthz"
               echo "Waiting for $URL ..."
               for i in $(seq 1 36); do
-                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$URL" || echo "000")
                 if [ "$CODE" = "200" ]; then
                   echo "OK - $URL returned 200."
                   exit 0
