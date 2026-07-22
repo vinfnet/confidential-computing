@@ -1,0 +1,191 @@
+# =============================================================================
+# hello-world-aci — the smallest possible end-to-end CI/CD to Confidential ACI,
+# driven entirely inside a self-hosted Azure DevOps Server running on Azure
+# Confidential Computing.
+#
+# On every push to main this pipeline:
+#   1. Builds the tiny hello-world container SERVER-SIDE with `az acr build`
+#      (the dockerless confidential build agents have no Docker daemon, so the
+#      image is built inside ACR).
+#   2. Generates a per-image CCE policy with `az confcom acipolicygen`
+#      (confcom pulls the layers from ACR over HTTPS — no Docker needed) and
+#      deploys the image to an AMD SEV-SNP Confidential ACI container group.
+#
+# AUTHENTICATION: there is NO ARM service connection (SP creation is blocked in
+# the tenant). The build agent runs as a confidential ACI container with a
+# user-assigned managed identity attached, so every step logs in with
+# `az login --identity --client-id <miClientId>`. The MI holds the built-in
+# Contributor role scoped to the resource group (least-privilege built-in role
+# that still covers `az acr build` + ACI deployment).
+#
+# The confidential build agent image has no Azure CLI, so each job bootstraps it
+# via the official Debian install script (egress is available through the
+# subnet NAT gateway).
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: aciSku
+    displayName: ACI SKU
+    type: string
+    default: Confidential
+    values:
+      - Confidential
+
+variables:
+  # --- Target environment (the live confidential-computing footprint) ---
+  subscriptionId: '68432aaa-6eba-435c-bc7c-1d998d835e80'
+  acrName:        'sgallacr74016'
+  resourceGroup:  'sgallhyglz'
+  location:       'westus2'
+  # User-assigned MI attached to the confidential ACI build agent.
+  # Fill this in once an MI is attached to the agents (see project README).
+  miClientId:     'REPLACE_WITH_MI_CLIENT_ID'
+  imageName:      'hello-world'
+  imageTag:       '$(Build.BuildId)'
+  sourceDir:      'app'
+  deployDir:      'deploy'
+
+stages:
+  # ---------------------------------------------------------------------------
+  # BUILD — server-side image build on the dockerless confidential build pool.
+  # ---------------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build image (az acr build)'
+    pool: confidential-build-pool
+    jobs:
+      - job: build
+        displayName: Server-side container build
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                echo "Azure CLI not found on agent; installing (Debian)..."
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az version -o none && echo "Azure CLI ready."
+            displayName: 'Ensure Azure CLI'
+          - bash: |
+              set -euo pipefail
+              echo "Logging in with the agent's managed identity..."
+              az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
+              az account set --subscription "$(subscriptionId)" --only-show-errors
+              echo "Building $(imageName):$(imageTag) in registry $(acrName)..."
+              az acr build \
+                --registry "$(acrName)" \
+                --image "$(imageName):$(imageTag)" \
+                --image "$(imageName):latest" \
+                --file "$(sourceDir)/Dockerfile" \
+                --no-logs \
+                "$(sourceDir)"
+            displayName: 'az acr build (MI login)'
+
+  # ---------------------------------------------------------------------------
+  # CONFIDENTIAL — generate a per-image CCE policy (dockerless) and deploy on
+  # the AMD SEV-SNP SKU. `az container exec` into the result is denied by the
+  # generated policy (no exec_processes), which is the whole point.
+  # ---------------------------------------------------------------------------
+  - stage: DeployConfidential
+    displayName: 'Deploy Confidential ACI (SEV-SNP)'
+    dependsOn: Build
+    condition: succeeded()
+    pool: confidential-build-pool
+    jobs:
+      - job: deploy
+        displayName: Generate CCE policy + deploy
+        timeoutInMinutes: 40
+        steps:
+          - checkout: self
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                echo "Azure CLI not found on agent; installing (Debian)..."
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az version -o none && echo "Azure CLI ready."
+            displayName: 'Ensure Azure CLI'
+          - bash: |
+              set -euo pipefail
+              az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
+              az account set --subscription "$(subscriptionId)" --only-show-errors
+
+              az extension add --name confcom --only-show-errors --yes 2>/dev/null || \
+                az extension update --name confcom --only-show-errors 2>/dev/null || true
+
+              LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+              ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+              ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+              echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+
+              # confcom reads image layers from ACR over HTTPS (no Docker daemon);
+              # it just needs registry auth via a docker config.json.
+              mkdir -p "$HOME/.docker"
+              AUTH=$(printf '%s:%s' "$ACR_USER" "$ACR_PASS" | base64 -w0)
+              cat > "$HOME/.docker/config.json" <<EOF
+              { "auths": { "$LOGIN_SERVER": { "auth": "$AUTH" } } }
+              EOF
+
+              STAMP=$(date +%m%d%H%M)
+              CG_NAME="hello-world-conf-$STAMP"
+              DNS_LABEL="hello-world-conf-$STAMP"
+              IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+
+              TEMPLATE="$(deployDir)/aci-hello-world-confidential.json"
+              WORK_TEMPLATE="$(Agent.TempDirectory)/aci-conf.json"
+              PARAMS="$(Agent.TempDirectory)/aci-conf.params.json"
+              cp "$TEMPLATE" "$WORK_TEMPLATE"
+
+              cat > "$PARAMS" <<EOF
+              {
+                "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                  "containerGroupName": { "value": "$CG_NAME" },
+                  "location":           { "value": "$(location)" },
+                  "appImage":           { "value": "$IMAGE" },
+                  "registryServer":     { "value": "$LOGIN_SERVER" },
+                  "registryUsername":   { "value": "$ACR_USER" },
+                  "registryPassword":   { "value": "$ACR_PASS" },
+                  "dnsNameLabel":       { "value": "$DNS_LABEL" }
+                }
+              }
+              EOF
+
+              echo "Generating CCE policy for $IMAGE (pulling layers from ACR, no Docker)..."
+              az confcom acipolicygen \
+                -a "$WORK_TEMPLATE" \
+                --parameters "$PARAMS" \
+                --disable-stdio \
+                --approve-wildcards
+
+              echo "Deploying confidential container group $CG_NAME..."
+              FQDN=$(az deployment group create \
+                --resource-group "$(resourceGroup)" \
+                --template-file "$WORK_TEMPLATE" \
+                --parameters "$PARAMS" \
+                --query "properties.outputs.fqdn.value" -o tsv)
+
+              echo "Deployed. App URL: http://$FQDN"
+              echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+            displayName: 'Generate CCE policy (dockerless) + deploy'
+          - bash: |
+              set -euo pipefail
+              URL="http://$(appFqdn)"
+              echo "Waiting for $URL ..."
+              for i in $(seq 1 36); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                if [ "$CODE" = "200" ]; then
+                  echo "OK - $URL returned 200."
+                  exit 0
+                fi
+                echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                sleep 5
+              done
+              echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; a confidential container group can take a few minutes to boot the UVM."
+            displayName: 'Smoke test (HTTP 200)'
