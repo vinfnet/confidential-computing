@@ -163,6 +163,42 @@ function New-SealedPatBundle {
     }
 }
 
+function Test-CcePolicyRestrictive {
+    # Classifies a base64-encoded CCE (Rego) policy as restrictive or permissive.
+    # A restrictive, image-bound policy (as produced by `az confcom acipolicygen`)
+    # is many KB, pins per-layer dm-verity hashes, and has an EMPTY exec_processes
+    # list with exec_external denied -> `az container exec` (a terminal) is refused.
+    # A permissive/allow-all policy (allow_all := true, or exec_external allowed:true)
+    # lets an operator open a terminal in the container, defeating the confidential
+    # guarantee. allow_stdio_access is NOT treated as weak here: it only governs
+    # attaching to the primary process' stdio, not running new commands; arbitrary
+    # command execution is gated solely by exec_external/exec_processes.
+    param([string]$Base64Policy)
+
+    if ([string]::IsNullOrWhiteSpace($Base64Policy)) {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = 0; Reason = "no CCE policy attached to the container group" }
+    }
+    try { $bytes = [Convert]::FromBase64String($Base64Policy) }
+    catch { return [pscustomobject]@{ Restrictive = $false; Bytes = 0; Reason = "CCE policy is not valid base64" } }
+
+    $rego = [Text.Encoding]::UTF8.GetString($bytes)
+    $len  = $bytes.Length
+
+    if ($rego -match 'allow_all\s*:=\s*true') {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "allow-all policy (allow_all := true) - enforces nothing" }
+    }
+    if ($rego -match 'exec_external[\s\S]{0,200}?allowed[\s\"]*:\s*true') {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "exec_external permits arbitrary exec (terminal access not blocked)" }
+    }
+    # A genuine image-bound policy carries per-layer dm-verity SHA-256 hashes and
+    # is substantial in size. Anything tiny without layer hashes is a debug stub.
+    $hasLayerHashes = ($rego -match 'layers') -and ($rego -match '[a-f0-9]{64}')
+    if (-not $hasLayerHashes -or $len -lt 2000) {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "policy is $len bytes with no per-layer dm-verity hashes - not image-bound (debug stub)" }
+    }
+    return [pscustomobject]@{ Restrictive = $true; Bytes = $len; Reason = "image-bound restrictive policy ($len bytes, per-layer hashes present, exec blocked)" }
+}
+
 $useKeyVault = -not [string]::IsNullOrWhiteSpace($KeyVaultName)
 $useSkr = [bool]$UseSecureKeyRelease
 
@@ -805,6 +841,34 @@ if ($skuFailures.Count -gt 0) {
 }
 Write-Host "Confidential-SKU validation passed: all $($deployed.Count) agent(s) report sku=Confidential." -ForegroundColor Green
 
+# Enforcement gate: confirm the LIVE CCE policy on each container group actually
+# blocks `az container exec` (terminal access). A Confidential SKU alone enforces
+# nothing — an allow-all/debug policy still lets an operator open a shell in the
+# runner. Unless -AllowStdio was passed for debugging, fail the deployment if any
+# runner is backed by a permissive policy so secrets are never trusted to a runner
+# a terminal can be opened into.
+Write-Host "=== Validating the live CCE policy blocks exec ===" -ForegroundColor Cyan
+$permissive = @()
+foreach ($cg in $deployed) {
+    $livePolicy = (Invoke-AzCli "az container show --resource-group $ResourceGroupName --name $cg --query confidentialComputeProperties.ccePolicy -o tsv").Trim()
+    $verdict = Test-CcePolicyRestrictive -Base64Policy $livePolicy
+    if ($verdict.Restrictive) {
+        Write-Host "  [ok]   $cg`: $($verdict.Reason)" -ForegroundColor Green
+    } else {
+        Write-Host "  [WEAK] $cg`: $($verdict.Reason)" -ForegroundColor Yellow
+        $permissive += "$cg [$($verdict.Reason)]"
+    }
+}
+if ($permissive.Count -gt 0 -and -not $AllowStdio) {
+    $joined = $permissive -join "; "
+    throw "CCE-policy enforcement FAILED: the following agents are backed by a permissive policy that does NOT block exec: $joined. A terminal can be opened into these containers, so they are NOT confidential in any meaningful sense. Confirm 'az confcom acipolicygen' produced an image-bound policy (no allow_all / exec_external, per-layer hashes) before trusting these agents with secrets."
+}
+if ($permissive.Count -gt 0) {
+    Write-Host "WARNING: $($permissive.Count) agent(s) have a permissive policy but -AllowStdio was set, so this is treated as a debug deployment. Do NOT trust these runners with secrets." -ForegroundColor Yellow
+} else {
+    Write-Host "CCE-policy enforcement passed: every agent is backed by a restrictive, image-bound policy (az container exec is refused)." -ForegroundColor Green
+}
+
 Write-Host "=== Step 7/7: Summary ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Confidential ACI ADO agent deployment complete." -ForegroundColor Green
@@ -824,4 +888,11 @@ if ($useKeyVault) {
 if ($useVnet) {
     Write-Host "VNet: $VnetName ($VnetResourceGroup)"
     Write-Host "ACI subnet: $AgentSubnetName ($AgentSubnetPrefix)"
+}
+if (-not $AllowStdio) {
+    Write-Host ""
+    Write-Host "Terminal access is blocked. Prove it with:" -ForegroundColor DarkGray
+    $firstCg = if ($deployed.Count -gt 0) { $deployed[0] } else { "<container-group>" }
+    Write-Host "  az container exec --resource-group $ResourceGroupName --name $firstCg --exec-command /bin/sh" -ForegroundColor DarkGray
+    Write-Host "  ^ Expect a refusal (the CCE policy has no exec_processes entry)." -ForegroundColor DarkGray
 }

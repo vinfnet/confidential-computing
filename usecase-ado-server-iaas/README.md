@@ -353,6 +353,38 @@ the container as the `AZP_TOKEN` environment variable. It is protected in transi
 land in the deployment's parameter values. For a stronger posture, keep the PAT out of the
 template entirely and have each agent fetch it at runtime from Key Vault — see below.
 
+> **The script proves the exec hole is closed before it finishes.** After the
+> agents deploy, Step 6 of the script does two gates: (1) it asserts every
+> container group reports **`sku=Confidential`** (real SEV-SNP, not a fallback),
+> and (2) it reads `confidentialComputeProperties.ccePolicy` back off each live
+> container group and **fails the deployment if the policy is permissive**
+> (allow-all, `exec_external` allowed, or a tiny stub with no per-layer
+> dm-verity hashes). Because the policy is generated with `--disable-stdio` and
+> has an empty `exec_processes` list, `az container exec` into the runner is
+> refused. This gate is why the direct-ACI path is demo-ready where the
+> virtual-node path is not: the policy is generated against the *same* ARM
+> template that is deployed, so it both **enforces** and lets the container
+> start. Pass `-AllowStdio` only for debugging — it downgrades the gate to a
+> warning and must never be used for a runner trusted with secrets.
+
+**Prove that terminal access is blocked.** Once the agents are running, try to open
+a shell — the CCE policy has no `exec_processes` entry, so the ACI control plane
+refuses:
+
+```powershell
+$cg = az container list -g <resource-group> `
+  --query "[?contains(name,'caci-agent')].name | [0]" -o tsv
+az container exec -g <resource-group> -n $cg --exec-command /bin/sh
+# ^ Expect a refusal. If a shell opens, the runner is on a debug/allow-all policy
+#   and must NOT be trusted with secrets.
+
+# Inspect the live policy directly (a real policy is many KB with per-layer
+# dm-verity hashes; a ~700-byte policy containing 'allow_all := true' is the stub):
+az container show -g <resource-group> -n $cg `
+  --query confidentialComputeProperties.ccePolicy -o tsv |
+  ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+```
+
 #### Key Vault-backed PAT retrieval (recommended)
 
 Instead of handing the PAT to the ARM deployment, store it once in the CVM's **Key Vault** and
@@ -465,18 +497,30 @@ sequenceDiagram
 > the measured layers, so the CCE policy is regenerated and both agents are
 > redeployed as part of re-running this step.
 
-#### Alternative — run the agents on AKS virtual nodes
+#### Alternative — run the agents on AKS virtual nodes (not recommended)
+
+> **Not recommended — known-broken with an enforced policy.** The direct
+> confidential-ACI path above (`Build-ConfidentialAciAdoAgent.ps1`) is the
+> supported, demo-ready option. The AKS virtual-node variant below cannot run a
+> genuinely *restrictive* CCE policy today: `az confcom acipolicygen
+> --virtual-node-yaml` models the pod mount sources for a virtual-kubelet
+> version that differs from the deployed AKS addon provider, so the enforced
+> policy denies container creation (`invalid mount list: /etc/resolv.conf`). It
+> only "works" with an allow-all policy — which leaves `az container exec` open
+> and is therefore **not** confidential. See the *Known limitation* callout
+> below. Use this path only for Kubernetes-plumbing experiments, never to run
+> confidential builds. Prefer `Build-ConfidentialAciAdoAgent.ps1`.
 
 `Build-ConfidentialAciAdoAgent.ps1` deploys each runner as a standalone
 confidential ACI container group. If you would rather manage the runners as a
 Kubernetes workload — for example to scale them with `kubectl` or run them
-alongside other AKS services — use **`Build-AksVirtualNodesAdoAgent.ps1`**
+alongside other AKS services — you *could* use **`Build-AksVirtualNodesAdoAgent.ps1`**
 instead. It builds the same self-registering agent image but schedules the pods
 onto an **AKS virtual node** backed by confidential ACI (AMD SEV-SNP via the
 `virtual-kubelet.io/confidential-compute-cce-policy` annotation). The
-confidentiality guarantee is identical — it comes from the ACI CCE policy on the
-virtual-node container group, so a standard AKS system node pool is enough to
-host the virtual node.
+confidentiality guarantee is *intended* to be identical — it comes from the ACI
+CCE policy on the virtual-node container group — but see the mount-model
+limitation below before relying on it.
 
 ```powershell
 .\Build-AksVirtualNodesAdoAgent.ps1 `
@@ -508,11 +552,39 @@ host the virtual node.
 - `acipolicygen` hashes the image through the **local Docker daemon**, so run
   `az acr login --name <acr-name>` and `docker pull <image>` **first** — otherwise
   the policy step fails with a registry `401` while "Pulling and hashing images".
+- **Annotation-key bridge (why the script copies the policy across keys).**
+  `az confcom acipolicygen --virtual-node-yaml` writes the generated policy to
+  the `microsoft.containerinstance.virtualnode.ccepolicy` annotation, but the
+  deployed OSS `azure-aci` virtual-kubelet provider *reads* it from
+  `virtual-kubelet.io/confidential-compute-cce-policy` (its
+  `confidentialComputeCcePolicyLabel`). If the value is not copied into the key
+  the provider reads, the provider finds that annotation empty and silently
+  applies a permissive **default allow-all** policy (~769 bytes) — leaving
+  `az container exec` open even though a restrictive policy was generated. The
+  script bridges this automatically (confcom → provider key) before
+  `kubectl apply`; if you hand-edit the manifest, put the generated base64 on
+  the `virtual-kubelet.io/confidential-compute-cce-policy` key. Because the CCE
+  policy binds at container-group **launch** time, the script also forces a
+  `kubectl rollout restart` so each replica is recreated under the new policy.
 - On reruns add `-SkipAksCreate -SkipImageBuild` to redeploy only the agent
   workload against the existing cluster and image.
 
-The runners self-register into the same pool and appear identically in Step 8 and
-in the ADO web UI (as `SandboxHost-*` agents).
+> **Known limitation — confcom ↔ virtual-kubelet mount-model mismatch.** A
+> genuinely enforced `generated` policy can *deny* container creation on the
+> virtual node with `container creation denied due to policy` /
+> `invalid mount list: /etc/resolv.conf`. This happens because
+> `az confcom acipolicygen --virtual-node-yaml` models the pod's mount **source**
+> paths (`sandbox:///tmp/atlas/emptydir/...`) for a specific virtual-kubelet
+> provider version, and the deployed AKS virtual-node addon provider (e.g.
+> `mcr.microsoft.com/oss/v2/virtual-kubelet/virtual-kubelet:v1.6.4-3`) uses
+> different mount sources, so the restrictive policy rejects the real container.
+> It is *not* fixable by editing this manifest (confcom ignores
+> `automountServiceAccountToken`, and the injected `/etc/resolv.conf`, `/etc/hosts`,
+> etc. mounts are outside your control). If you hit this, either pin a
+> virtual-kubelet provider version that matches your confcom build, or — the
+> reliable option — use **`Build-ConfidentialAciAdoAgent.ps1`** (direct
+> confidential ACI, no virtual-kubelet mount modeling), where the same restrictive
+> policy both **enforces** *and* lets the agent start.
 
 **Prove that terminal access is blocked.** Under `-PolicyMode generated` the CCE
 policy has no `exec_processes` entry, so the ACI control plane refuses any exec
