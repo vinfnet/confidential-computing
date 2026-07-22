@@ -30,6 +30,17 @@ Optional subscription ID. If omitted, uses current az account.
 
 .PARAMETER SkipBrowser
 Do not auto-open browser after deployment.
+
+.PARAMETER PrivateNetworking
+Provision a VNet, NAT gateway, storage private endpoints, and private DNS, then VNet-inject the
+confidential container. Required in tenants where Azure Policy forces storage accounts to
+public-network-access = Disabled (otherwise the container cannot reach Blob/Table/Queue and the
+app fails with AuthorizationFailure). When set, the container receives a private IP only.
+
+.PARAMETER PublicFrontend
+Only meaningful with -PrivateNetworking. Also provisions a Standard_v2 Application Gateway with a
+public IP so the private container's web UI stays browser-reachable. Adds the NSG rule that App
+Gateway v2 requires (GatewayManager inbound on ports 65200-65535).
 #>
 
 param(
@@ -42,6 +53,8 @@ param(
     [string]$Location = "eastus",
     [string]$SubscriptionId,
     [string]$SubnetId = "",
+    [switch]$PrivateNetworking,
+    [switch]$PublicFrontend,
     [switch]$SkipBrowser
 )
 
@@ -247,6 +260,41 @@ $storageId = (Invoke-Az "az storage account show --resource-group $resourceGroup
 # Enforce secure settings post-create to align with common Azure Policy baselines.
 Invoke-Az "az storage account update --resource-group $resourceGroupName --name $storageName --https-only true --min-tls-version TLS1_2 --allow-blob-public-access false --public-network-access Enabled --output none"
 
+if ($PrivateNetworking) {
+    # Some tenants enforce Azure Policy (e.g. a 'modify' effect) that forces
+    # publicNetworkAccess=Disabled on every storage account and reverts any re-enable. In that
+    # case the confidential container must reach storage over private endpoints from within a
+    # VNet, otherwise Blob/Table/Queue calls fail with AuthorizationFailure.
+    $vnetName = "cse-vnet"
+    $aciSubnetName = "aci"
+    $peSubnetName = "pe"
+    $appgwSubnetName = "appgw"
+
+    Write-Header "Creating VNet and subnets for private networking"
+    Invoke-Az "az network vnet create -g $resourceGroupName -n $vnetName --location $Location --address-prefixes 10.42.0.0/16 --subnet-name $aciSubnetName --subnet-prefixes 10.42.1.0/24 --output none"
+    Invoke-Az "az network vnet subnet create -g $resourceGroupName --vnet-name $vnetName -n $peSubnetName --address-prefixes 10.42.2.0/24 --private-endpoint-network-policies Disabled --output none"
+    Invoke-Az "az network vnet subnet create -g $resourceGroupName --vnet-name $vnetName -n $appgwSubnetName --address-prefixes 10.42.3.0/24 --output none"
+    Invoke-Az "az network vnet subnet update -g $resourceGroupName --vnet-name $vnetName -n $aciSubnetName --delegations Microsoft.ContainerInstance/containerGroups --output none"
+
+    Write-Header "Creating NAT gateway for ACI outbound connectivity"
+    # VNet-injected ACI requires a NAT gateway for supported outbound access (MAA, Key Vault, ACR).
+    Invoke-Az "az network public-ip create -g $resourceGroupName -n cse-nat-pip --sku Standard --allocation-method Static --location $Location --output none"
+    Invoke-Az "az network nat gateway create -g $resourceGroupName -n cse-nat --public-ip-addresses cse-nat-pip --idle-timeout 10 --location $Location --output none"
+    Invoke-Az "az network vnet subnet update -g $resourceGroupName --vnet-name $vnetName -n $aciSubnetName --nat-gateway cse-nat --output none"
+
+    Write-Header "Creating storage private endpoints and private DNS"
+    foreach ($svc in @("blob", "table", "queue")) {
+        $zone = "privatelink.$svc.core.windows.net"
+        Invoke-Az "az network private-dns zone create -g $resourceGroupName -n $zone --output none"
+        Invoke-Az "az network private-dns link vnet create -g $resourceGroupName --zone-name $zone -n link-$svc --virtual-network $vnetName --registration-enabled false --output none"
+        Invoke-Az "az network private-endpoint create -g $resourceGroupName -n pe-$svc --location $Location --vnet-name $vnetName --subnet $peSubnetName --private-connection-resource-id $storageId --group-id $svc --connection-name conn-$svc --output none"
+        Invoke-Az "az network private-endpoint dns-zone-group create -g $resourceGroupName --endpoint-name pe-$svc -n zg-$svc --private-dns-zone $zone --zone-name $svc --output none"
+    }
+
+    $SubnetId = (Invoke-Az "az network vnet subnet show -g $resourceGroupName --vnet-name $vnetName -n $aciSubnetName --query id --output tsv").Trim()
+    Write-Host "VNet-injecting container into subnet: $SubnetId" -ForegroundColor Green
+}
+
 Write-Header "Creating Key Vault and SKR key"
 Invoke-Az "az keyvault create --name $keyVaultName --resource-group $resourceGroupName --location $Location --sku premium --enable-rbac-authorization false --enable-purge-protection true --tags $tagArgs --output table"
 
@@ -296,6 +344,13 @@ $storageConnectionString = ""
 Write-Header "Building and pushing container image"
 Invoke-Az "az acr build --registry $acrName --image $imageName`:$imageTag $PSScriptRoot --no-logs --output none"
 
+Write-Header "Authenticating Docker to ACR"
+try {
+    Invoke-Az "az acr login --name $acrName --output none"
+} catch {
+    throw "Failed to authenticate Docker to ACR '$acrName'. Ensure Docker Desktop is running and your Azure token can access the registry."
+}
+
 Write-Header "Refreshing local image cache for confcom"
 & docker pull "$acrLoginServer/$imageName`:$imageTag"
 if ($LASTEXITCODE -ne 0) {
@@ -331,25 +386,55 @@ $deploymentParams = @{
 }
 $deploymentParams | ConvertTo-Json -Depth 20 | Set-Content -Path "deployment-params.json" -Encoding UTF8
 
-Write-Header "Authenticating Docker to ACR"
-try {
-    Invoke-Az "az acr login --name $acrName --output none"
-} catch {
-    throw "Failed to authenticate Docker to ACR '$acrName'. Ensure Docker Desktop is running and your Azure token can access the registry."
-}
-
 Invoke-Az "az extension add --name confcom --upgrade --output none"
 Invoke-Az "az confcom acipolicygen -a deployment-template.json --parameters deployment-params.json --disable-stdio --approve-wildcards"
 
 Write-Header "Deploying confidential ACI"
 Invoke-Az "az deployment group create --resource-group $resourceGroupName --template-file deployment-template.json --parameters @deployment-params.json --output table"
 
-$fqdn = (Invoke-Az "az container show --resource-group $resourceGroupName --name $containerGroupName --query ipAddress.fqdn --output tsv").Trim()
-$url = "http://$fqdn"
+if ($PrivateNetworking) {
+    # VNet-injected container groups get a private IP only (no public FQDN).
+    $containerIp = (Invoke-Az "az container show --resource-group $resourceGroupName --name $containerGroupName --query ipAddress.ip --output tsv").Trim()
+    $url = "http://$containerIp"
+
+    if ($PublicFrontend) {
+        Write-Header "Creating Application Gateway public frontend"
+        $appgwPipDns = New-SafeName -Raw ("$prefixSafe" + "cse" + (New-RandomLetters -Count 6)) -MaxLength 30 -Fallback "csegw"
+        Invoke-Az "az network public-ip create -g $resourceGroupName -n cse-appgw-pip --sku Standard --allocation-method Static --location $Location --dns-name $appgwPipDns --output none"
+
+        # Tenants that auto-apply an NRMS NSG deny Internet inbound and block the App Gateway v2
+        # infrastructure ports. Add the required GatewayManager allow rule on the appgw subnet NSG.
+        $appgwNsgId = (Invoke-Az "az network vnet subnet show -g $resourceGroupName --vnet-name cse-vnet -n appgw --query networkSecurityGroup.id --output tsv").Trim()
+        if ($appgwNsgId) {
+            $appgwNsgName = $appgwNsgId.Split("/")[-1]
+            try {
+                Invoke-Az "az network nsg rule create -g $resourceGroupName --nsg-name $appgwNsgName -n Allow-AppGwInfra-GatewayManager --priority 100 --direction Inbound --access Allow --protocol Tcp --source-address-prefixes GatewayManager --source-port-ranges * --destination-address-prefixes * --destination-port-ranges 65200-65535 --output none"
+            } catch {
+                Write-Host "GatewayManager NSG rule may already exist; continuing." -ForegroundColor Yellow
+            }
+        }
+
+        Invoke-Az "az network application-gateway create -g $resourceGroupName -n cse-appgw --location $Location --sku Standard_v2 --capacity 1 --vnet-name cse-vnet --subnet appgw --public-ip-address cse-appgw-pip --frontend-port 80 --http-settings-port 80 --http-settings-protocol Http --routing-rule-type Basic --servers $containerIp --priority 100 --output none"
+
+        $gwIp = (Invoke-Az "az network public-ip show -g $resourceGroupName -n cse-appgw-pip --query ipAddress --output tsv").Trim()
+        $gwFqdn = (Invoke-Az "az network public-ip show -g $resourceGroupName -n cse-appgw-pip --query dnsSettings.fqdn --output tsv").Trim()
+        $url = "http://$gwIp"
+    }
+}
+else {
+    $fqdn = (Invoke-Az "az container show --resource-group $resourceGroupName --name $containerGroupName --query ipAddress.fqdn --output tsv").Trim()
+    $url = "http://$fqdn"
+}
 
 Write-Header "Deployment complete"
 Write-Host "Resource Group:  $resourceGroupName" -ForegroundColor Green
 Write-Host "Container URL:   $url" -ForegroundColor Green
+if ($PrivateNetworking -and $PublicFrontend -and $gwFqdn) {
+    Write-Host "App Gateway FQDN: http://$gwFqdn" -ForegroundColor Green
+}
+if ($PrivateNetworking -and -not $PublicFrontend) {
+    Write-Host "(Container has a private IP only. Reach it from inside the VNet, or re-run with -PublicFrontend.)" -ForegroundColor Yellow
+}
 Write-Host "Storage account: $storageName" -ForegroundColor Green
 Write-Host "Key Vault:       $keyVaultName" -ForegroundColor Green
 Write-Host "SKR key:         $keyName" -ForegroundColor Green
