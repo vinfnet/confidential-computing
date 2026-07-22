@@ -7,9 +7,12 @@
 #   1. Builds the tiny hello-world container SERVER-SIDE with `az acr build`
 #      (the dockerless confidential build agents have no Docker daemon, so the
 #      image is built inside ACR).
-#   2. Generates a per-image CCE policy with `az confcom acipolicygen`
-#      (confcom pulls the layers from ACR over HTTPS — no Docker needed) and
-#      deploys the image to an AMD SEV-SNP Confidential ACI container group.
+#   2. Generates a per-image CCE policy with `az confcom acipolicygen`.
+#      The confidential agent is dockerless, and acipolicygen for Linux ACI
+#      needs image layers from either a Docker daemon or a local tarball, so we
+#      pull the image into a tarball with `crane` (a static, dockerless binary)
+#      and feed it via `--tar`. The image then deploys to an AMD SEV-SNP
+#      Confidential ACI container group.
 #
 # AUTHENTICATION: there is NO ARM service connection (SP creation is blocked in
 # the tenant). The build agent runs as a confidential ACI container with a
@@ -123,13 +126,27 @@ stages:
               ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
               echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
 
-              # confcom reads image layers from ACR over HTTPS (no Docker daemon);
-              # it just needs registry auth via a docker config.json.
-              mkdir -p "$HOME/.docker"
+              # The confidential build agent is DOCKERLESS by design (sealed
+              # container, no Docker daemon). `az confcom acipolicygen` for Linux
+              # ACI can only read image layers from a running Docker daemon or a
+              # local tarball (--tar). So we pull the image into a docker-save
+              # style tarball with `crane` — a single static, dockerless binary —
+              # and feed that to acipolicygen with --tar.
+              TOOLDIR="$(Agent.TempDirectory)/tools"
+              mkdir -p "$TOOLDIR" "$HOME/.docker"
               AUTH=$(printf '%s:%s' "$ACR_USER" "$ACR_PASS" | base64 -w0)
               cat > "$HOME/.docker/config.json" <<EOF
               { "auths": { "$LOGIN_SERVER": { "auth": "$AUTH" } } }
               EOF
+
+              if [ ! -x "$TOOLDIR/crane" ]; then
+                echo "Installing crane (dockerless image puller)..."
+                CRANE_VER="v0.20.2"
+                curl -sSL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VER}/go-containerregistry_Linux_x86_64.tar.gz" \
+                  | tar -xz -C "$TOOLDIR" crane
+                chmod +x "$TOOLDIR/crane"
+              fi
+              "$TOOLDIR/crane" version || true
 
               STAMP=$(date +%m%d%H%M)
               CG_NAME="hello-world-conf-$STAMP"
@@ -157,10 +174,13 @@ stages:
               }
               EOF
 
-              echo "Generating CCE policy for $IMAGE (pulling layers from ACR, no Docker)..."
+              echo "Generating CCE policy for $IMAGE (dockerless via crane tarball)..."
+              IMAGE_TAR="$(Agent.TempDirectory)/hello-world-image.tar"
+              "$TOOLDIR/crane" pull --format=tarball "$IMAGE" "$IMAGE_TAR"
               az confcom acipolicygen \
                 -a "$WORK_TEMPLATE" \
                 --parameters "$PARAMS" \
+                --tar "$IMAGE_TAR" \
                 --disable-stdio \
                 --approve-wildcards
 
