@@ -465,6 +465,45 @@ sequenceDiagram
 > the measured layers, so the CCE policy is regenerated and both agents are
 > redeployed as part of re-running this step.
 
+#### Alternative — run the agents on AKS virtual nodes
+
+`Build-ConfidentialAciAdoAgent.ps1` deploys each runner as a standalone
+confidential ACI container group. If you would rather manage the runners as a
+Kubernetes workload — for example to scale them with `kubectl` or run them
+alongside other AKS services — use **`Build-AksVirtualNodesAdoAgent.ps1`**
+instead. It builds the same self-registering agent image but schedules the pods
+onto an **AKS virtual node** backed by confidential ACI (AMD SEV-SNP via the
+`virtual-kubelet.io/confidential-compute-cce-policy` annotation). The
+confidentiality guarantee is identical — it comes from the ACI CCE policy on the
+virtual-node container group, so a standard AKS system node pool is enough to
+host the virtual node.
+
+```powershell
+.\Build-AksVirtualNodesAdoAgent.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName <resource-group> `
+  -Prefix <name> `
+  -VnetName '<vnet-name>' `
+  -AzpUrl 'https://10.0.0.4/DefaultCollection' `
+  -AzpPool 'confidential-build-pool' `
+  -AgentCount 2 `
+  -PolicyMode generated
+```
+
+- **Use `-PolicyMode generated`** on current confidential UVMs. It runs
+  `az confcom acipolicygen --virtual-node-yaml` to produce a restrictive,
+  image-bound CCE policy. The `debug-allow-all` shortcut is rejected at runtime
+  (the UVM needs explicit `mount_device` / `mount_overlay` rules), so the pods
+  stay `Pending` and the ACI provisioning fails.
+- `acipolicygen` hashes the image through the **local Docker daemon**, so run
+  `az acr login --name <acr-name>` and `docker pull <image>` **first** — otherwise
+  the policy step fails with a registry `401` while "Pulling and hashing images".
+- On reruns add `-SkipAksCreate -SkipImageBuild` to redeploy only the agent
+  workload against the existing cluster and image.
+
+The runners self-register into the same pool and appear identically in Step 8 and
+in the ADO web UI (as `SandboxHost-*` agents).
+
 #### Confidential Enforcement (CCE) policy — protecting artifacts while they are built
 
 Each agent is deployed as **Confidential** ACI with an auto-generated **CCE
@@ -524,6 +563,29 @@ az vm run-command invoke -g <resource-group> -n <vm-name> `
 
 You should see `AGENT-COUNT 2` with each agent `status=online`. The platform is now ready:
 queue a pipeline against `confidential-build-pool` and it runs on a confidential agent.
+
+> The agent names are the **confidential container hostnames** (for example
+> `SandboxHost-639203230470841966`), not the CVM or Kubernetes pod name — that is
+> expected. Each SEV-SNP runner reports the sandbox host it booted inside.
+
+#### See the runners in the Azure DevOps web UI
+
+With the Bastion tunnel from Step 5 still open (`https://localhost:8443`), you can
+watch the same agents come online in the browser:
+
+1. Browse to the agent-pools admin page:
+   **`https://localhost:8443/_settings/agentpools`**
+   (or click the **gear / Collection Settings → Pipelines → Agent pools**). Accept
+   the self-signed-certificate warning if prompted.
+2. Select **`confidential-build-pool`**, then open the **Agents** tab.
+3. Each confidential runner appears as a **`SandboxHost-<id>`** entry with a green
+   **Online** status. Selecting an agent shows its version and capabilities.
+
+> If the tunnel has closed, reopen it with the `az network bastion tunnel`
+> command from [Step 5](#step-5--create-a-personal-access-token-pat) (or
+> [Option B](#option-b--reach-the-ado-web-ui--rest-api-from-your-browser-tunnel)).
+> To manage the pool from inside the VM instead, open
+> `https://localhost/_settings/agentpools` in the CVM's browser over RDP.
 
 ---
 
@@ -588,10 +650,21 @@ use `--resource-port 80` and browse `http://localhost:8443/DefaultCollection`.
 | `enable-ado-https.ps1` | On the CVM (via run-command) | Create self-signed cert, bind 443, open firewall (Step 4). |
 | `create-ado-pool.ps1` | On the CVM (via run-command) | Create the confidential build agent pool (Step 6). |
 | `Build-ConfidentialAciAdoAgent.ps1` | Workstation | Build/push the agent image and deploy confidential ACI agents (Step 7). |
+| `Build-AksVirtualNodesAdoAgent.ps1` | Workstation | Alternative to Step 7 — deploy the same agents as confidential ACI on AKS virtual nodes. |
 | `check-ado-agents.ps1` | On the CVM (via run-command) | List agents registered in a pool to verify registration (Step 8). |
 
 > Installing Azure DevOps Server itself is a **manual** step (Step 3) — see
 > [Step 3 — Install Azure DevOps Server manually](#step-3--install-azure-devops-server-manually-simplest-path).
+
+### Supporting files and advanced options
+
+| File | Purpose |
+| --- | --- |
+| `ado-agent-virtualnode.yaml` | Kubernetes Deployment manifest template used by `Build-AksVirtualNodesAdoAgent.ps1` to schedule the agent pods onto the AKS virtual node. |
+| `skr-pat.py` | Attestation-gated **Secure Key Release (SKR)** helper — releases the registration PAT only after the runner's SEV-SNP report is verified, so the token never exists outside an attested TEE. |
+| `pim-activate-owner.ps1` | Self-activates an eligible **PIM** Owner role (needed to grant the Key Vault data-plane roles the SKR flow requires). |
+| `wait-for-rbac.ps1` | Retry loop that waits for a freshly-granted role assignment to propagate before continuing an unattended deploy. |
+| `pipelines/` | Sample pipelines that run **on** the confidential agents — `secretapp-helloworld`, `visual-attestation-demo`, and `sample-app-deployment` (deploys visual-attestation v2 to confidential ACI). See each folder's README. |
 
 ### `helper-scripts/` (diagnostics, cleanup, and superseded automation)
 
