@@ -42,9 +42,9 @@ variables:
   acrName:        'sgallacr74016'
   resourceGroup:  'sgallhyglz'
   location:       'westus2'
-  # User-assigned MI attached to the confidential ACI build agent.
-  # Fill this in once an MI is attached to the agents (see project README).
-  miClientId:     'REPLACE_WITH_MI_CLIENT_ID'
+  # User-assigned MI attached to the confidential ACI build agent
+  # (sgall-caci-pipeline-mi: AcrPush on the ACR + Contributor on the RG).
+  miClientId:     'e6bfbc53-a576-4ef1-ac3f-11fef3520a77'
   imageName:      'hello-world'
   imageTag:       '$(Build.BuildId)'
   sourceDir:      'app'
