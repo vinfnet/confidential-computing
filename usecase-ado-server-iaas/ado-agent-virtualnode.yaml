@@ -15,13 +15,19 @@
 # ----------
 #   annotations:
 #     virtual-kubelet.io/confidential-compute-cce-policy
-#       Base64-encoded Rego CCE policy. This is the annotation key the
-#       azure-aci virtual-kubelet provider reads to set SKU=Confidential and
-#       attach the CCE policy (see setConfidentialComputeProperties). The
-#       value baked in here by the script
-#       is either:
+#       Base64-encoded Rego CCE policy. This is the annotation key the deployed
+#       azure-aci virtual-kubelet provider actually READS (see aci.go:
+#       confidentialComputeCcePolicyLabel). NOTE the mismatch: the
+#       `az confcom acipolicygen --virtual-node-yaml` tool WRITES its generated
+#       policy to a DIFFERENT key, `microsoft.containerinstance.virtualnode.ccepolicy`.
+#       Build-AksVirtualNodesAdoAgent.ps1 therefore runs confcom and then copies
+#       the generated value into the vk.io key below before applying, so the
+#       policy lands where the provider reads it. If the vk.io key is left empty
+#       the provider falls back to a permissive default allow-all policy and
+#       `az container exec` (a terminal into the runner) succeeds. The value
+#       baked in here by the script is either:
 #         * a restrictive, image-bound policy generated with (DEFAULT):
-#             az confcom acipolicygen --virtual-node-yaml <this-file>
+#             az confcom acipolicygen --virtual-node-yaml <this-file> --disable-stdio
 #           This pins the image digest + per-layer hashes and has no
 #           exec_processes / allow_stdio_access, so `az container exec`
 #           (a terminal into the runner) is refused, or
@@ -76,15 +82,24 @@ spec:
       annotations:
         # -------------------------------------------------------------------
         # CCE policy (REQUIRED for confidential ACI on virtual nodes).
-        # The azure-aci virtual-kubelet provider reads these two annotations:
-        #   virtual-kubelet.io/container-sku                    -> "confidential"
-        #   virtual-kubelet.io/confidential-compute-cce-policy  -> base64 Rego
-        # When the cce-policy annotation is present the provider sets the
-        # backing container group SKU to Confidential and attaches the policy.
-        # The script deploys a generated, image-bound restrictive policy by
-        # default (-PolicyMode generated) and verifies the LIVE policy blocks
-        # exec/stdio after rollout. To (re)generate by hand:
-        #   az confcom acipolicygen --virtual-node-yaml <this-file>
+        # The azure-aci virtual-kubelet provider reads:
+        #   virtual-kubelet.io/container-sku                     -> "confidential"
+        #   virtual-kubelet.io/confidential-compute-cce-policy   -> base64 Rego
+        # IMPORTANT: `az confcom acipolicygen --virtual-node-yaml` writes its
+        # generated policy to a DIFFERENT key
+        # (microsoft.containerinstance.virtualnode.ccepolicy), so the deploy
+        # script runs confcom and then copies that value into the vk.io key
+        # below (the one the provider reads) before applying. When the vk.io
+        # key is populated the provider sets the backing container group SKU to
+        # Confidential and enforces the policy; if it is left empty the provider
+        # falls back to a permissive allow-all default and a terminal can be
+        # opened into the runner. The script deploys a generated, image-bound
+        # restrictive policy by default (-PolicyMode generated), forces pod
+        # recreation so a fresh container group is launched under the new
+        # policy, and verifies the LIVE policy blocks exec/stdio after rollout.
+        # To (re)generate by hand, run the confcom command below then copy the
+        # microsoft.* value into virtual-kubelet.io/confidential-compute-cce-policy:
+        #   az confcom acipolicygen --virtual-node-yaml <this-file> --disable-stdio
         # -------------------------------------------------------------------
         virtual-kubelet.io/container-sku: "confidential"
         virtual-kubelet.io/confidential-compute-cce-policy: "__CCE_POLICY__"

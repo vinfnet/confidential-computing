@@ -608,7 +608,7 @@ $deploymentName = "ado-confidential-agent-$runnerSetSafe"
 
 if ($PolicyMode -eq "none") {
     # Remove the ccepolicy annotation line entirely -> standard ACI on virtual node.
-    $manifest = ($manifest -split "`n" | Where-Object { $_ -notmatch "microsoft\.containerinstance\.virtualnode\.ccepolicy" }) -join "`n"
+    $manifest = ($manifest -split "`n" | Where-Object { $_ -notmatch "virtual-kubelet\.io/confidential-compute-cce-policy" }) -join "`n"
 } else {
     $manifest = $manifest.Replace("__CCE_POLICY__", $ccePolicy)
 }
@@ -617,13 +617,46 @@ $manifestOut = Join-Path $env:TEMP ("ado-agent-vnode-" + [Guid]::NewGuid().ToStr
 Set-Content -Path $manifestOut -Value $manifest -Encoding utf8
 
 if ($PolicyMode -eq "generated") {
-    Write-Host "Generating restrictive CCE policy with confcom..." -ForegroundColor DarkGray
-    Invoke-AzCli "az confcom acipolicygen --virtual-node-yaml `"$manifestOut`" -y"
+    Write-Host "Generating restrictive CCE policy with confcom (stdio disabled)..." -ForegroundColor DarkGray
+    # --disable-stdio drops allow_stdio_access to false in the generated policy;
+    # without it confcom warns "Using default stdio setting (Enabled)" and the
+    # runner's console can be streamed off the TEE.
+    Invoke-AzCli "az confcom acipolicygen --virtual-node-yaml `"$manifestOut`" -y --disable-stdio"
+
+    # ANNOTATION-KEY BRIDGE (critical): `az confcom acipolicygen --virtual-node-yaml`
+    # writes the generated policy to `microsoft.containerinstance.virtualnode.ccepolicy`,
+    # but the deployed OSS azure-aci virtual-kubelet provider READS it from
+    # `virtual-kubelet.io/confidential-compute-cce-policy` (see aci.go:
+    # confidentialComputeCcePolicyLabel). If we do not copy the value across, the
+    # provider finds the vk.io key empty and silently applies its permissive
+    # DEFAULT allow-all policy -> a terminal can be opened into the runner. Copy
+    # confcom's generated base64 into the vk.io key the provider actually reads.
+    $genManifest = Get-Content -Path $manifestOut -Raw
+    $genMatch = [regex]::Match($genManifest, 'microsoft\.containerinstance\.virtualnode\.ccepolicy:\s*(?<p>[A-Za-z0-9+/=]+)')
+    if (-not $genMatch.Success) {
+        throw "confcom did not populate 'microsoft.containerinstance.virtualnode.ccepolicy' on the manifest; cannot bridge the CCE policy to the key the provider reads."
+    }
+    $genPolicy = $genMatch.Groups['p'].Value
+    $genManifest = [regex]::Replace(
+        $genManifest,
+        'virtual-kubelet\.io/confidential-compute-cce-policy:.*',
+        "virtual-kubelet.io/confidential-compute-cce-policy: $genPolicy")
+    Set-Content -Path $manifestOut -Value $genManifest -Encoding utf8
 }
 
 try {
     kubectl apply -f $manifestOut
     if ($LASTEXITCODE -ne 0) { throw "Failed to apply the agent Deployment manifest." }
+
+    # The CCE policy is bound to the backing container group at LAUNCH time, so a
+    # pod that already exists keeps whatever policy it started with even after the
+    # annotation changes. Force a fresh rollout so each replica is recreated as a
+    # NEW confidential ACI group under the policy we just applied. Without this,
+    # `kubectl apply` reports "unchanged" on reruns and the stale (possibly
+    # allow-all) container groups persist.
+    if ($PolicyMode -ne "none") {
+        kubectl rollout restart deployment/$deploymentName -n $namespace | Out-Null
+    }
 
     Write-Host "Waiting for the agent pods to roll out (confidential ACI cold start can take several minutes)..." -ForegroundColor DarkGray
     kubectl rollout status deployment/$deploymentName -n $namespace --timeout=1200s
