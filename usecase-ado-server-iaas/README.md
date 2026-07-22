@@ -490,11 +490,21 @@ host the virtual node.
   -PolicyMode generated
 ```
 
-- **Use `-PolicyMode generated`** on current confidential UVMs. It runs
-  `az confcom acipolicygen --virtual-node-yaml` to produce a restrictive,
-  image-bound CCE policy. The `debug-allow-all` shortcut is rejected at runtime
-  (the UVM needs explicit `mount_device` / `mount_overlay` rules), so the pods
-  stay `Pending` and the ACI provisioning fails.
+- **`-PolicyMode generated` is the default** on current confidential UVMs. It
+  runs `az confcom acipolicygen --virtual-node-yaml` to produce a restrictive,
+  image-bound CCE policy — the same hardening basis as the
+  [`aci-samples/sealed-container`](../aci-samples/sealed-container/README.md)
+  demo (pinned image digest + per-layer dm-verity hashes, no `exec_processes`,
+  no stdio). The `debug-allow-all` shortcut is opt-in for plumbing validation
+  only: it runs the pod as confidential ACI but **does not block `exec`/stdio**,
+  so never trust a `debug-allow-all` runner with secrets.
+- **The script verifies the live policy after rollout.** Once the agents are
+  running it reads `confidentialComputeProperties.ccePolicy` back off each
+  backing container group and, in `generated` mode, **fails the deployment if
+  the policy is permissive** (allow-all, `exec_external` allowed, `allow_stdio_access:true`,
+  or a tiny stub with no layer hashes). This gate exists because a Confidential
+  SKU alone does not guarantee enforcement — a debug policy still lets an
+  operator open a terminal in the runner.
 - `acipolicygen` hashes the image through the **local Docker daemon**, so run
   `az acr login --name <acr-name>` and `docker pull <image>` **first** — otherwise
   the policy step fails with a registry `401` while "Pulling and hashing images".
@@ -503,6 +513,25 @@ host the virtual node.
 
 The runners self-register into the same pool and appear identically in Step 8 and
 in the ADO web UI (as `SandboxHost-*` agents).
+
+**Prove that terminal access is blocked.** Under `-PolicyMode generated` the CCE
+policy has no `exec_processes` entry, so the ACI control plane refuses any exec
+request — the same check the sealed-container demo performs:
+
+```powershell
+$nodeRg = "MC_<rg>_<aks-name>_<location>"           # AKS node resource group
+$cg = az container list -g $nodeRg --query "[0].name" -o tsv
+az container exec -g $nodeRg -n $cg --exec-command /bin/sh
+# ^ Expect a refusal. If a shell opens, the runner is on a debug/allow-all
+#   policy and must NOT be trusted with secrets — redeploy with -PolicyMode generated.
+
+# Inspect the live policy directly (a real policy is many KB with layer hashes;
+# a ~700-byte policy containing 'allow_all := true' or 'exec_external ... allowed:true'
+# is the permissive debug stub):
+az container show -g $nodeRg -n $cg --query confidentialComputeProperties.ccePolicy -o tsv |
+  ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) }
+```
+
 
 #### Confidential Enforcement (CCE) policy — protecting artifacts while they are built
 

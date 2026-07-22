@@ -49,11 +49,17 @@ Personal Access Token for unattended agent registration. Falls back to the
 AZP_TOKEN environment variable.
 
 .PARAMETER PolicyMode
-'debug-allow-all' (default) bakes the allow-all DEBUG CCE policy so the runners
-start quickly as confidential ACI while you validate the plumbing.
-'generated' runs `az confcom acipolicygen --virtual-node-yaml` to produce a
-restrictive, image-bound policy. 'none' omits the annotation (standard ACI,
-useful only for isolating network/registration issues).
+'generated' (default) runs `az confcom acipolicygen --virtual-node-yaml` to
+produce a restrictive, image-bound CCE policy — same hardening basis as the
+aci-samples/sealed-container demo. The generated policy pins the image digest +
+per-layer dm-verity hashes and carries NO exec_processes / allow_stdio_access,
+so `az container exec` (terminal access) into the runner is refused by the ACI
+control plane. After deploy the script re-reads the LIVE policy off each backing
+container group and FAILS if it is permissive.
+'debug-allow-all' bakes the allow-all DEBUG CCE policy so the runners start
+quickly as confidential ACI while you validate the plumbing — it does NOT block
+exec and must never be trusted with secrets. 'none' omits the annotation
+(standard ACI, useful only for isolating network/registration issues).
 
 .PARAMETER SkipImageBuild
 Reuse an existing agent image in the registry instead of rebuilding it.
@@ -141,7 +147,7 @@ param(
 
     [Parameter(Mandatory = $false)]
     [ValidateSet("debug-allow-all", "generated", "none")]
-    [string]$PolicyMode = "debug-allow-all",
+    [string]$PolicyMode = "generated",
 
     [Parameter(Mandatory = $false)]
     [switch]$SkipImageBuild,
@@ -240,6 +246,43 @@ function Wait-ForVirtualNode {
     throw "Timed out waiting for the virtual node to become Ready in Kubernetes."
 }
 
+function Test-CcePolicyRestrictive {
+    # Classifies a base64-encoded CCE (Rego) policy as restrictive or permissive.
+    # A restrictive, image-bound policy (as produced by `az confcom acipolicygen`)
+    # is many KB, pins per-layer dm-verity hashes, and has NO exec_processes /
+    # allow_stdio_access -> `az container exec` is refused. A permissive/allow-all
+    # policy (allow_all := true, or exec_external/create_container allowed:true
+    # with allow_stdio_access:true) lets an operator open a terminal in the
+    # container, defeating the confidential guarantee.
+    param([string]$Base64Policy)
+
+    if ([string]::IsNullOrWhiteSpace($Base64Policy)) {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = 0; Reason = "no CCE policy attached to the container group" }
+    }
+    try { $bytes = [Convert]::FromBase64String($Base64Policy) }
+    catch { return [pscustomobject]@{ Restrictive = $false; Bytes = 0; Reason = "CCE policy is not valid base64" } }
+
+    $rego = [Text.Encoding]::UTF8.GetString($bytes)
+    $len  = $bytes.Length
+
+    if ($rego -match 'allow_all\s*:=\s*true') {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "allow-all policy (allow_all := true) - enforces nothing" }
+    }
+    if ($rego -match 'exec_external[\s\S]{0,200}?allowed[\s\"]*:\s*true') {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "exec_external permits arbitrary exec (terminal access not blocked)" }
+    }
+    if ($rego -match 'allow_stdio_access[\s\"]*:\s*true') {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "allow_stdio_access:true (stdio into the container is permitted)" }
+    }
+    # A genuine image-bound policy carries per-layer dm-verity SHA-256 hashes and
+    # is substantial in size. Anything tiny without layer hashes is a debug stub.
+    $hasLayerHashes = ($rego -match 'layers') -and ($rego -match '[a-f0-9]{64}')
+    if (-not $hasLayerHashes -or $len -lt 2000) {
+        return [pscustomobject]@{ Restrictive = $false; Bytes = $len; Reason = "policy is $len bytes with no per-layer dm-verity hashes - not image-bound (debug stub)" }
+    }
+    return [pscustomobject]@{ Restrictive = $true; Bytes = $len; Reason = "image-bound restrictive policy ($len bytes, per-layer hashes present, no exec/stdio)" }
+}
+
 # --- Preflight -------------------------------------------------------------
 
 if ([string]::IsNullOrWhiteSpace($AzpToken)) {
@@ -305,7 +348,23 @@ if (-not $SkipImageBuild) {
     New-Item -Path $tempRoot -ItemType Directory -Force | Out-Null
 
     $dockerfile = @"
-FROM ubuntu:22.04
+# Self-registering Azure DevOps agent, hardened along the same lines as the
+# aci-samples/sealed-container demo:
+#   * Base image is pulled from the Microsoft Artifact Registry (MCR) mirror,
+#     not Docker Hub. ACR build agents share a public NAT and routinely hit
+#     Docker Hub's unauthenticated pull rate limit; MCR has no such limit and
+#     is a signed mirror of the upstream library images. Override BASE_IMAGE
+#     with a digest-pinned ref (mcr.microsoft.com/.../ubuntu@sha256:...) for a
+#     fully reproducible build.
+#   * setuid/setgid bits are stripped so a restrictive CCE policy has the
+#     smallest possible privileged surface.
+#   * Runs as the unprivileged 'azp' user.
+# The confidential guarantee itself comes from the generated CCE policy
+# (-PolicyMode generated), which pins this image's digest + layer hashes and
+# carries no exec_processes entry, so 'az container exec' into the runner is
+# refused by the ACI control plane.
+ARG BASE_IMAGE=mcr.microsoft.com/mirror/docker/library/ubuntu:22.04
+FROM `${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TARGETARCH=linux-x64
@@ -323,7 +382,8 @@ WORKDIR /azp
 COPY ./start.sh ./start.sh
 RUN chmod +x ./start.sh \
     && useradd --create-home --home-dir /home/azp azp \
-    && chown -R azp /azp
+    && chown -R azp /azp \
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 USER azp
 ENTRYPOINT [ "./start.sh" ]
@@ -611,6 +671,52 @@ if ($PolicyMode -ne "none") {
     }
 }
 
+# --- CCE-policy enforcement gate --------------------------------------------
+# Confidential SKU alone does NOT mean the container is locked down. The live
+# CCE policy has to actually restrict the container: an allow-all / debug policy
+# still permits `az container exec` (a terminal into the runner), defeating the
+# whole point. Read the policy back off each backing container group and, in
+# 'generated' mode, FAIL if any of them is permissive. This is the gate that
+# catches a virtual-node deployment silently shipping the allow-all policy.
+if ($PolicyMode -ne "none") {
+    Write-Step "Validating the live CCE policy blocks exec/stdio"
+    $policyCgs = @()
+    try {
+        $policyCgs = Invoke-AzCli "az container list --resource-group $nodeResourceGroup -o json" | ConvertFrom-Json
+    } catch { }
+    $policyCgs = @($policyCgs | Where-Object { $_.name -like "*$deploymentName*" })
+
+    if ($policyCgs.Count -eq 0) {
+        Write-Host "WARNING: could not map any backing container group to '$deploymentName' to inspect its CCE policy. Verify manually:" -ForegroundColor Yellow
+        Write-Host "  az container list -g $nodeResourceGroup --query `"[].name`" -o tsv" -ForegroundColor Yellow
+        Write-Host "  az container show -g $nodeResourceGroup -n <cg> --query confidentialComputeProperties.ccePolicy -o tsv | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(`$_)) }" -ForegroundColor Yellow
+    } else {
+        $permissive = @()
+        foreach ($cg in $policyCgs) {
+            $livePolicy = ""
+            try {
+                $livePolicy = (Invoke-AzCli "az container show --resource-group $nodeResourceGroup --name $($cg.name) --query confidentialComputeProperties.ccePolicy -o tsv").Trim()
+            } catch { }
+            $verdict = Test-CcePolicyRestrictive -Base64Policy $livePolicy
+            if ($verdict.Restrictive) {
+                Write-Host "  [ok]   $($cg.name): $($verdict.Reason)" -ForegroundColor Green
+            } else {
+                Write-Host "  [WEAK] $($cg.name): $($verdict.Reason)" -ForegroundColor Yellow
+                $permissive += "$($cg.name) [$($verdict.Reason)]"
+            }
+        }
+        if ($permissive.Count -gt 0) {
+            if ($PolicyMode -eq "generated") {
+                throw "CCE-policy enforcement FAILED: the following runners are backed by a permissive policy that does NOT block exec/stdio: $($permissive -join '; '). A terminal can be opened into these containers, so they are NOT confidential in any meaningful sense. Re-run with -PolicyMode generated (and confirm 'az confcom acipolicygen --virtual-node-yaml' populated the annotation with an image-bound policy) before trusting these runners with secrets."
+            } else {
+                Write-Host "NOTE: PolicyMode '$PolicyMode' produced a permissive policy (exec/stdio NOT blocked). This is expected for debug-allow-all. Re-run with -PolicyMode generated before trusting these runners with secrets." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "CCE-policy enforcement passed: all backing container groups carry an image-bound restrictive policy (exec/stdio blocked)." -ForegroundColor Green
+        }
+    }
+}
+
 Write-Step "Deployment summary"
 Write-Host "Resource group:        $ResourceGroupName"
 Write-Host "AKS cluster:           $AksName"
@@ -627,7 +733,8 @@ Write-Host "Inspect the runners:" -ForegroundColor Green
 Write-Host "- Pods on the virtual node:   kubectl get pods -n $namespace -o wide"
 Write-Host "- Backing ACI groups:         az container list --resource-group $nodeResourceGroup -o table"
 Write-Host "- Confirm registration:       az vm run-command invoke -g $ResourceGroupName -n <ado-vm> --command-id RunPowerShellScript --scripts '@usecase-ado-server-iaas/check-ado-agents.ps1' --parameters 'PoolId=<id>' 'Pat=`$env:AZP_TOKEN' --query 'value[0].message' -o tsv"
+Write-Host "- Prove exec is blocked:      az container exec -g $nodeResourceGroup -n <cg> --exec-command /bin/sh   # must be REFUSED under -PolicyMode generated"
 if ($PolicyMode -eq "debug-allow-all") {
     Write-Host ""
-    Write-Host "NOTE: PolicyMode 'debug-allow-all' runs the agents as confidential ACI but does not enforce the image/identity. Re-run with -PolicyMode generated (and -SkipAksCreate -SkipImageBuild) to bind a restrictive CCE policy." -ForegroundColor Yellow
+    Write-Host "NOTE: PolicyMode 'debug-allow-all' runs the agents as confidential ACI but does NOT enforce the image/identity and does NOT block exec/stdio (a terminal can be opened into the runner). Re-run with -PolicyMode generated (and -SkipAksCreate -SkipImageBuild) to bind a restrictive, exec-blocking CCE policy before trusting these runners with secrets." -ForegroundColor Yellow
 }
