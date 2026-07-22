@@ -102,6 +102,14 @@ Optional parameters:
 - `-Location <region>` (default `eastus`)
 - `-SubscriptionId <subscription-id>`
 - `-SkipBrowser`
+- `-PrivateNetworking` — provisions a VNet, NAT gateway, storage private endpoints, and private DNS zones, then VNet-injects the confidential container so it reaches storage over private endpoints. **Required in tenants that block public network access to storage accounts** (e.g. an Azure Policy that forces `publicNetworkAccess=Disabled`). Without it, the app fails at runtime with `AuthorizationFailure` on Blob/Table/Queue.
+- `-PublicFrontend` — adds a public Application Gateway in front of the (private) container so it is reachable from a browser. Only meaningful together with `-PrivateNetworking`. The script also adds the required inbound NSG rule for the App Gateway subnet.
+
+To deploy in a tenant with a storage public-access policy and a browser-reachable frontend:
+
+```powershell
+.\Deploy-ClientSideEncryption.ps1 -Prefix sgall -SecretString "my first secret" -PrivateNetworking -PublicFrontend
+```
 
 ## End-to-end flow
 

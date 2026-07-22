@@ -479,6 +479,22 @@ BEGIN
 END
 GO
 "@
+
+    # Seed initial citizen records from seed-data.sql (only when the table is empty,
+    # so re-runs are idempotent and never duplicate rows).
+    $seedFile = Join-Path $appDir "seed-data.sql"
+    if (Test-Path $seedFile) {
+        $seedInserts = (Get-Content -Path $seedFile -Raw) -replace "`r", ""
+        $initSql += @"
+
+IF NOT EXISTS (SELECT 1 FROM dbo.citizen_registry)
+BEGIN
+$seedInserts
+END
+GO
+"@
+    }
+
     Set-Content -Path $initSqlPath -Value $initSql -Encoding UTF8
 
     $initSqlEscaped = (Get-Content -Path $initSqlPath -Raw) -replace "`r", ""
