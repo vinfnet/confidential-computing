@@ -7,6 +7,27 @@ only over a private VNet through Azure Bastion, plus **confidential Azure Contai
 Both the server *and* the build agents run inside AMD SEV-SNP confidential hardware, and no
 component is exposed to the public internet.
 
+## Contents
+
+- [Why this pattern matters](#why-this-pattern-matters)
+- [Architecture](#architecture)
+  - [How data is protected — at rest, in transit, and in use](#how-data-is-protected--at-rest-in-transit-and-in-use)
+- [Prerequisites](#prerequisites)
+- [End-to-end installation](#end-to-end-installation)
+  - [Step 1 — Deploy the Confidential VM and network](#step-1--deploy-the-confidential-vm-and-network)
+  - [Step 2 — Connect to the CVM over Bastion (RDP)](#step-2--connect-to-the-cvm-over-bastion-rdp)
+  - [Step 3 — Install Azure DevOps Server manually (simplest path)](#step-3--install-azure-devops-server-manually-simplest-path)
+  - [Step 4 — Enable HTTPS on the ADO Server](#step-4--enable-https-on-the-ado-server)
+  - [Step 5 — Create a Personal Access Token (PAT)](#step-5--create-a-personal-access-token-pat)
+  - [Step 6 — Create the confidential build agent pool](#step-6--create-the-confidential-build-agent-pool)
+  - [Step 7 — Build and deploy the confidential ACI agents](#step-7--build-and-deploy-the-confidential-aci-agents)
+  - [Step 8 — Verify the agents registered](#step-8--verify-the-agents-registered)
+- [Personas (two-session model)](#personas-two-session-model)
+- [Onboarding a developer (edit → push → redeploy)](#onboarding-a-developer-edit--push--redeploy)
+- [Connecting via Bastion](#connecting-via-bastion)
+- [Repository layout](#repository-layout)
+- [Cleanup](#cleanup)
+
 ## Why this pattern matters
 
 Azure already encrypts data at rest and in transit, and Azure Confidential Computing (ACC)
@@ -687,6 +708,97 @@ watch the same agents come online in the browser:
 > [Option B](#option-b--reach-the-ado-web-ui--rest-api-from-your-browser-tunnel)).
 > To manage the pool from inside the VM instead, open
 > `https://localhost/_settings/agentpools` in the CVM's browser over RDP.
+
+---
+
+## Personas (two-session model)
+
+This sample is designed around **two distinct roles**, each typically working in
+its **own VS Code window / terminal session**. Keeping them separate mirrors a
+real organisation and makes the trust boundary explicit: the platform owner
+controls the confidential infrastructure and the pipeline contract, while the
+developer only ever touches application code.
+
+| | Platform / infrastructure owner | Application developer |
+| --- | --- | --- |
+| **Owns** | The Azure DevOps Server (on a Confidential VM), the container registry, the managed identity, the confidential build pool + ACI agents, Bastion, and the **pipeline definition** (`azure-pipelines.yml`) | The **application source code** and its unit/integration tests |
+| **Responsibilities** | Stand up and maintain the confidential back end; define and guard the pipeline stages and security gates (confidential SKU enforced, CCE policy generated, smoke test, live SEV-SNP attestation) | Clone the repo, edit the app, and `git push` to `main` — which triggers the pipeline the platform owner owns |
+| **Access** | Full Azure control-plane + ADO administration | Git-over-Bastion tunnel only (no ADO web UI, no Azure control plane) |
+| **VS Code session** | This one — infra and pipeline management | A separate window — application inner loop |
+
+**Where do pipeline test cases go?** The `azure-pipelines.yml` lives in the app
+repo, so any change is committed and pushed there. But *ownership* is split by
+intent: **deployment / infrastructure gates** (e.g. "the deployed ACI is a
+Confidential SKU" or "the app returns a valid `sevsnpvm` attestation token") are
+authored by the **platform owner**; **application behaviour tests** (unit,
+integration, HTTP contract) are authored by the **developer**. Both land in the
+same pipeline file but represent different concerns.
+
+## Onboarding a developer (edit → push → redeploy)
+
+Once the platform is up and a pipeline exists (see the samples under
+[`pipelines/`](pipelines/)), a developer can iterate on the app **without ever
+opening the Azure DevOps web UI**. Because the ADO Server has **no public IP**,
+they reach its git endpoint through an **Azure Bastion tunnel** that forwards a
+local port to the server's HTTPS port; after cloning, an ordinary `git push` to
+`main` triggers the pipeline and redeploys onto the confidential agents.
+
+Hand the developer the following. Replace the placeholders with the values from
+your deployment (`<subscription-id>`, `<resource-group>`, `<vm-name>`,
+`<vnet-name>`, `<collection>` (default `DefaultCollection`), `<project>`,
+`<repo>`).
+
+**Prerequisites for the developer**
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with the Bastion extension (`az extension add --name bastion`) and `git`.
+- `az login` access to the subscription hosting the ADO Server VM.
+- An ADO **Personal Access Token (PAT)** on that server with **Code (Read & Write)** — you (the operator) generate it and hand it over securely.
+
+**1. Open the Bastion tunnel** (leave running in its own terminal — forwards `localhost:8443` → server `:443`):
+
+```powershell
+$vmId = az vm show -g <resource-group> -n <vm-name> --query id -o tsv
+az network bastion tunnel `
+  --name <vnet-name>-bastion --resource-group <resource-group> `
+  --target-resource-id $vmId --resource-port 443 --port 8443
+```
+
+> If `8443` is already in use, a tunnel is already open — reuse it or pick another local port and adjust the URLs below.
+
+**2. Provide the PAT** (kept out of shell history):
+
+```powershell
+$env:AZP_TOKEN = Read-Host "ADO PAT" -AsSecureString | ConvertFrom-SecureString -AsPlainText
+```
+
+**3. Clone through the tunnel.** The tunnel presents the server's self-signed cert, so disable TLS verification for this repo only:
+
+```powershell
+$remote = "https://user:$env:AZP_TOKEN@localhost:8443/<collection>/<project>/_git/<repo>"
+git -c http.sslVerify=false clone $remote
+cd <repo>
+git config http.sslVerify false      # persist per-repo so plain git push works
+git config user.name  "<name>"
+git config user.email "<email>"
+```
+
+The origin URL embeds the PAT, so `git pull` / `git push` work with no further prompts.
+
+**4. Edit, push, and watch it redeploy.** Work in a **separate VS Code window** from the one managing the Azure/ADO infrastructure:
+
+```powershell
+git add -A; git commit -m "your change"; git push   # triggers the pipeline
+```
+
+Every push to `main` runs on the `confidential-build-pool` (build → confidential
+deploy → smoke test). The build agents authenticate with a **managed identity**
+(no service connection or secrets in the pipeline); the tunnel is only needed for
+git. The developer can confirm the result without the ADO UI:
+
+```powershell
+az container list -g <resource-group> `
+  --query "[?starts_with(name,'cc-attest')].{name:name, state:instanceView.state, fqdn:ipAddress.fqdn}" -o table
+```
 
 ---
 
