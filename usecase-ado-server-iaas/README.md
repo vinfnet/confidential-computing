@@ -68,9 +68,11 @@ overhead of running it yourself.
 ## Architecture
 
 ```
-        Your workstation
-              │  (Azure CLI + Bastion tunnel — no public IP on the server)
-              ▼
+   Platform / infra owner            Application developer
+   (this VS Code session)            (separate VS Code session)
+        │ manage infra + pipeline         │ git push (app code)
+        │ Azure CLI + Bastion             │ over Bastion tunnel
+        ▼                                 ▼
    ┌───────────────────────────────────────────────┐
    │  VNet  <name>vnet  (10.0.0.0/16)               │
    │                                                │
@@ -79,13 +81,19 @@ overhead of running it yourself.
    │   default subnet                               │
    │     └─ ADO Server CVM  (10.0.0.4, no PIP)      │
    │          IIS "Azure DevOps Server", HTTPS 443  │
+   │          repo + pipeline definition            │
    │                                                │
    │   aci-agents-subnet (10.0.1.0/24, delegated)   │
-   │     ├─ Confidential ACI agent 1 ──┐            │
-   │     └─ Confidential ACI agent 2 ──┤ self-      │
-   │                                   │ register   │
-   │            NAT gateway (egress) ──┘ via HTTPS  │
+   │     ├─ Confidential ACI build agent 1 ─┐       │
+   │     └─ Confidential ACI build agent 2 ─┤ self- │
+   │                                        │ reg.  │
+   │            NAT gateway (egress) ───────┘ HTTPS │
    └───────────────────────────────────────────────┘
+        │ pipeline: az acr build          │ pipeline: deploy
+        ▼                                 ▼
+   ACR <acr-name>                    Confidential app ACI
+   (agent MI has AcrPush)            cc-attest-conf-*  (SEV-SNP)
+                                     http://<dns>.<region>.azurecontainer.io
 ```
 
 The same topology as a rendered diagram — everything stays inside the VNet, and only
@@ -93,7 +101,8 @@ outbound HTTPS leaves through the NAT gateway:
 
 ```mermaid
 flowchart TB
-    ws["Your workstation<br/>(Azure CLI + Bastion tunnel)"]
+    owner["Platform / infra owner<br/>(this VS Code session)<br/>Azure CLI + Bastion"]
+    dev["Application developer<br/>(separate VS Code session)<br/>git push over Bastion tunnel"]
 
     subgraph vnet["VNet &lt;name&gt;vnet — 10.0.0.0/16"]
         direction TB
@@ -101,27 +110,40 @@ flowchart TB
             bastion["Azure Bastion<br/>(Standard, tunneling)"]
         end
         subgraph dsub["default subnet"]
-            cvm["ADO Server CVM<br/>10.0.0.4 · no public IP<br/>AMD SEV-SNP TEE<br/>IIS · HTTPS 443"]
+            cvm["ADO Server CVM<br/>10.0.0.4 · no public IP<br/>AMD SEV-SNP TEE<br/>repo + pipeline · HTTPS 443"]
             kv["Key Vault<br/>(PAT + CMK)"]
         end
         subgraph asub["aci-agents-subnet — 10.0.1.0/24 (delegated)"]
-            a1["Confidential ACI agent 1<br/>AMD SEV-SNP TEE"]
-            a2["Confidential ACI agent 2<br/>AMD SEV-SNP TEE"]
+            a1["Confidential ACI build agent 1<br/>AMD SEV-SNP TEE"]
+            a2["Confidential ACI build agent 2<br/>AMD SEV-SNP TEE"]
         end
         nat["NAT gateway<br/>(outbound only)"]
     end
 
-    ws -->|"RDP / tunnel over Bastion"| bastion
+    acr["Azure Container Registry<br/>&lt;acr-name&gt;"]
+    app["Confidential app ACI<br/>cc-attest-conf-* · AMD SEV-SNP TEE<br/>public FQDN"]
+
+    owner -->|"manage infra + pipeline · tunnel over Bastion"| bastion
+    dev -->|"git push to main · tunnel over Bastion"| bastion
     bastion --> cvm
+    cvm -->|"trigger pipeline"| a1
+    cvm -->|"trigger pipeline"| a2
     a1 -->|"self-register · HTTPS 443"| cvm
     a2 -->|"self-register · HTTPS 443"| cvm
     a1 -.->|"fetch PAT via managed identity"| kv
     a2 -.->|"fetch PAT via managed identity"| kv
+    a1 -->|"az acr build · push image"| acr
+    acr -->|"image pull"| app
+    a1 -->|"generate CCE policy · deploy"| app
     a1 --> nat
     a2 --> nat
 
     classDef tee fill:#e8f0fe,stroke:#1a56db,stroke-width:1px;
-    class cvm,a1,a2 tee;
+    class cvm,a1,a2,app tee;
+    classDef ownercls fill:#fce8e6,stroke:#c5221f,stroke-width:1px;
+    classDef devcls fill:#fef7e0,stroke:#f9ab00,stroke-width:1px;
+    class owner ownercls;
+    class dev devcls;
 ```
 
 > **Hybrid option — keep the ADO Server on-premises.** This sample runs the Azure
@@ -193,21 +215,35 @@ CVM** (through `az vm run-command` or an RDP session):
 
 ```mermaid
 flowchart TD
-    s1["Step 1 · Deploy CVM + network<br/>Build-AdoServerCvm.ps1"]
-    s2["Step 2 · Connect over Bastion (RDP)"]
-    s3["Step 3 · Install ADO Server (manual GUI)"]
-    s4["Step 4 · Enable HTTPS<br/>enable-ado-https.ps1"]
-    s5["Step 5 · Create PAT (Agent Pools: manage)"]
-    s6["Step 6 · Create agent pool<br/>create-ado-pool.ps1"]
-    s7["Step 7 · Build + deploy ACI agents<br/>Build-ConfidentialAciAdoAgent.ps1"]
-    s8["Step 8 · Verify registration<br/>check-ado-agents.ps1"]
+    subgraph setup["Platform / infra owner — one-time setup"]
+        s1["Step 1 · Deploy CVM + network<br/>Build-AdoServerCvm.ps1"]
+        s2["Step 2 · Connect over Bastion (RDP)"]
+        s3["Step 3 · Install ADO Server (manual GUI)"]
+        s4["Step 4 · Enable HTTPS<br/>enable-ado-https.ps1"]
+        s5["Step 5 · Create PAT (Agent Pools: manage)"]
+        s6["Step 6 · Create agent pool<br/>create-ado-pool.ps1"]
+        s7["Step 7 · Build + deploy ACI agents<br/>Build-ConfidentialAciAdoAgent.ps1"]
+        s8["Step 8 · Verify registration<br/>check-ado-agents.ps1"]
+        s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8
+    end
 
-    s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8
+    subgraph loop["Application developer — inner loop"]
+        d1["Clone repo over Bastion tunnel"]
+        d2["Edit app · git push to main"]
+        d3["Pipeline: az acr build (server-side)"]
+        d4["Generate CCE policy · deploy confidential ACI"]
+        d5["Smoke test (HTTP 200) · hostname surfaced"]
+        d1 --> d2 --> d3 --> d4 --> d5
+    end
+
+    s8 ==>|"platform ready"| d1
 
     classDef ws fill:#e8f0fe,stroke:#1a56db,stroke-width:1px;
     classDef vm fill:#e6f4ea,stroke:#137333,stroke-width:1px;
+    classDef dev fill:#fef7e0,stroke:#f9ab00,stroke-width:1px;
     class s1,s7 ws;
     class s3,s4,s6,s8 vm;
+    class d1,d2,d3,d4,d5 dev;
 ```
 
 ### Step 1 — Deploy the Confidential VM and network
