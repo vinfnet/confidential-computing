@@ -388,3 +388,8 @@ sov-examples/citizen-registry-app/confcom-params.json
 sov-examples/citizen-registry-app/confcom-params*.json
 sov-examples/citizen-registry-config.json
 sov-examples/deploy.log
+
+# CVM build logs (BuildRandomCVM.ps1 / deploy logs may contain VM admin passwords)
+cvm-build*.txt
+cvm-build*.log
+*-cvm-build*.txt

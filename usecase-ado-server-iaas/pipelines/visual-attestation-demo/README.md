@@ -29,6 +29,15 @@ ACI container group. Pick the SKU at queue time with the **`aciSku`** parameter:
 > Release** example see the sibling
 > [`secretapp-helloworld`](../secretapp-helloworld/README.md).
 
+## Contents
+
+- [What gets created](#what-gets-created)
+- [Flow](#flow)
+- [One-time setup in Azure DevOps](#one-time-setup-in-azure-devops)
+- [Onboarding a developer (edit → push → redeploy)](#onboarding-a-developer-edit--push--redeploy)
+- [Portability — using a registry other than ACR](#portability--using-a-registry-other-than-acr)
+- [Clean up](#clean-up)
+
 ## What gets created
 
 | File | Purpose |
@@ -97,6 +106,73 @@ flowchart LR
    agent pool — open the run → **View** → **Permit**. When it finishes, the
    deploy stage log prints `App URL: http://<dns>.<region>.azurecontainer.io`.
    On the Confidential SKU, click **Attest** in the UI for a live SEV-SNP token.
+
+## Onboarding a developer (edit → push → redeploy)
+
+Once the pipeline exists, a developer never has to touch Azure DevOps in the
+browser. Because the ADO Server has **no public IP**, they reach it through an
+**Azure Bastion tunnel** that forwards a local port to the server's HTTPS
+endpoint; after cloning, an ordinary `git push` to `main` triggers the pipeline
+(`trigger: main`) and redeploys the container automatically.
+
+Hand the developer the following. Replace the placeholders with the values from
+your deployment (`<subscription-id>`, `<rg>`, `<vm-name>`, `<bastion-name>`,
+`<collection>`, `<project>`, `<repo>`).
+
+**Prerequisites for the developer**
+
+- [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) with the Bastion extension (`az extension add --name bastion`) and `git`.
+- `az login` access to the subscription hosting the ADO Server VM.
+- An Azure DevOps **Personal Access Token (PAT)** on that server with **Code (Read & Write)** — you (the operator) generate it and hand it over securely.
+
+**1. Open the Bastion tunnel** (leave running in its own terminal — forwards `localhost:8443` → server `:443`):
+
+```powershell
+$vmId = az vm show -g <rg> -n <vm-name> --query id -o tsv
+az network bastion tunnel `
+  --name <bastion-name> --resource-group <rg> `
+  --target-resource-id $vmId --resource-port 443 --port 8443
+```
+
+> If `8443` is already in use, a tunnel is already open — reuse it or pick another local port and adjust the URLs below.
+
+**2. Provide the PAT** (kept out of shell history):
+
+```powershell
+$env:AZP_TOKEN = Read-Host "ADO PAT" -AsSecureString | ConvertFrom-SecureString -AsPlainText
+```
+
+**3. Clone through the tunnel.** The tunnel presents the server's self-signed cert, so disable TLS verification for this repo only:
+
+```powershell
+$remote = "https://user:$env:AZP_TOKEN@localhost:8443/<collection>/<project>/_git/<repo>"
+git -c http.sslVerify=false clone $remote
+cd <repo>
+git config http.sslVerify false      # persist per-repo so plain git push works
+git config user.name  "<name>"
+git config user.email "<email>"
+```
+
+The origin URL embeds the PAT, so `git pull` / `git push` work with no further prompts.
+
+**4. Edit, push, and watch it redeploy.** Work in a **separate VS Code window** from the one managing the Azure/ADO infrastructure:
+
+```powershell
+git add -A; git commit -m "your change"; git push   # triggers the pipeline
+```
+
+Every push to `main` runs build → confidential deploy → HTTP 200 smoke test on
+the `confidential-build-pool`. The build agents authenticate with a **managed
+identity** (no service connection or secrets in the pipeline); the tunnel is only
+needed for git. The developer can confirm the result without the ADO UI:
+
+```powershell
+az container list -g <rg> `
+  --query "[?starts_with(name,'cc-attest-conf')].{name:name, state:instanceView.state, fqdn:ipAddress.fqdn}" -o table
+```
+
+Browsing to the FQDN and clicking **Attest** returns a live `sevsnpvm` MAA token
+on the Confidential SKU.
 
 ## Portability — using a registry other than ACR
 

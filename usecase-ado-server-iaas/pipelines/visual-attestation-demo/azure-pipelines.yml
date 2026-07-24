@@ -144,6 +144,7 @@ stages:
                   --query "properties.outputs.fqdn.value" -o tsv)
 
                 echo "Deployed. App URL: http://$FQDN"
+                echo "##vso[task.setvariable variable=cgName]$CG_NAME"
                 echo "##vso[task.setvariable variable=appFqdn]$FQDN"
 
           - task: AzureCLI@2
@@ -163,6 +164,27 @@ stages:
                   sleep 5
                 done
                 echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
+
+          - bash: |
+              set -euo pipefail
+              SUMMARY="$(Agent.TempDirectory)/deploy-summary.md"
+              cat > "$SUMMARY" <<EOF
+              ## Deployed container (Standard ACI)
+
+              | | |
+              | --- | --- |
+              | **Container group** | \`$(cgName)\` |
+              | **Hostname (FQDN)** | \`$(appFqdn)\` |
+              | **App URL** | http://$(appFqdn) |
+              EOF
+              echo "##vso[task.uploadsummary]$SUMMARY"
+              echo "=================================================================="
+              echo " Deployed container group : $(cgName)"
+              echo " Container hostname (FQDN): $(appFqdn)"
+              echo " App URL                  : http://$(appFqdn)"
+              echo "=================================================================="
+            displayName: 'Show deployed hostname'
+            condition: succeeded()
 
   # ---------------------------------------------------------------------------
   # CONFIDENTIAL: generate a per-image CCE policy (dockerless - confcom pulls
@@ -255,6 +277,7 @@ stages:
                   --query "properties.outputs.fqdn.value" -o tsv)
 
                 echo "Deployed. App URL: http://$FQDN"
+                echo "##vso[task.setvariable variable=cgName]$CG_NAME"
                 echo "##vso[task.setvariable variable=appFqdn]$FQDN"
 
           - task: AzureCLI@2
@@ -277,3 +300,27 @@ stages:
                   sleep 5
                 done
                 echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; a confidential container group can take a few minutes to boot the UVM."
+
+          - bash: |
+              set -euo pipefail
+              SUMMARY="$(Agent.TempDirectory)/deploy-summary.md"
+              cat > "$SUMMARY" <<EOF
+              ## Deployed container (Confidential ACI — SEV-SNP)
+
+              | | |
+              | --- | --- |
+              | **Container group** | \`$(cgName)\` |
+              | **Hostname (FQDN)** | \`$(appFqdn)\` |
+              | **App URL** | http://$(appFqdn) |
+
+              Open the App URL and click **Attest** for a live SEV-SNP token.
+              EOF
+              echo "##vso[task.uploadsummary]$SUMMARY"
+              echo "=================================================================="
+              echo " Deployed container group : $(cgName)"
+              echo " Container hostname (FQDN): $(appFqdn)"
+              echo " App URL                  : http://$(appFqdn)"
+              echo " Click 'Attest' in the UI for a live SEV-SNP token."
+              echo "=================================================================="
+            displayName: 'Show deployed hostname'
+            condition: succeeded()
