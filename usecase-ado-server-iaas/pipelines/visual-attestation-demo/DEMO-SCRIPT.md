@@ -1,132 +1,143 @@
-# 3‑Minute Demo Script — "You can't deploy this to the wrong hardware"
+# 3‑Minute Demo Script — Contoso ships to the cloud, and keeps its IP
 
-A narration guide for the Visual Attestation demo. It shows a CI/CD pipeline in
-which an application **cannot** obtain the secrets it needs unless it proves —
-via AMD SEV‑SNP attestation — that it is running on genuine confidential
-hardware. Deploy it to ordinary infrastructure and it is inert.
+**The story:** Contoso wants its developers to ship application changes to the
+cloud continuously — but Contoso must keep **full control of its intellectual
+property**, end to end. Their source, their build system, and their running
+workloads must never leave a boundary they own and can prove.
 
-**Format:** the left column is what you *do* on screen; the right column is what
-you *say*. Total spoken time ≈ 3:00. The spoken lines are written to be read
-aloud verbatim.
-
-> **Before you start:** deploy **both** apps (Standard and Confidential) ahead of
-> time and narrate against finished results, so nothing hangs on a live build.
-> The single most important sentence to land is at **[2:20]**: *no token → no
-> key → the app is inert.* That is the "prevents deployment to non‑confidential
-> infrastructure" claim.
+This demo shows how they do it: a **private Azure DevOps Server** (no public
+internet exposure) drives a pipeline that builds and deploys onto **confidential
+computing** hardware — and the workload simply **won't run** anywhere that can't
+prove it's genuine confidential infrastructure.
 
 ---
 
-## [0:00–0:25] — The problem
+## How to read this script
 
-**On screen:** Title slide, or the Azure DevOps project home.
-
-> "Confidential computing only protects your data if your workload actually lands
-> on confidential hardware. So the real question isn't *'can I run this in a
-> TEE?'* — it's *'what stops someone from accidentally, or deliberately,
-> deploying it to ordinary infrastructure instead?'* This demo shows a CI/CD
-> pipeline where that mistake is **impossible** — the app simply can't get the
-> secrets it needs unless it proves it's running inside a genuine AMD SEV‑SNP
-> enclave."
+- **DO** = what you show on screen.
+- **SAY** = read aloud, word for word.
+- Total spoken time ≈ **3 minutes**.
+- **Set up first:** deploy both versions (Standard and Confidential) *before*
+  you present, so you narrate against finished results and nothing hangs on a
+  live build.
 
 ---
 
-## [0:25–0:55] — The setup
+## 1. The problem — 0:00 to 0:30
 
-**On screen:** Open `azure-pipelines.yml`; point at the `aciSku` parameter and
-the `confidential-build-pool`.
+**DO:** Title slide, or the Contoso Azure DevOps project home page.
 
-> "Everything here runs inside a self‑hosted Azure DevOps Server — no public IP —
-> on **confidential build agents** that are themselves running in enclaves. A
-> developer just does a `git push`. The pipeline builds the container
-> server‑side with `az acr build`, then deploys it to Azure Container Instances.
-> Notice this one parameter: **SKU** — Standard, or Confidential. That's the
-> toggle we're going to test."
-
----
-
-## [0:55–1:35] — The wrong hardware (Standard deploy)
-
-**On screen:** Queue the pipeline with `aciSku = Standard`. Open the resulting
-App URL. Click **Attest**.
-
-> "First, let's deploy to **Standard** ACI — ordinary, non‑confidential hardware.
-> The container starts fine, the web UI comes up… but watch what happens when the
-> app tries to attest."
-
-**On screen:** The Attest button returns an error / no token.
-
-> "It fails. There's no `/dev/sev-guest` device, so there's no SEV‑SNP report to
-> produce. The app cannot prove where it's running — and because it can't prove
-> it, Microsoft Azure Attestation will **not** issue it a token. On its own
-> that's just a failed button… but that failed attestation is the hook the whole
-> security model hangs on."
+**SAY:**
+> "Contoso wants to move fast — developers pushing app changes to the cloud every
+> day. But Contoso's code and data *are* the business. They can't hand that IP to
+> a public service they don't control, and they can't risk it running on
+> infrastructure where someone else could see inside.
+>
+> So they need two things at once: **continuous delivery**, and **end‑to‑end
+> control of their IP**. Let's see how they get both."
 
 ---
 
-## [1:35–2:20] — The enforcement (Confidential deploy)
+## 2. The private pipeline — 0:30 to 1:10
 
-**On screen:** Queue again with `aciSku = Confidential`. While it runs, point at
-the `acipolicygen` step in the log.
+**DO:** Show the Azure DevOps Server project, then open `azure-pipelines.yml`.
+Point out the `confidential-build-pool`.
 
-> "Now the same app, same image, deployed to **Confidential** ACI. One extra
-> thing happens at deploy time: `confcom acipolicygen` measures every layer of
-> the image and produces a **CCE policy** — a cryptographic fingerprint of
-> exactly what's allowed to run. That policy is injected into the container group
-> and enforced by the hardware. Change the image, change the policy — no match,
-> no boot."
-
-**On screen:** Open the Confidential app's URL, click **Attest**, show the
-returned JWT claims.
-
-> "And now Attest **succeeds** — here's a live SEV‑SNP token from Azure
-> Attestation, signed by AMD's hardware root of trust, confirming genuine
-> confidential hardware, secure boot, and the exact measurement of this
-> workload."
-
----
-
-## [2:20–2:55] — Why it *prevents* the mistake (the key point)
-
-**On screen:** Show the secure‑key‑release concept — the sibling
-[`secretapp-helloworld`](../secretapp-helloworld/README.md) example, or a Key
-Vault Secure Key Release policy slide.
-
-> "Here's the part that makes it *prevention*, not just a demo. In the real
-> pattern, the app's secrets live in a key vault behind a **Secure Key Release
-> policy** bound to that attestation. The key is released **only** when the token
-> proves a valid enclave with the expected measurement. So deploy to Standard
-> hardware — attestation fails — no token — **no key** — the app is inert.
-> There's no config flag to flip, no reviewer to remember: the *hardware and the
-> key vault* enforce it. You physically cannot run this workload with its data
-> anywhere except confidential infrastructure."
+**SAY:**
+> "Everything you're looking at lives on Contoso's **own** Azure DevOps Server.
+> It has **no public IP** — developers reach it privately. The source never
+> leaves Contoso's network.
+>
+> When a developer pushes a change, this pipeline builds the container and
+> deploys it — and it runs on Contoso's **confidential build agents**, which are
+> themselves running inside secure enclaves. So the code is protected not just at
+> rest, but **while it's being built**.
+>
+> One line to notice: this **SKU** switch — Standard or Confidential. That's the
+> difference between ordinary cloud hardware and confidential hardware. Let's try
+> both and see what happens."
 
 ---
 
-## [2:55–3:00] — Close
+## 3. Ordinary hardware fails — 1:10 to 1:50
 
-**On screen:** Back to title / architecture diagram.
+**DO:** Show the app that was deployed to **Standard** ACI. Open its URL. Click
+**Attest**.
 
-> "Attestation‑gated secrets turn a best‑practice into a guarantee. Wrong
-> hardware, no keys, full stop."
+**SAY:**
+> "First, the ordinary path. Here's the app deployed to **Standard** hardware —
+> regular cloud, no confidential guarantees. It starts, the page loads… now watch
+> when it tries to prove where it's running."
+
+**DO:** The **Attest** button returns an error — no token.
+
+**SAY:**
+> "It can't. On ordinary hardware there's no way to produce a hardware
+> attestation, so Azure Attestation refuses to vouch for it. The app is running,
+> but it **can't prove it's trustworthy** — and that failure is the whole point."
 
 ---
 
-## Narrator notes
+## 4. Confidential hardware succeeds — 1:50 to 2:30
 
-- If you have less than 3 minutes, cut the Standard **build** wait by
-  pre‑running it and just switching tabs to the finished Standard app at
-  **[0:55]**.
-- The most important beat is **[2:20]**: *no token → no key → app is inert.*
-- Have both apps deployed **before** you start; narrate against finished results
-  so nothing hangs on a live build.
+**DO:** Switch to the app deployed to **Confidential** (SEV‑SNP) ACI. Click
+**Attest**, and show the returned token / claims.
 
-## What the audience should take away
+**SAY:**
+> "Now the exact same app, deployed to **Confidential** hardware. During deploy,
+> the pipeline fingerprints the container and locks in a policy for exactly what's
+> allowed to run — so nothing can be swapped in behind Contoso's back.
+>
+> And this time, **Attest succeeds**. Here's a live token, signed by the AMD
+> hardware root of trust, proving genuine confidential hardware running *exactly*
+> this workload. That's Contoso's proof — cryptographic, not a checkbox."
 
-| Deploy target | Attestation | Token from MAA | Secret released | Result |
-| --- | --- | --- | --- | --- |
-| **Standard ACI** (no TEE) | Fails — no `/dev/sev-guest` | No | No | App runs but is **inert** — no data |
-| **Confidential ACI** (SEV‑SNP) | Succeeds — CCE policy enforced | Yes | Yes | App runs **with** its secrets |
+---
 
-The enforcement lives in the **hardware and the key vault**, not in pipeline
-configuration — so deploying to the wrong infrastructure fails safe by design.
+## 5. Why this keeps Contoso in control — 2:30 to 2:55
+
+**DO:** Show the Secure Key Release idea — the sibling
+[`secretapp-helloworld`](../secretapp-helloworld/README.md) example, or a simple
+"key vault → attestation → key" slide.
+
+**SAY:**
+> "Here's what ties it together. Contoso's secrets — the keys to its data — sit in
+> a vault that only releases them **when attestation succeeds**. So on ordinary
+> hardware: no proof, no token, **no key**, and the app is inert. On confidential
+> hardware: proof, token, key — it just works.
+>
+> Nobody has to remember to tick a box. The **hardware** enforces it. Contoso's IP
+> can only ever run where Contoso can prove it's safe."
+
+---
+
+## 6. Close — 2:55 to 3:00
+
+**DO:** Back to the title or an architecture diagram.
+
+**SAY:**
+> "Private pipeline, confidential build, attestation‑gated secrets. Contoso ships
+> every day — and keeps full control of its IP, end to end."
+
+---
+
+## Quick reference — what the audience should remember
+
+| | Standard hardware | Confidential hardware |
+| --- | --- | --- |
+| Can it prove where it runs? | **No** | **Yes** (SEV‑SNP token) |
+| Does it get the keys to the data? | **No** | **Yes** |
+| Result | App is **inert** | App runs **with** its data |
+
+**The one‑liner:** *No proof → no key → nothing runs.* Contoso's IP is protected
+by the hardware itself — from private source, through confidential build, to a
+workload that can only run on infrastructure it trusts.
+
+## Presenter tips
+
+- Tight on time? Skip straight from section 2 to the two finished apps — the
+  Standard failure and the Confidential success are the only two things you must
+  show.
+- The line that lands the message is in section 5: **no token → no key → the app
+  is inert.**
+- Keep both apps deployed and open in tabs beforehand so nothing waits on a build.
