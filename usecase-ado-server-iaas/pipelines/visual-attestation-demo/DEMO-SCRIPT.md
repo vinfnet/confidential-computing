@@ -68,12 +68,20 @@ Point out the `confidential-build-pool`.
 >
 > The token is signed by the AMD hardware root of trust. It confirms the workload
 > is running inside a genuine SEV‑SNP enclave, with secure boot, and it includes a
-> measurement of exactly this container. At deploy time the pipeline fingerprints
-> the image and pins a policy for what's allowed to run, so the thing being
-> measured is the thing Contoso built — it can't be substituted.
+> measurement of exactly this container. At deploy time the pipeline generates an
+> enforcement policy — a CCE policy — directly from the image it just built, and
+> the hardware enforces it at launch.
 >
-> That's the shift: instead of trusting that the environment is right, Contoso has
-> cryptographic evidence of it, on every run."
+> That policy is what makes the report trustworthy end to end. Suppose someone
+> tampered with a build runner, edited a pipeline or deployment config file, added
+> a sidecar, mounted an extra volume, or swapped the image — any of that changes
+> the measurement, so it no longer matches the policy and the enclave won't start,
+> or won't attest to the value Contoso expects. The container that runs can only
+> be the one Contoso built; it can't be substituted or quietly modified.
+>
+> That's the shift: instead of trusting the runners, the config, and the
+> infrastructure operator, Contoso has cryptographic evidence of exactly what's
+> running, on every run."
 
 ---
 
@@ -123,6 +131,7 @@ Point out the `confidential-build-pool`.
 | | Azure confidential computing | Ordinary hardware (baseline) |
 | --- | --- | --- |
 | Evidence of what's running and where | **Hardware‑signed report** (SEV‑SNP, secure boot, image measurement) | None available |
+| Tampering with runners, config, or image | **Detected** — measurement changes, enclave won't launch or attest | Not detectable |
 | Who sets the conditions for unlocking data | **Contoso**, via key‑release policy | — |
 | Result | Verifiable run; keys released against proof | No report, so keys stay sealed |
 
