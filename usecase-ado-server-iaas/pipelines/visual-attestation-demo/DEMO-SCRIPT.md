@@ -49,7 +49,7 @@ Point out the `confidential-build-pool`.
 > developers reach it privately and the source stays inside Contoso's network.
 >
 > When a developer pushes a change, the pipeline builds the container and deploys
-> it. The build itself runs on confidential agents — inside enclaves — so the
+> it. The build itself runs on confidential agents — inside TEEs — so the
 > code is protected while it's being built, not just at rest.
 >
 > The pipeline targets Azure confidential computing. Let's look at the evidence
@@ -67,7 +67,7 @@ Point out the `confidential-build-pool`.
 > produces a hardware‑signed report — here are the claims.
 >
 > The token is signed by the AMD hardware root of trust. It confirms the workload
-> is running inside a genuine SEV‑SNP enclave, with secure boot, and it includes a
+> is running inside a genuine SEV‑SNP TEE, with secure boot, and it includes a
 > measurement of exactly this container. At deploy time the pipeline generates an
 > enforcement policy — a CCE policy — directly from the image it just built, and
 > the hardware enforces it at launch.
@@ -75,7 +75,7 @@ Point out the `confidential-build-pool`.
 > That policy is what makes the report trustworthy end to end. Suppose someone
 > tampered with a build runner, edited a pipeline or deployment config file, added
 > a sidecar, mounted an extra volume, or swapped the image — any of that changes
-> the measurement, so it no longer matches the policy and the enclave won't start,
+> the measurement, so it no longer matches the policy and the TEE won't start,
 > or won't attest to the value Contoso expects. The container that runs can only
 > be the one Contoso built; it can't be substituted or quietly modified.
 >
@@ -131,7 +131,7 @@ Point out the `confidential-build-pool`.
 | | Azure confidential computing | Ordinary hardware (baseline) |
 | --- | --- | --- |
 | Evidence of what's running and where | **Hardware‑signed report** (SEV‑SNP, secure boot, image measurement) | None available |
-| Tampering with runners, config, or image | **Detected** — measurement changes, enclave won't launch or attest | Not detectable |
+| Tampering with runners, config, or image | **Detected** — measurement changes, TEE won't launch or attest | Not detectable |
 | Who sets the conditions for unlocking data | **Contoso**, via key‑release policy | — |
 | Result | Verifiable run; keys released against proof | No report, so keys stay sealed |
 
