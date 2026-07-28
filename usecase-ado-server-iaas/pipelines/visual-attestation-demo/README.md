@@ -37,6 +37,7 @@ ACI container group. Pick the SKU at queue time with the **`aciSku`** parameter:
 - [Onboarding a developer (edit → push → redeploy)](#onboarding-a-developer-edit--push--redeploy)
 - [Portability — using a registry other than ACR](#portability--using-a-registry-other-than-acr)
 - [Clean up](#clean-up)
+- [3‑minute demo script](DEMO-SCRIPT.md) — narration for showing how the pipeline prevents deploying to non‑confidential infrastructure
 
 ## What gets created
 
