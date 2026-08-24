@@ -45,6 +45,7 @@ Deploy Confidential Virtual Machines (CVMs) with AMD SEV-SNP or Intel TDX hardwa
 |--------|-------------|--------|
 | `BuildRandomCVM.ps1` | Deploy CVM with Confidential OS disk encryption + CMK and Bastion | **Stable** |
 | `BuildRandomSQLCVM.ps1` | SQL Server 2022 on Confidential VM | **Stable** |
+| [`private-cvm/`](private-cvm/) | Private CVM, HSM-backed application encryption, identity-and-VMID-bound SKR, and standard-VM negative test | **Demo** |
 
 ---
 
