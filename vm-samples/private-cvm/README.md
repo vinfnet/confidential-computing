@@ -6,6 +6,49 @@ The CVM has no public IP. Azure Key Vault and Blob Storage have public network a
 
 The central idea is that possession of the ciphertext, control of the Azure host, or permission to call Key Vault is not sufficient by itself. Plaintext becomes available only when the customer-selected identity is running inside a hardware-isolated environment that satisfies the customer-selected key release policy. The customer controls the keys, policy, identities, network paths, and revocation actions that define that decision.
 
+## TEE basics
+
+A **Trusted Execution Environment (TEE)** is a hardware-enforced boundary that protects code and data while they are being used. Traditional encryption protects data while it is stored or moving across a network, but an ordinary VM must expose usable plaintext to the host-controlled memory system during processing. A confidential VM changes that boundary: the CPU encrypts guest memory and isolates it from the hypervisor, host operating system, and other VMs.
+
+This sample uses an AMD SEV-SNP confidential VM. At a high level:
+
+| Concept | Meaning in this sample |
+|---|---|
+| Hardware isolation | AMD SEV-SNP gives the CVM its own encrypted memory context, separated from the Azure host and other VMs. |
+| Memory confidentiality | Data written outside the CPU package is encrypted with hardware-managed keys that aren't available to the hypervisor. |
+| Memory integrity | SEV-SNP helps detect unauthorized remapping or modification of protected guest memory by the host. |
+| Trusted boot state | Secure Boot and the virtual TPM record boot state and protect TPM-sealed material. |
+| Attestation | The CPU and vTPM produce signed evidence describing the environment. MAA validates that evidence and issues a signed token. |
+| Relying party | Key Vault acts as the relying party. It releases a key only when identity, TEE claims, and exact VMID satisfy customer policy. |
+
+### Where plaintext exists
+
+Plaintext must exist logically for an application to calculate on it. Inside the TEE, customer-authorized code can read plaintext in CPU registers, caches, and protected guest memory. When memory leaves the CPU's protected boundary, SEV-SNP encrypts it. The hypervisor and host therefore handle encrypted memory pages rather than the customer's usable plaintext.
+
+```mermaid
+flowchart LR
+	stored[Encrypted blob in Storage] -->|Private SFTP| tee
+	key[VMID-bound HSM key] -->|Attestation-gated release| tee
+
+	subgraph tee[AMD SEV-SNP TEE boundary]
+		unwrap[vTPM-bound key unwrap] --> app[Customer-authorized application]
+		app --> memory[Plaintext in protected guest memory]
+	end
+
+	host[Hypervisor and host OS] -.->|Encrypted memory pages only| tee
+	memory -->|Customer-approved result or re-encryption| output[Customer-controlled output]
+```
+
+The application key is wrapped to a TPM-protected ephemeral key contained in the attestation token. It is unwrapped only inside the attested CVM. The application decrypts the protected blob inside SEV-SNP memory, processes it there, and must either return an explicitly approved result to the customer or encrypt data again before it leaves the TEE.
+
+### What the TEE does not mean
+
+- A TEE does not eliminate plaintext inside the authorized computation; it prevents infrastructure outside the TEE from reading that plaintext.
+- A TEE does not protect against malicious or vulnerable code already running inside the guest. Customers must review, patch, and govern the workload and guest administrators.
+- A TEE alone does not protect stored files or network traffic. This sample also uses application encryption, confidential OS disk encryption, TLS/SFTP, and private endpoints.
+- Attestation proves properties represented by signed claims. This sample additionally pins the application key to one Azure VMID and one managed identity; it does not claim that every application binary is independently measured by the release policy.
+- “Visible only to the customer” means visible to customer-approved code and customer-authorized users inside the guest boundary. That code can intentionally disclose plaintext, so its behavior remains part of the trusted computing base.
+
 ## Topology
 
 ```mermaid
