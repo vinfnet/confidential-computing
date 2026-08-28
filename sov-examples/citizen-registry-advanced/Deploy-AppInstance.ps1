@@ -194,11 +194,15 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
 pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn
-openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /etc/citizen-registry/certs/citizen-registry.crt -subj '/CN=citizen-registry'
-cp /etc/citizen-registry/certs/citizen-registry.crt /etc/citizen-registry/certs/client-ca.crt
+openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/CN=citizen-registry-client-ca'
+openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/CN=citizen-registry'
+openssl x509 -req -in /tmp/citizen-registry.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen-registry.crt -days 365 -sha256
+openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen.key -out /tmp/citizen.csr -subj '/CN=citizen-client'
+openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256
+chmod 600 /etc/citizen-registry/certs/*.key
 chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=false\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target
