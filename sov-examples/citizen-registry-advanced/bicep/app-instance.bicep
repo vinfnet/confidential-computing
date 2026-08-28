@@ -62,6 +62,12 @@ param sshPublicKey string
 @description('Base64-encoded cloud-init script for application bootstrap')
 param customData string = ''
 
+@description('Name of the SQL Server Confidential VM')
+param sqlVmName string
+
+@description('Base64-encoded cloud-init script for SQL Server bootstrap')
+param sqlCustomData string = ''
+
 // Variables
 var appSubnetName = 'app-subnet'
 var bastionSubnetName = 'AzureBastionSubnet'
@@ -76,6 +82,7 @@ var vmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
 var vmDataDiskSize = 64
 var dbAdminUsername = 'sqladmin'
+var sqlPrivateIp = '10.0.3.5'
 
 // NAT provides controlled outbound access for package and image bootstrap traffic.
 resource appNatPublicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
@@ -192,6 +199,19 @@ resource appNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
           destinationAddressPrefix: '*'
           access: 'Allow'
           priority: 110
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowSqlFromAppSubnet'
+        properties: {
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '1433'
+          sourceAddressPrefix: appSubnetPrefix
+          destinationAddressPrefix: appSubnetPrefix
+          access: 'Allow'
+          priority: 115
           direction: 'Inbound'
         }
       }
@@ -464,6 +484,92 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   }
 }
 
+// SQL Server Confidential VM on the same private app subnet.
+resource sqlNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
+  name: '${sqlVmName}-nic'
+  location: location
+  tags: commonTags
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'ipconfig1'
+        properties: {
+          privateIPAllocationMethod: 'Static'
+          privateIPAddress: sqlPrivateIp
+          subnet: {
+            id: '${appVnet.id}/subnets/${appSubnetName}'
+          }
+        }
+      }
+    ]
+    networkSecurityGroup: {
+      id: appNsg.id
+    }
+  }
+}
+
+resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
+  name: sqlVmName
+  location: location
+  tags: commonTags
+  properties: {
+    hardwareProfile: {
+      vmSize: cvmSize
+    }
+    osProfile: {
+      computerName: sqlVmName
+      adminUsername: 'azureuser'
+      customData: sqlCustomData
+      linuxConfiguration: {
+        disablePasswordAuthentication: true
+        ssh: {
+          publicKeys: [
+            {
+              path: '/home/azureuser/.ssh/authorized_keys'
+              keyData: sshPublicKey
+            }
+          ]
+        }
+      }
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: vmOsPublisher
+        offer: vmOsOffer
+        sku: vmOsSku
+        version: vmOsVersion
+      }
+      osDisk: {
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: 'Premium_LRS'
+          securityProfile: {
+            securityEncryptionType: 'DiskWithVMGuestState'
+          }
+        }
+      }
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: sqlNic.id
+          properties: {
+            primary: true
+          }
+        }
+      ]
+    }
+    securityProfile: {
+      uefiSettings: {
+        secureBootEnabled: true
+        vTpmEnabled: true
+      }
+      encryptionAtHost: true
+      securityType: 'ConfidentialVM'
+    }
+  }
+}
+
 // Bastion Host
 resource bastionPublicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
   name: '${bastionName}-pip'
@@ -521,6 +627,9 @@ resource attestationProvider 'Microsoft.Attestation/attestationProviders@2021-06
 output cvmId string = confidentialVm.id
 output cvmName string = confidentialVm.name
 output cvmPrivateIp string = cvmNic.properties.ipConfigurations[0].properties.privateIPAddress
+output sqlVmId string = sqlVm.id
+output sqlVmName string = sqlVm.name
+output sqlVmPrivateIp string = sqlPrivateIp
 output bastionId string = bastionHost.id
 output bastionName string = bastionHost.name
 output attestationEndpoint string = attestationEnabled ? attestationProvider.properties.attestUri : ''

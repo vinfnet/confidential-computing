@@ -169,18 +169,28 @@ if (-not (Test-Path "$sshKeyPath.pub")) {
     ssh-keygen -t rsa -b 4096 -f $sshKeyPath -N "" -q
 }
 $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
+$sqlSaPassword = "Cvm$(Get-Random -Minimum 100000 -Maximum 999999)!A"
+$sqlAppPassword = "App$(Get-Random -Minimum 100000 -Maximum 999999)!A"
+$sqlVmName = "$Prefix-sql-cvm"
+$sqlPrivateIp = '10.0.3.5'
 
-# Embed the local application source in cloud-init so the VM is usable after deployment.
+# Embed the local application source in cloud-init so the app VM is usable after deployment.
 $archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.gz"
 tar -czf $archivePath -C "./app-instance" app-src
 $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
-$bootstrapScript = @"
+$appBootstrapScript = @"
 #!/bin/bash
 set -e
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl python3-flask python3-requests libodbc2
+printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
+export ACCEPT_EULA=Y
+curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
+dpkg -i /tmp/packages-microsoft-prod.deb
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
 pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn
@@ -188,7 +198,7 @@ openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /etc/citizen-registr
 cp /etc/citizen-registry/certs/citizen-registry.crt /etc/citizen-registry/certs/client-ca.crt
 chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=false\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=false\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target
@@ -204,14 +214,39 @@ systemctl daemon-reload
 systemctl enable --now citizen-registry
 systemctl enable --now nginx
 "@
-$bootstrapScript = $bootstrapScript -replace "`r`n", "`n" -replace "`r", ""
-$bootstrapScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrapScript))
-$bootstrap = @"
+$appBootstrapScript = $appBootstrapScript -replace "`r`n", "`n" -replace "`r", ""
+$appBootstrapScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrapScript))
+$appBootstrap = @"
 #cloud-config
 runcmd:
-    - echo '$bootstrapScriptBase64' | base64 -d | bash
+    - echo '$appBootstrapScriptBase64' | base64 -d | bash
 "@
-$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
+
+$sqlBootstrapScript = @"
+#!/bin/bash
+set -e
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates gnupg
+curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
+dpkg -i /tmp/packages-microsoft-prod.deb
+curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/mssql-server-2022.list -o /etc/apt/sources.list.d/mssql-server-2022.list
+apt-get update
+ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y mssql-server mssql-tools18 unixodbc-dev
+MSSQL_PID=Developer ACCEPT_EULA=Y MSSQL_SA_PASSWORD='$sqlSaPassword' /opt/mssql/bin/mssql-conf -n setup
+systemctl enable --now mssql-server
+for attempt in `$(seq 1 60); do /opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -U sa -P '$sqlSaPassword' -C -Q 'SELECT 1' >/dev/null 2>&1 && break; sleep 2; done
+/opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -U sa -P '$sqlSaPassword' -C -Q "IF DB_ID(N'$DbName') IS NULL CREATE DATABASE [$DbName]; IF SUSER_ID(N'registryadmin') IS NULL CREATE LOGIN [registryadmin] WITH PASSWORD = '$sqlAppPassword'; ELSE ALTER LOGIN [registryadmin] WITH PASSWORD = '$sqlAppPassword';"
+/opt/mssql-tools18/bin/sqlcmd -S 127.0.0.1 -U sa -P '$sqlSaPassword' -C -d '$DbName' -Q "IF USER_ID(N'registryadmin') IS NULL CREATE USER [registryadmin] FOR LOGIN [registryadmin]; ALTER ROLE db_datareader ADD MEMBER [registryadmin]; ALTER ROLE db_datawriter ADD MEMBER [registryadmin]; IF OBJECT_ID(N'dbo.citizen_registry', N'U') IS NULL CREATE TABLE dbo.citizen_registry (id INT IDENTITY(1,1) PRIMARY KEY, national_id NVARCHAR(20) NOT NULL UNIQUE, first_name NVARCHAR(100) NOT NULL, last_name NVARCHAR(100) NOT NULL, date_of_birth DATE NOT NULL, sex NVARCHAR(10), region NVARCHAR(100), municipality NVARCHAR(100), address_line NVARCHAR(200), postal_code NVARCHAR(10), household_size INT DEFAULT 1, marital_status NVARCHAR(20) DEFAULT N'Single', employment_status NVARCHAR(30) DEFAULT N'Employed', tax_bracket NVARCHAR(10) DEFAULT N'B', registered_voter BIT DEFAULT 1, created_date DATETIME DEFAULT GETUTCDATE(), modified_date DATETIME DEFAULT GETUTCDATE()); IF NOT EXISTS (SELECT 1 FROM dbo.citizen_registry) INSERT INTO dbo.citizen_registry (national_id, first_name, last_name, date_of_birth, sex, region, municipality) VALUES (N'DEMO-0001', N'John', N'Smith', '1985-04-12', N'M', N'Central', N'Capital'), (N'DEMO-0002', N'Maria', N'Garcia', '1990-09-23', N'F', N'North', N'Riverside'), (N'DEMO-0003', N'Alex', N'Johnson', '1978-01-30', N'X', N'South', N'Lakeside');"
+"@
+$sqlBootstrapScript = $sqlBootstrapScript -replace "`r`n", "`n" -replace "`r", ""
+$sqlBootstrapScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sqlBootstrapScript))
+$sqlBootstrap = @"
+#cloud-config
+runcmd:
+    - echo '$sqlBootstrapScriptBase64' | base64 -d | bash
+"@
+$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrap))
+$sqlCustomData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sqlBootstrap))
 
 # Prepare Bicep parameters in a file to avoid Windows command-line length limits.
 $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
@@ -234,6 +269,8 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         attestationEnabled = @{ value = $true }
         sshPublicKey = @{ value = $sshPublicKey }
         customData = @{ value = $customData }
+        sqlVmName = @{ value = $sqlVmName }
+        sqlCustomData = @{ value = $sqlCustomData }
     }
 } | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $parametersFile
 

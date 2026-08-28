@@ -1,10 +1,33 @@
 # Citizen Registry Advanced — Two-Stage Confidential Deployment
 
-**Topology:** Confidential VM app with mTLS ↔ Azure Attestation ↔ Managed HSM  
+**Topology:** App Confidential VM ↔ SQL Server Confidential VM on a private subnet ↔ Managed HSM
 **Author:** Autonomous AI-Assisted Development  
 **Date:** August 2026
 
 ---
+
+### Deployed Stage 2 Topology
+
+```text
+                 North Europe VNet: 10.0.0.0/16
+                              |
+                    App subnet: 10.0.3.0/24
+                    (private IPs only)
+                  +-----------+-----------+
+                  |                       |
+          App CVM: 10.0.3.4       SQL CVM: 10.0.3.5
+          Flask + nginx            SQL Server 2022
+                  |                       |
+                  +------ TLS :1433 -----+
+
+  Workstation -- Bastion tunnel --> App CVM
+  App/SQL subnet -- NAT Gateway --> outbound package access only
+  Shared HSM <-- Private Endpoint + Private DNS -- VNet
+```
+
+Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the application CVM
+(`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
+`registryadmin` login, and three demo citizen records. The app connects over private TCP 1433.
 
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
@@ -15,12 +38,12 @@
 | Component | SKU | Daily Cost | Monthly Cost |
 |-----------|-----|-----------|--------------|
 | **Managed HSM** | B1 Standard | ~$13.33 | $400 |
-| **Confidential VM** | DC2as_v6 (2 CPU) | ~$7.29 | $220 |
-| **Database** | SQL on ACC (10 GB) | ~$1.00 | $30 |
+| **App Confidential VM** | DC2as_v5 (2 CPU) | ~$7.29 | $220 |
+| **SQL Server Confidential VM** | DC2as_v5 (2 CPU) | ~$7.29 | $220 |
 | **Bastion Host** | Standard (2 units) | ~$1.67 | $50 |
 | **Storage** | Premium SSD (64 GB OS + 64 GB Data) | ~$1.00 | $30 |
 | **Attestation** | Per-request (~1000/day) | ~$0.10 | $3 |
-| **Total (1 App Instance)** | | **~$24.39/day** | **~$733/month** |
+| **Total (1 App + SQL Instance)** | | **~$30.68/day** | **~$923/month** |
 
 > **Pricing information:** The estimates above are provided for planning purposes only and are not quotes. Azure prices can change and may vary by region, currency, agreement, usage, operating system, and selected configuration. Check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the current service pricing pages before deployment:
 >
@@ -70,7 +93,7 @@
 
 This advanced deployment splits citizen registry infrastructure into **two stages**:
 - **Stage 1 (Shared Infrastructure):** Managed HSM + private networking backbone
-- **Stage 2 (App Instance):** Confidential VM app instance + Bastion access + mTLS
+- **Stage 2 (App Instance):** App Confidential VM + SQL Server Confidential VM on the same private subnet + Bastion access + mTLS
 
 ### Complete System Topology
 
@@ -96,11 +119,15 @@ This advanced deployment splits citizen registry infrastructure into **two stage
                  │         │ 10.0.3.0/24     │         │
                  │         │                 │         │
                  │         │  ┌───────────┐  │         │
-                 │         │  │ CONF. VM  │  │         │
-                 │         │  │ (C-vn2)   │  │         │
+                 │         │  │ APP CVM   │  │         │
                  │         │  │ SEV-SNP   │  │         │
-                 │         │  │ No Public │  │         │
-                 │         │  │ IP        │  │         │
+                 │         │  │ 10.0.3.4  │  │         │
+                 │         │  └─────┬─────┘  │         │
+                 │         │        │ 1433   │         │
+                 │         │  ┌─────▼─────┐  │         │
+                 │         │  │ SQL CVM   │  │         │
+                 │         │  │ SEV-SNP   │  │         │
+                 │         │  │ 10.0.3.5  │  │         │
                  │         │  └───────────┘  │         │
                  │         └────────┬────────┘         │
                  │                  │                  │

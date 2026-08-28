@@ -83,8 +83,10 @@ cd .\citizen-registry-advanced
 
 **What this creates:**
 - Resource group: `{prefix}{random5digit}app`
-- Confidential VM (C-vn2 with SEV-SNP)
-- Database on ACC
+- App Confidential VM (C-vn2 with SEV-SNP)
+- SQL Server Confidential VM on the same private app subnet
+- Private app-to-database connection on TCP 1433
+- SQL Server database `citizendb` seeded with three demo citizens
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM

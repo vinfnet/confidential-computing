@@ -2,6 +2,30 @@
 
 ## System Overview
 
+### Deployed Stage 2 Topology
+
+```text
+               North Europe VNet: 10.0.0.0/16
+                      |
+           +----------------+----------------+
+           |                                 |
+      App subnet: 10.0.3.0/24          Private Link subnet
+           |                         10.0.1.0/24
+     +---------+---------+                       |
+     |                   |                 HSM Private Endpoint
+  App CVM              SQL CVM                       |
+  10.0.3.4             10.0.3.5                Managed HSM
+  Flask/nginx           SQL Server               Stage 1 shared RG
+     |                   |
+     +---- TLS 1433 ----+
+
+  Bastion provides the workstation tunnel to the App CVM; neither CVM has a public IP.
+```
+
+The app and SQL Server run on separate Confidential VMs in the same `app-subnet`. The SQL CVM
+uses private IP `10.0.3.5`; the app reaches it over encrypted TCP 1433. A NAT Gateway provides
+outbound-only access for first-boot package installation.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         CITIZEN REGISTRY ADVANCED                       │
@@ -23,7 +47,7 @@ Stage 1: SHARED INFRASTRUCTURE RG                Stage 2: APP INSTANCE RG
 │          ▲                             │      │          ▲               │
 │          │                             │      │          │               │
 │  ┌─────────────────────────────────┐  │      │  ┌────────────────────┐  │
-│  │  VIRTUAL NETWORK                │  │      │  │  DATABASE on ACC   │  │
+│  │  VIRTUAL NETWORK                │  │      │  │  SQL CONFIDENTIAL  │  │
 │  │  - 10.0.0.0/16                  │  │      │  │  - SQL Server      │  │
 │  │  - Subnets:                     │  │      │  │  - TDE enabled     │  │
 │  │    • Private Link (10.0.1.0/24) │  │      │  │  - Private subnet  │  │
@@ -93,11 +117,13 @@ Confidential VM (C-vn2)
 
 ### 2. App → Database (Private Link + TLS)
 
+The database is a second Confidential VM on the same private app subnet, using private IP `10.0.3.5`.
+
 ```
 Flask App (8000)
     │
     ├─ SQL Connection String
-    │  ├─ Server: 10.0.4.5 (private IP)
+   │  ├─ Server: 10.0.3.5 (SQL CVM private IP)
     │  ├─ Port: 1433
     │  ├─ Encrypt: yes
     │  ├─ TrustServerCertificate: yes
@@ -106,12 +132,12 @@ Flask App (8000)
     ↓ (pyodbc with ODBC Driver 18)
     
 Private Network
-    ├─ App subnet (10.0.3.0/24) → DB subnet (10.0.4.0/24)
+   ├─ App CVM (10.0.3.4) → SQL CVM (10.0.3.5), same subnet
     ├─ NSG rule: Allow TCP 1433 from app subnet
     ├─ All traffic encrypted (TLS)
     └─ No internet exposure
     
-Database on ACC
+SQL Server Confidential VM
     ├─ SQL Server
     ├─ TDE (Transparent Data Encryption)
     ├─ citizen_registry table
