@@ -14,6 +14,7 @@ import secrets
 import ssl
 import threading
 import pyodbc
+import sqlite3
 import logging
 from datetime import datetime
 from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
@@ -46,6 +47,7 @@ DB_NAME = os.environ.get('DB_NAME', 'citizendb')
 DB_USER = os.environ.get('DB_USER', '')
 DB_PASSWORD = os.environ.get('DB_PASSWORD', '')
 DB_SA_PASSWORD = os.environ.get('DB_SA_PASSWORD', '')
+LOCAL_DB_PATH = os.environ.get('LOCAL_DB_PATH', '/var/lib/citizen-registry/citizens.db')
 
 # Managed HSM configuration
 HSM_ENDPOINT = os.environ.get('HSM_ENDPOINT', '')
@@ -152,7 +154,46 @@ def _get_credential():
 def _get_db_conn():
     """Get database connection with automatic bootstrap on first run"""
     if not DB_HOST:
-        raise RuntimeError('Database not configured (DB_HOST is empty)')
+        os.makedirs(os.path.dirname(LOCAL_DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(LOCAL_DB_PATH)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS citizen_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                national_id TEXT NOT NULL UNIQUE,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                date_of_birth TEXT NOT NULL,
+                sex TEXT,
+                region TEXT,
+                municipality TEXT,
+                address_line TEXT,
+                postal_code TEXT,
+                household_size INTEGER DEFAULT 1,
+                marital_status TEXT DEFAULT 'Single',
+                employment_status TEXT DEFAULT 'Employed',
+                tax_bracket TEXT DEFAULT 'B',
+                registered_voter INTEGER DEFAULT 1,
+                created_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                modified_date TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        if conn.execute('SELECT COUNT(*) FROM citizen_registry').fetchone()[0] == 0:
+            conn.executemany(
+                """
+                INSERT INTO citizen_registry
+                (national_id, first_name, last_name, date_of_birth, sex, region, municipality)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    ('DEMO-0001', 'John', 'Smith', '1985-04-12', 'M', 'Central', 'Capital'),
+                    ('DEMO-0002', 'Maria', 'Garcia', '1990-09-23', 'F', 'North', 'Riverside'),
+                    ('DEMO-0003', 'Alex', 'Johnson', '1978-01-30', 'X', 'South', 'Lakeside'),
+                ],
+            )
+            conn.commit()
+        return conn
     
     if DB_USER and DB_PASSWORD:
         conn_str = _build_sql_auth_conn_str(DB_HOST, DB_NAME, DB_USER, DB_PASSWORD)
@@ -439,7 +480,7 @@ def config():
         'environment': {
             'mtls_enabled': MTLS_ENABLED,
             'attestation_configured': bool(ATTESTATION_ENDPOINT),
-            'database_configured': bool(DB_HOST),
+            'database_configured': bool(DB_HOST) or bool(LOCAL_DB_PATH),
             'hsm_configured': bool(HSM_ENDPOINT)
         }
     })

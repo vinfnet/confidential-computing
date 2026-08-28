@@ -486,6 +486,7 @@ resource bastionHost 'Microsoft.Network/bastionHosts@2023-09-01' = {
     name: 'Standard'
   }
   properties: {
+    enableTunneling: true
     ipConfigurations: [
       {
         name: 'IpConf'
