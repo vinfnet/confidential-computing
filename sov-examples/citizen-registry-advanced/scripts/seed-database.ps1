@@ -63,11 +63,18 @@ if (-not (Test-Path $DataFile)) {
     # Create default demo data (simplified)
     $demoData = @{
         citizens = @(
-            @{ id = 1; firstName = "John"; lastName = "Smith"; region = "Central"; municipality = "Capital"; dateOfBirth = "1980-01-15"; idNumber = "CC-2024-001" },
-            @{ id = 2; firstName = "Maria"; lastName = "Garcia"; region = "Northern"; municipality = "Harbor"; dateOfBirth = "1990-05-20"; idNumber = "CC-2024-002" },
-            @{ id = 3; firstName = "Ahmed"; lastName = "Hassan"; region = "Eastern"; municipality = "Border"; dateOfBirth = "1985-03-10"; idNumber = "CC-2024-003" },
-            @{ id = 4; firstName = "Sophie"; lastName = "Dubois"; region = "Western"; municipality = "Coast"; dateOfBirth = "1992-11-08"; idNumber = "CC-2024-004" },
-            @{ id = 5; firstName = "Li"; lastName = "Chen"; region = "Southern"; municipality = "Industrial"; dateOfBirth = "1988-07-22"; idNumber = "CC-2024-005" }
+            @{ id = 1; firstName = "John"; lastName = "Smith"; region = "Central"; municipality = "Capital"; dateOfBirth = "1985-04-12"; idNumber = "DEMO-0001" },
+            @{ id = 2; firstName = "Maria"; lastName = "Garcia"; region = "North"; municipality = "Riverside"; dateOfBirth = "1990-09-23"; idNumber = "DEMO-0002" },
+            @{ id = 3; firstName = "Alex"; lastName = "Johnson"; region = "South"; municipality = "Lakeside"; dateOfBirth = "1978-01-30"; idNumber = "DEMO-0003" },
+            @{ id = 4; firstName = "Aisha"; lastName = "Khan"; region = "East"; municipality = "Hillview"; dateOfBirth = "1988-06-17"; idNumber = "DEMO-0004" },
+            @{ id = 5; firstName = "Daniel"; lastName = "Rossi"; region = "West"; municipality = "Oakridge"; dateOfBirth = "1972-12-05"; idNumber = "DEMO-0005" },
+            @{ id = 6; firstName = "Elena"; lastName = "Petrova"; region = "Central"; municipality = "Capital"; dateOfBirth = "1995-02-28"; idNumber = "DEMO-0006" },
+            @{ id = 7; firstName = "Samuel"; lastName = "Okafor"; region = "North"; municipality = "Harbor"; dateOfBirth = "1981-10-11"; idNumber = "DEMO-0007" },
+            @{ id = 8; firstName = "Nora"; lastName = "Bennett"; region = "South"; municipality = "Lakeside"; dateOfBirth = "2000-07-09"; idNumber = "DEMO-0008" },
+            @{ id = 9; firstName = "Mateo"; lastName = "Silva"; region = "East"; municipality = "Border"; dateOfBirth = "1969-03-21"; idNumber = "DEMO-0009" },
+            @{ id = 10; firstName = "Hana"; lastName = "Tanaka"; region = "West"; municipality = "Coast"; dateOfBirth = "1983-11-14"; idNumber = "DEMO-0010" },
+            @{ id = 11; firstName = "Grace"; lastName = "Williams"; region = "Central"; municipality = "Capital"; dateOfBirth = "1998-05-03"; idNumber = "DEMO-0011" },
+            @{ id = 12; firstName = "Omar"; lastName = "Haddad"; region = "North"; municipality = "Riverside"; dateOfBirth = "1976-08-26"; idNumber = "DEMO-0012" }
         )
     }
 } else {
@@ -102,7 +109,7 @@ BEGIN
         first_name VARCHAR(100) NOT NULL,
         last_name VARCHAR(100) NOT NULL,
         date_of_birth DATE NOT NULL,
-        id_number VARCHAR(50) UNIQUE NOT NULL,
+        national_id VARCHAR(50) UNIQUE NOT NULL,
         region VARCHAR(100),
         municipality VARCHAR(100),
         created_date DATETIME DEFAULT GETUTCDATE(),
@@ -124,13 +131,20 @@ SELECT @citizenCount = COUNT(*) FROM citizen_registry;
 
 IF @citizenCount = 0
 BEGIN
-    INSERT INTO citizen_registry (first_name, last_name, date_of_birth, id_number, region, municipality)
+    INSERT INTO citizen_registry (national_id, first_name, last_name, date_of_birth, sex, region, municipality)
     VALUES
-        ('John', 'Smith', '1980-01-15', 'CC-2024-001', 'Central', 'Capital'),
-        ('Maria', 'Garcia', '1990-05-20', 'CC-2024-002', 'Northern', 'Harbor'),
-        ('Ahmed', 'Hassan', '1985-03-10', 'CC-2024-003', 'Eastern', 'Border'),
-        ('Sophie', 'Dubois', '1992-11-08', 'CC-2024-004', 'Western', 'Coast'),
-        ('Li', 'Chen', '1988-07-22', 'CC-2024-005', 'Southern', 'Industrial');
+        ('DEMO-0001', 'John', 'Smith', '1985-04-12', 'M', 'Central', 'Capital'),
+        ('DEMO-0002', 'Maria', 'Garcia', '1990-09-23', 'F', 'North', 'Riverside'),
+        ('DEMO-0003', 'Alex', 'Johnson', '1978-01-30', 'X', 'South', 'Lakeside'),
+        ('DEMO-0004', 'Aisha', 'Khan', '1988-06-17', 'F', 'East', 'Hillview'),
+        ('DEMO-0005', 'Daniel', 'Rossi', '1972-12-05', 'M', 'West', 'Oakridge'),
+        ('DEMO-0006', 'Elena', 'Petrova', '1995-02-28', 'F', 'Central', 'Capital'),
+        ('DEMO-0007', 'Samuel', 'Okafor', '1981-10-11', 'M', 'North', 'Harbor'),
+        ('DEMO-0008', 'Nora', 'Bennett', '2000-07-09', 'F', 'South', 'Lakeside'),
+        ('DEMO-0009', 'Mateo', 'Silva', '1969-03-21', 'M', 'East', 'Border'),
+        ('DEMO-0010', 'Hana', 'Tanaka', '1983-11-14', 'F', 'West', 'Coast'),
+        ('DEMO-0011', 'Grace', 'Williams', '1998-05-03', 'F', 'Central', 'Capital'),
+        ('DEMO-0012', 'Omar', 'Haddad', '1976-08-26', 'M', 'North', 'Riverside');
     
     PRINT 'Inserted 5 citizen records';
 END
