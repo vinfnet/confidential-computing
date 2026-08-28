@@ -77,6 +77,34 @@ var vmOsVersion = 'latest'
 var vmDataDiskSize = 64
 var dbAdminUsername = 'sqladmin'
 
+// NAT provides controlled outbound access for package and image bootstrap traffic.
+resource appNatPublicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
+  name: '${vnetName}-nat-pip'
+  location: location
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
+resource appNatGateway 'Microsoft.Network/natGateways@2023-09-01' = {
+  name: '${vnetName}-nat'
+  location: location
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    idleTimeoutInMinutes: 10
+    publicIpAddresses: [
+      {
+        id: appNatPublicIp.id
+      }
+    ]
+  }
+}
+
 // Common tags
 var commonTags = {
   environment: 'demo'
@@ -106,6 +134,9 @@ resource appVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
             id: appNsg.id
           }
           privateEndpointNetworkPolicies: 'Disabled'
+          natGateway: {
+            id: appNatGateway.id
+          }
         }
       }
       {

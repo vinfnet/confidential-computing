@@ -174,38 +174,42 @@ $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
 $archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.gz"
 tar -czf $archivePath -C "./app-instance" app-src
 $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
-$bootstrap = @"
-#cloud-config
-runcmd:
-    - mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
-    - echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
-    - apt-get update
-    - DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv python3-pip nginx openssl unixodbc unixodbc-dev
-    - python3 -m venv /opt/citizen-registry/venv
-    - /opt/citizen-registry/venv/bin/pip install --no-cache-dir -r /opt/citizen-registry/app-src/requirements.txt
-    - openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /etc/citizen-registry/certs/citizen-registry.crt -subj '/CN=citizen-registry'
-    - cp /etc/citizen-registry/certs/citizen-registry.crt /etc/citizen-registry/certs/client-ca.crt
-    - chmod 600 /etc/citizen-registry/certs/citizen-registry.key
-    - cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-    - cat > /etc/citizen-registry/environment <<'ENV'
-MTLS_ENABLED=false
-ATTESTATION_ENDPOINT=$('https://' + $AttestationName + '.neu.attest.azure.net')
-HSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net
-ENV
-    - cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
+$bootstrapScript = @"
+#!/bin/bash
+set -e
+mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
+echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl python3-flask python3-requests libodbc2
+python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
+python3 /tmp/get-pip.py --break-system-packages
+pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn
+openssl req -x509 -nodes -newkey rsa:2048 -days 365 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /etc/citizen-registry/certs/citizen-registry.crt -subj '/CN=citizen-registry'
+cp /etc/citizen-registry/certs/citizen-registry.crt /etc/citizen-registry/certs/client-ca.crt
+chmod 600 /etc/citizen-registry/certs/citizen-registry.key
+cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
+printf 'MTLS_ENABLED=false\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$($hsmId.Split('/')[-1]).managedhsm.azure.net\n' > /etc/citizen-registry/environment
+cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target
 [Service]
 WorkingDirectory=/opt/citizen-registry/app-src
 EnvironmentFile=/etc/citizen-registry/environment
-ExecStart=/opt/citizen-registry/venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 app:app
+ExecStart=/usr/local/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 app:app
 Restart=always
 [Install]
 WantedBy=multi-user.target
 SERVICE
-    - systemctl daemon-reload
-    - systemctl enable --now citizen-registry
-    - systemctl enable --now nginx
+systemctl daemon-reload
+systemctl enable --now citizen-registry
+systemctl enable --now nginx
+"@
+$bootstrapScript = $bootstrapScript -replace "`r`n", "`n" -replace "`r", ""
+$bootstrapScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrapScript))
+$bootstrap = @"
+#cloud-config
+runcmd:
+    - echo '$bootstrapScriptBase64' | base64 -d | bash
 "@
 $customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($bootstrap))
 
@@ -215,6 +219,7 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
     '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
     contentVersion = '1.0.0.0'
     parameters = @{
+        prefix = @{ value = $Prefix }
         cvmName = @{ value = $CvmName }
         cvmSize = @{ value = $CvmSize }
         dbName = @{ value = $DbName }
