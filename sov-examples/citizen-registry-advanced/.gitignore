@@ -1,0 +1,82 @@
+# Citizen Registry Advanced — Git Ignore List
+# Prevents secrets, certificates, and private keys from being committed
+
+# Private Keys and Certificates
+*.key
+*.pem
+*.cer
+*.crt
+*.pfx
+*.p12
+*.jks
+
+# Managed HSM
+shared-infra/security-domain/
+shared-infra/*.bak
+shared-infra/*.backup
+
+# Deployment Artifacts
+*.env
+*.env.local
+.env.*
+!.env.example
+deployment-log.txt
+*-outputs*.json
+*-request.json
+bicep/*-fixed.json
+
+# Azure Configuration
+*.token
+.azure/
+.azurerc
+
+# Credentials and Secrets
+.credentials
+credentials.json
+secrets.json
+config.local.json
+
+# Application Logs
+logs/
+*.log
+app-instance/**/*.log
+
+# Database Backups
+*.sql
+*.bak
+db-backups/
+
+# Python Virtual Environments
+app-instance/app-src/venv/
+app-instance/app-src/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Node/npm
+app-instance/app-src/node_modules/
+app-instance/app-src/npm-debug.log
+
+# IDE and Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+
+# Bicep Build Output
+bicep/**/*.json.bak
+bicep/**/*.bicep.bak
+
+# PowerShell ISE
+*.ps1.bak
+
+# OS
+Thumbs.db
+.DS_Store
