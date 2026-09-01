@@ -127,7 +127,18 @@
             font-size: 20px;
         }
 
-        .section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            position: sticky;
+            top: 0;
+            z-index: 6;
+            background: white;
+            padding: 12px 0;
+            margin-bottom: 8px;
+        }
         .table-wrap { overflow-x: auto; border: 1px solid #e5e7eb; }
         
         table {
@@ -162,6 +173,22 @@
         table tbody tr:hover {
             background: #f8f9fa;
         }
+
+        table th:last-child,
+        table td:last-child {
+            position: sticky;
+            right: 0;
+            z-index: 2;
+            background: white;
+            box-shadow: -6px 0 8px -8px rgba(15, 23, 42, .45);
+        }
+
+        table th:last-child {
+            z-index: 3;
+            background: #f8f9fa;
+        }
+
+        table tbody tr:hover td:last-child { background: #f8f9fa; }
         
         .badge {
             display: inline-block;

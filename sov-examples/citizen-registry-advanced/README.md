@@ -170,6 +170,8 @@ The web table supports:
 - **Add citizen** using the form above the table;
 - **Edit** on each row to retrieve and update the complete record;
 - **Delete** on each row with an explicit confirmation prompt;
+- a sticky Add toolbar during vertical scrolling;
+- a sticky Actions column that keeps Edit/Delete visible during horizontal scrolling;
 - horizontal scrolling for the expanded government-record columns on narrow screens.
 
 Create, update, and delete requests use the existing `/api/citizen` endpoints and remain
