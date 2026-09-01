@@ -2,7 +2,7 @@
 
 > **Cost awareness:** This deployment includes Azure Managed HSM, which has a higher cost even for light testing. Review the [cost estimates, optimization guidance, and live pricing links in the README](README.md#-important-managed-hsm-requirement--cost-warning) before proceeding. Azure prices can change and vary by region and configuration.
 
-## 🚀 Getting Started in 10 Minutes
+## 🚀 Getting Started
 
 This guide walks you through deploying the citizen registry advanced app with managed HSM and mTLS on Azure Confidential Computing.
 
@@ -93,84 +93,74 @@ cd .\citizen-registry-advanced
 - Azure Attestation Service
 - Private Link to shared Managed HSM
 
-### Step 4: Access the Application
-
-#### Option A: Using Azure Portal Bastion
-
-```
-1. Go to https://portal.azure.com
-2. Navigate to: Resource Groups > {your-app-rg} > {cvm-name}
-3. Click "Connect" > "Bastion"
-4. Login with SSH (key-based) or RDP
-5. From the CVM: curl -k https://localhost/health
-```
-
-#### Option B: Using Azure CLI
+### Step 4: Access the Web Application
 
 ```powershell
 $appRg = "sgall12345app"  # Your app instance RG
 $bastionName = "sgall-12345-bastion"
 $cvmId = az vm show -g $appRg -n sgall-citizen-cvm --query id -o tsv
 
-# Create SSH tunnel through Bastion
+# Keep this terminal open while using the web interface.
 az network bastion tunnel `
   -g $appRg `
   -n $bastionName `
-  --resource-id $cvmId `
-  --resource-port 22 `
-  --port 2222
-
-# In another terminal:
-ssh -i ~/.ssh/id_rsa -p 2222 azureuser@localhost
+  --target-resource-id $cvmId `
+  --resource-port 443 `
+  --port 8443
 ```
 
-### Step 5: Verify mTLS + Attestation
+Open `https://localhost:8443/`. The registry is readable without a client certificate.
+Add, Edit, and Delete require the Norland demo mTLS client certificate.
+
+### Step 5: Enable Browser CRUD Access
+
+A web page cannot install a client certificate safely. Install the demo client identity through
+a temporary Bastion SSH tunnel by following
+[README Step 4: Install the Demo Client Certificate on Windows](README.md#step-4-install-the-demo-client-certificate-on-windows).
+
+In summary:
+
+1. Open a Bastion tunnel from local port `2222` to app CVM port `22`.
+2. Package the client certificate and key as a temporary mode-`600` PFX in the CVM.
+3. Transfer the PFX and public Norland demo CA directly through the SSH tunnel.
+4. Import the PFX into `Cert:\CurrentUser\My` and explicitly trust the fictional demo CA in
+   `Cert:\CurrentUser\Root`.
+5. Delete both transfer copies, close all browser windows, and reopen the browser.
+6. Select `citizen-registry-demo-client` if the browser asks for a certificate.
+
+Do not expose the PFX through a web download or commit it to the repository.
+
+### Step 6: Use the Registry UI
+
+- **Add citizen** remains visible in the sticky toolbar while scrolling.
+- **Edit** and **Delete** remain visible in the sticky right-hand Actions column.
+- The table contains 100 deterministic, entirely fictional records.
+- Fields include national ID, date of birth, street address, town, state, socio-economic group,
+  and tax paid last year.
+- The expanded table scrolls horizontally on narrow screens.
+
+CRUD calls are protected by mTLS. Without the demo client certificate, the API returns HTTP
+`401` and the interface reports that a valid certificate is required.
+
+### Step 7: Verify Health and Security Evidence
 
 ```powershell
-# From within the CVM (via Bastion):
+# Run inside the app CVM through a Bastion SSH session.
+curl -sk https://localhost/health | jq .
+curl -sk https://localhost/db/status | jq .
+curl -sk https://localhost/config | jq '.environment'
+curl -sk https://localhost/security/evidence | jq .
 
-# Check health
-curl -v -k https://localhost/health
-
-# View app logs
-tail -f /var/log/citizen-registry/app.log
-
-# Check database connectivity
-curl -s https://localhost/db/status | jq .
-
-# View configured security status and non-secret evidence
-curl -s https://localhost/config | jq '.environment'
-curl -s https://localhost/security/evidence | jq .
-
-# From the deployment workstation, verify the HSM key and DES (names are printed by deployment)
-az keyvault key show --hsm-name <shared-hsm-name> --name <os-disk-key-name> --query '{id:kid,kty: key.kty, ops:key.key_ops}'
-az disk-encryption-set show --resource-group <app-resource-group> --name <disk-encryption-set-name> --query '{id:id,encryptionType:properties.encryptionType,identity:identity.principalId}'
+# From the deployment workstation, verify the confidential Disk Encryption Set.
+az disk-encryption-set show `
+  --resource-group <app-resource-group> `
+  --name <disk-encryption-set-name> `
+  --query '{id:id,encryptionType:encryptionType,identity:identity.principalId}'
 ```
 
-### Step 6: Test Data Access
-
-```powershell
-# Get list of all citizens (mTLS required)
-curl -k --cert citizen.crt --key citizen.key \
-  https://localhost:8443/api/citizens | jq .
-
-# Get specific citizen
-curl -k --cert citizen.crt --key citizen.key \
-  https://localhost:8443/api/citizen/1 | jq .
-
-# Create new citizen
-curl -X POST -k --cert citizen.crt --key citizen.key \
-  -H "Content-Type: application/json" \
-  -d '{
-    "national_id": "CC-2024-006",
-    "first_name": "Alice",
-    "last_name": "Johnson",
-    "date_of_birth": "1995-06-15",
-    "region": "Northern",
-    "municipality": "Harbor"
-  }' \
-  https://localhost:8443/api/citizen
-```
+Expected results include health status `healthy`, database record count `100`, CMK evidence
+status `retrieved`, key type `RSA-HSM`, the decoded Secure Key Release policy, and the Managed
+HSM hostname resolving privately to `10.10.1.x`.
 
 ## 🏗️ Architecture Components
 
@@ -189,22 +179,22 @@ curl -X POST -k --cert citizen.crt --key citizen.key \
 | **Confidential VM** | Application runtime (C-vn2 TEE) | SEV-SNP/vTPM, HSM CMK via DES, attestation-bound secure release |
 | **Database on ACC** | Data persistence | Private subnet, TDE enabled |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
-| **Attestation Service** | mTLS certificate validation | Attestation-backed verification |
+| **Attestation Service** | Provider metadata and guest-attestation integration | Metadata health is separate from CVM boot attestation |
 
 ## 📊 Cost Estimate
 
 | Component | SKU | Monthly Cost (approx) |
 |-----------|-----|----------------------|
 | **Managed HSM** | B1 | $400 |
-| **Confidential VM** | DC2as_v6 (2 vCPU) | $220 |
-| **Database** | 10 GB SQL Server | $80 |
+| **App Confidential VM** | DC2as_v5 (2 vCPU) | $220 |
+| **SQL Confidential VM** | DC2as_v5 (2 vCPU) | $220 |
 | **Bastion** | Standard (2 scale units) | $50 |
 | **Attestation** | Per-request | $5-10 |
 | **Storage** | Premium LRS disks | $30 |
-| **Total** | | ~$800/month |
+| **Total** | | ~$940/month |
 
 **To reduce costs:**
-- Use smaller CVM SKU (DC1as_v6)
+- Use a smaller supported CVM SKU where available
 - Reduce Bastion scale units
 - Delete app instances when not in use (keep shared infrastructure)
 
@@ -231,7 +221,7 @@ Error: "Not Authorized to perform action"
 
 **Solution:** Ensure cost control tag is applied:
 ```powershell
-az tag create --resource-id {hsmId} \
+az tag create --resource-id <hsm-resource-id> `
   --tags costCenter=confidential-computing
 ```
 
@@ -243,21 +233,25 @@ Error: "OS disk encryption failed"
 
 **Solution:** Verify Managed HSM key permissions:
 ```powershell
-# Grant CVM managed identity permissions on HSM
-az role assignment create \
-  --role "Managed HSM Crypto User" \
-  --assignee-object-id {cvmIdentityId} \
-  --scope {hsmId}
+# Inspect the key-scoped Managed HSM local role assignments.
+az keyvault role assignment list `
+  --hsm-name <shared-hsm-name> `
+  --scope /keys/<os-disk-key-name> `
+  --output table
 ```
+
+The Disk Encryption Set requires `Managed HSM Crypto Service Encryption User`; Azure CVM
+Orchestrator requires `Managed HSM Crypto Service Release User`. The app identity receives
+`Managed HSM Crypto Auditor` only to display CMK and release-policy evidence.
 
 ### Bastion Connection Timeout
 
 **Solution:** Check NSG rules:
 ```powershell
-az network nsg rule list \
-  --nsg-name sgall-app-nsg \
-  -g sgall12345app \
-  --query "[?destinationPortRange=='22' || destinationPortRange=='3389']"
+az network nsg rule list `
+  --nsg-name <app-nsg-name> `
+  --resource-group <app-resource-group> `
+  --query "[?destinationPortRange=='22' || destinationPortRange=='443']"
 ```
 
 Ensure rule allows inbound from Bastion subnet (`10.0.2.0/24`).
@@ -272,6 +266,10 @@ az vm run-command invoke -g <app-resource-group> -n <app-cvm-name> `
   --command-id RunShellScript `
   --scripts "ls -l /etc/citizen-registry/certs; nginx -t; systemctl restart nginx"
 ```
+
+For browser CRUD access, confirm `citizen-registry-demo-client` exists with a private key in
+`Cert:\CurrentUser\My`, trust the fictional Norland demo CA in `Cert:\CurrentUser\Root`, then
+fully restart the browser. See [README Step 4](README.md#step-4-install-the-demo-client-certificate-on-windows).
 
 ## 📚 Next Steps
 
