@@ -1134,26 +1134,88 @@ cd .\citizen-registry-advanced
 ### Step 3: Access the App via Bastion
 
 ```powershell
-# Connect to Bastion (opens tunnel)
-az network bastion ssh --resource-group sgall12345app `
-  --bastion-name sgall12345bastion `
-  --target-resource-id /subscriptions/...
-
-# Or use native Bastion in Azure Portal
-# Open: https://localhost:8443 (mTLS)
+# Keep this terminal running while using the web interface.
+az network bastion tunnel `
+  --resource-group <app-resource-group> `
+  --name <bastion-name> `
+  --target-resource-id <app-cvm-resource-id> `
+  --resource-port 443 `
+  --port 8443
 ```
 
-### Step 4: Verify mTLS + Attestation
+Open `https://localhost:8443/`. Read-only pages work without a client certificate. Add,
+edit, and delete operations require the Norland demo mTLS client certificate.
+
+### Step 4: Install the Demo Client Certificate on Windows
+
+A web page cannot silently install a client certificate, and the app deliberately does not
+offer its private-key PFX as a download. Transfer it directly over a temporary Bastion SSH
+tunnel instead. The following example assumes the deployment SSH key is available locally.
 
 ```powershell
-# From Bastion tunnel:
-curl -v --cert citizen.crt --key citizen.key \
-  https://citizen-registry-internal.local:8443/health
+# Terminal 1: open a temporary SSH tunnel.
+az network bastion tunnel `
+  --resource-group <app-resource-group> `
+  --name <bastion-name> `
+  --target-resource-id <app-cvm-resource-id> `
+  --resource-port 22 `
+  --port 2222
+```
+
+Package the certificate inside the app CVM. This temporary PFX is passwordless, so it must
+remain mode `600`, move only through the local Bastion tunnel, and be deleted immediately.
+
+```powershell
+az vm run-command invoke `
+  --resource-group <app-resource-group> `
+  --name <app-cvm-name> `
+  --command-id RunShellScript `
+  --scripts "umask 077; openssl pkcs12 -export -out /home/azureuser/norland-client.pfx -inkey /etc/citizen-registry/certs/citizen.key -in /etc/citizen-registry/certs/citizen.crt -certfile /etc/citizen-registry/certs/client-ca.crt -passout pass:; chown azureuser:azureuser /home/azureuser/norland-client.pfx; chmod 600 /home/azureuser/norland-client.pfx"
+```
+
+In Terminal 2, transfer and install the client identity and public demo CA. Windows displays
+an explicit confirmation before trusting the CA; review and accept it for this demo only.
+
+```powershell
+$sshKey = Join-Path $env:TEMP "citizen-registry-sgall"
+$pfx = Join-Path $env:TEMP "norland-client.pfx"
+$ca = Join-Path $env:TEMP "norland-demo-ca.crt"
+
+scp -P 2222 -i $sshKey azureuser@127.0.0.1:/home/azureuser/norland-client.pfx $pfx
+scp -P 2222 -i $sshKey azureuser@127.0.0.1:/etc/citizen-registry/certs/client-ca.crt $ca
+
+Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Exportable:$false
+Import-Certificate -FilePath $ca -CertStoreLocation Cert:\CurrentUser\Root
+
+Remove-Item $pfx, $ca -Force
+ssh -p 2222 -i $sshKey azureuser@127.0.0.1 "rm -f /home/azureuser/norland-client.pfx"
+```
+
+Close all browser windows and reopen the browser so it reloads the Windows certificate
+stores. Open `https://localhost:8443/` again and select
+`citizen-registry-demo-client` if prompted. Edit and Delete should then succeed.
+
+Verify the local installation without displaying private key material:
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My |
+  Where-Object Subject -Like '*CN=citizen-registry-demo-client*' |
+  Select-Object Subject, Issuer, Thumbprint, HasPrivateKey, NotAfter
+```
+
+> The Norland Registry Demo CA is private and fictional, not publicly trusted. Remove its
+> client certificate and trusted-root entry when the demo is no longer needed.
+
+### Step 5: Verify mTLS and Attestation Evidence
+
+```powershell
+# From the app CVM, or through a client configured with the demo certificate:
+curl -k --cert citizen.crt --key citizen.key https://localhost/health
 
 # Output shows:
-# - Certificate issued by Azure Attestation Service
-# - CVM enclave measurements validated
-# - HSM key release verified
+# - Norland demo mTLS certificate configuration
+# - Azure Attestation provider metadata reachability
+# - Managed HSM CMK and decoded Secure Key Release policy evidence
 ```
 
 ### Cleanup
