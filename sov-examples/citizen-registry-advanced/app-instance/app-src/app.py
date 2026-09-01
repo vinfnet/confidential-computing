@@ -9,6 +9,8 @@ Deployed on Confidential VM (C-vn2) with:
 """
 
 from flask import Flask, jsonify, request, render_template, redirect, url_for
+import base64
+import json
 import os
 import secrets
 import ssl
@@ -158,6 +160,8 @@ def _get_credential():
         
         client_id = os.environ.get('AZURE_CLIENT_ID', '')
         if client_id:
+            # Azure Policy can attach other identities, so select the identity
+            # that owns the key-scoped CMK metadata permission explicitly.
             _credential = ManagedIdentityCredential(client_id=client_id)
         else:
             _credential = DefaultAzureCredential()
@@ -263,6 +267,56 @@ def _verify_mtls_certificate():
         logger.error(f"mTLS certificate check failed: {e}")
     
     return {'status': 'not_configured'}
+
+
+def _get_cmk_evidence():
+    """Read non-secret CMK metadata and its decoded SKR policy from Managed HSM."""
+    if not HSM_ENDPOINT or not OS_DISK_KEY_NAME:
+        return {'status': 'not_configured'}
+
+    try:
+        # Managed HSM protects key metadata on its data plane. The app identity
+        # therefore needs Crypto Auditor on this key to read attributes and the
+        # release policy; that role cannot release, wrap, unwrap, export, or alter it.
+        credential = _get_credential()
+        token = credential.get_token('https://managedhsm.azure.net/.default')
+        response = requests.get(
+            f"{HSM_ENDPOINT}/keys/{OS_DISK_KEY_NAME}",
+            params={'api-version': '7.4'},
+            headers={'Authorization': f'Bearer {token.token}'},
+            timeout=5,
+        )
+        response.raise_for_status()
+        key_document = response.json()
+        key = key_document.get('key', {})
+        attributes = key_document.get('attributes', {})
+        release_policy = key_document.get('release_policy', {})
+        encoded_policy = release_policy.get('data', '')
+        decoded_policy = None
+        if encoded_policy:
+            padded_policy = encoded_policy + '=' * (-len(encoded_policy) % 4)
+            decoded_policy = json.loads(
+                base64.urlsafe_b64decode(padded_policy).decode('utf-8')
+            )
+
+        # Return only evidence needed by the UI. Do not return RSA public
+        # parameters or any other fields from the complete HSM response.
+        return {
+            'status': 'retrieved',
+            'key_url': key.get('kid'),
+            'key_type': key.get('kty'),
+            'key_operations': key.get('key_ops', []),
+            'enabled': attributes.get('enabled'),
+            'exportable': attributes.get('exportable'),
+            'release_policy': decoded_policy,
+            'release_policy_content_type': release_policy.get('contentType'),
+        }
+    except Exception as error:
+        logger.warning(f"Managed HSM CMK evidence unavailable: {error}")
+        return {
+            'status': 'unavailable',
+            'reason': type(error).__name__,
+        }
 
 
 # ============================================================================
@@ -531,6 +585,7 @@ def security_evidence():
             'key_name': OS_DISK_KEY_NAME,
             'hsm_name': HSM_NAME,
             'secure_key_release': KEY_RELEASE_STATUS,
+            'cmk': _get_cmk_evidence(),
         },
     })
 

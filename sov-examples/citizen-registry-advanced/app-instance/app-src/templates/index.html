@@ -68,6 +68,16 @@
         .evidence-panel dl { display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 4px 16px; margin: 0; }
         .evidence-panel dt { font-weight: 600; }
         .evidence-panel dd { margin: 0; overflow-wrap: anywhere; }
+        .evidence-group { margin-top: 16px; }
+        .evidence-group h3 { color: #0f172a; font-size: 14px; margin-bottom: 8px; }
+        .evidence-json {
+            background: #0f172a;
+            color: #e2e8f0;
+            padding: 12px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font: 12px/1.5 Consolas, monospace;
+        }
         
         .security-badge {
             display: flex;
@@ -276,11 +286,36 @@
     </div>
     <script>
         fetch('/security/evidence').then(response => response.json()).then(data => {
-            const rows = values => Object.entries(values).map(([key, value]) => `<dt>${key.replaceAll('_', ' ')}</dt><dd>${typeof value === 'object' ? JSON.stringify(value) : (value || 'not reported')}</dd>`).join('');
-            document.getElementById('mtls-evidence').innerHTML = `<dl>${rows(data.mtls)}</dl>`;
-            document.getElementById('attestation-evidence').innerHTML = `<dl>${rows(data.attestation)}</dl>`;
-            document.getElementById('private-link-evidence').innerHTML = `<dl>${rows(data.private_link)}</dl>`;
-            document.getElementById('encryption-evidence').innerHTML = `<dl>${rows(data.encryption_at_rest)}</dl>`;
+            const displayName = key => key.replaceAll('_', ' ');
+            const renderEvidence = (panelId, values) => {
+                const panel = document.getElementById(panelId);
+                panel.replaceChildren();
+                const list = document.createElement('dl');
+                Object.entries(values).forEach(([key, value]) => {
+                    const term = document.createElement('dt');
+                    term.textContent = displayName(key);
+                    const detail = document.createElement('dd');
+                    if (value && typeof value === 'object') {
+                        const group = document.createElement('section');
+                        group.className = 'evidence-group';
+                        const heading = document.createElement('h3');
+                        heading.textContent = displayName(key);
+                        const formatted = document.createElement('pre');
+                        formatted.className = 'evidence-json';
+                        formatted.textContent = JSON.stringify(value, null, 2);
+                        group.append(heading, formatted);
+                        detail.append(group);
+                    } else {
+                        detail.textContent = value ?? 'not reported';
+                    }
+                    list.append(term, detail);
+                });
+                panel.append(list);
+            };
+            renderEvidence('mtls-evidence', data.mtls);
+            renderEvidence('attestation-evidence', data.attestation);
+            renderEvidence('private-link-evidence', data.private_link);
+            renderEvidence('encryption-evidence', data.encryption_at_rest);
         }).catch(error => document.querySelectorAll('.evidence-panel').forEach(panel => { panel.textContent = 'Evidence unavailable'; }));
     </script>
 </body>

@@ -162,6 +162,17 @@ Write-Host "✓ App instance resource group ready" -ForegroundColor Green
 $userUpn = az ad signed-in-user show --query "userPrincipalName" -o tsv
 Write-Host "Current user: $userUpn" -ForegroundColor Yellow
 
+# Policy may attach additional identities to the VM. Select this application
+# identity explicitly so IMDS can issue the token used to read CMK evidence.
+$appIdentity = az identity create `
+    --resource-group $RgName `
+    --name "$Prefix-cvm-identity" `
+    --location $Location `
+    --query '{clientId:clientId, principalId:principalId}' `
+    --output json | ConvertFrom-Json
+if (-not $appIdentity.clientId) { throw 'Failed to provision the app managed identity.' }
+$appIdentityClientId = $appIdentity.clientId
+
 # Generate a temporary key for the deployment if one is not already available.
 $sshKeyPath = Join-Path $env:TEMP "citizen-registry-$Prefix"
 if (-not (Test-Path "$sshKeyPath.pub")) {
@@ -236,7 +247,7 @@ openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca
 chmod 600 /etc/citizen-registry/certs/*.key
 chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=10.0.3.4\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=10.0.3.4\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target
@@ -352,6 +363,23 @@ if ($Deploy) {
         Write-Host "Deployment Outputs:" -ForegroundColor Cyan
         $deploymentOutputs = $deployment | ConvertFrom-Json
         Write-Host ($deploymentOutputs | ConvertTo-Json -Depth 10)
+
+        # Managed HSM key metadata is data-plane protected. Crypto Auditor lets
+        # the app display this key's attributes and SKR policy, but cannot
+        # release, wrap, unwrap, export, delete, rotate, or modify the CMK.
+        $appIdentityPrincipalId = az identity show --resource-group $RgName --name "$Prefix-cvm-identity" --query principalId -o tsv
+        az resource update --ids $hsmId --set properties.publicNetworkAccess=Enabled properties.networkAcls.defaultAction=Allow properties.networkAcls.bypass=AzureServices | Out-Null
+        try {
+            az keyvault role assignment create `
+                --hsm-name $hsmName `
+                --role 'Managed HSM Crypto Auditor' `
+                --assignee-object-id $appIdentityPrincipalId `
+                --scope "/keys/$osDiskKeyName" `
+                --output none
+        } finally {
+            az resource update --ids $hsmId --set properties.publicNetworkAccess=Disabled properties.networkAcls.defaultAction=Deny properties.networkAcls.bypass=AzureServices --remove properties.networkAcls.ipRules | Out-Null
+        }
+        Write-Host "App identity can read CMK and SKR policy metadata" -ForegroundColor Green
 
         # Complete cross-resource-group networking from the shared-infrastructure side.
         $appVnetId = $deploymentOutputs.vnetId.value

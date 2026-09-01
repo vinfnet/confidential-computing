@@ -46,6 +46,80 @@ Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the appli
 | Database | Connected; 12 records |
 | Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
 
+### Live CMK and Secure Key Release Evidence
+
+Expanding **Encryption at-rest: CMK** in the application now retrieves and displays the
+deployed key's metadata and Secure Key Release (SKR) policy directly from Managed HSM. This
+is live evidence rather than a hardcoded copy of the deployment configuration.
+
+The retrieval flow is:
+
+1. The browser requests `GET /security/evidence` from the app CVM.
+2. Flask obtains a token for `https://managedhsm.azure.net/.default` using the app CVM's
+  user-assigned managed identity. `AZURE_CLIENT_ID` explicitly selects this identity because
+  subscription policy can attach additional identities to the VM.
+3. Flask calls `GET {HSM_ENDPOINT}/keys/{OS_DISK_KEY_NAME}?api-version=7.4` over the peered
+   VNet and Managed HSM Private Link endpoint.
+4. The app base64url-decodes the HSM `release_policy.data` value and parses it as JSON.
+5. The UI displays the selected key attributes and formats the decoded policy as indented
+   JSON in the CMK evidence panel.
+
+The evidence response intentionally includes only:
+
+- versioned key URL, key type, and permitted key operations;
+- enabled and exportable attributes;
+- release-policy content type and decoded JSON policy;
+- retrieval status or a non-sensitive exception type when unavailable.
+
+RSA parameters and all other fields from the complete HSM response are deliberately omitted.
+No private key material can be returned by this path.
+
+#### Why the App Identity Needs Managed HSM Crypto Auditor
+
+Managed HSM protects key metadata and release policies on its authenticated data plane. The
+app identity therefore receives **Managed HSM Crypto Auditor**, scoped only to:
+
+```text
+/keys/sgall-cvm-os-key
+```
+
+This role supplies key metadata read access required by the evidence endpoint. It does not
+permit the app to release, wrap, unwrap, export, delete, rotate, or modify the CMK. The roles
+that operate the disk remain separate:
+
+| Principal | Key-scoped role | Purpose |
+|---|---|---|
+| App CVM managed identity | Managed HSM Crypto Auditor | Read key metadata and SKR policy for display |
+| Disk Encryption Set identity | Managed HSM Crypto Service Encryption User | Read/wrap/unwrap the disk encryption key |
+| Azure CVM Orchestrator | Managed HSM Crypto Service Release User | Release after successful CVM attestation |
+
+The HSM remains public-disabled after role assignment. Runtime retrieval resolves
+`sgallhsm239.managedhsm.azure.net` to the private endpoint (`10.10.1.4`). If identity,
+network, or HSM access fails, the application reports `cmk.status = unavailable` and a
+non-sensitive exception class instead of fabricating policy evidence.
+
+The live default CVM policy validated for this deployment is:
+
+```json
+{
+  "version": "1.0.0",
+  "anyOf": [
+    {
+      "authority": "https://sharedneu.neu.attest.azure.net/",
+      "allOf": [
+        {
+          "claim": "x-ms-compliance-status",
+          "equals": "azure-compliant-cvm"
+        }
+      ]
+    }
+  ]
+}
+```
+
+This policy is Azure-compliant-CVM-bound, not VM-ID-bound. Both confidential OS disks use
+the same HSM-backed Disk Encryption Set and policy in this demo.
+
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
 **This example requires Azure Managed HSM (Hardware Security Module), which has significant costs.**
