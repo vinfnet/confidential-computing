@@ -88,7 +88,7 @@ cd .\citizen-registry-advanced
 - App Confidential VM (C-vn2 with SEV-SNP)
 - SQL Server Confidential VM on the same private app subnet
 - Private app-to-database connection on TCP 1433
-- SQL Server database `citizendb` seeded with 12 fictional demo citizens
+- SQL Server database `citizendb` seeded with 100 fictional government-style citizen records
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM

@@ -324,7 +324,7 @@ Confidential VM (Managed Identity: cvm-identity)
    └─ Bicep deploys Standard Bastion with tunneling enabled
 
 6. Seed Database
-   └─ SQL CVM cloud-init creates the schema and 12 fictional records
+   └─ App migration creates the expanded schema and 100 fictional records
 
 7. Output App Resources
    ├─ CVM ID & private IP

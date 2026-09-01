@@ -124,13 +124,16 @@
         
         .citizens-section h2 {
             color: #333;
-            margin-bottom: 20px;
             font-size: 20px;
         }
+
+        .section-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+        .table-wrap { overflow-x: auto; border: 1px solid #e5e7eb; }
         
         table {
             width: 100%;
             border-collapse: collapse;
+            min-width: 1280px;
         }
         
         table thead {
@@ -153,6 +156,7 @@
             border-bottom: 1px solid #eee;
             color: #666;
             font-size: 13px;
+            white-space: nowrap;
         }
         
         table tbody tr:hover {
@@ -173,6 +177,27 @@
             background: #dbeafe;
             color: #0369a1;
         }
+
+        .currency { font-variant-numeric: tabular-nums; text-align: right; }
+        .actions { display: flex; gap: 6px; }
+        button { border: 0; cursor: pointer; font: inherit; }
+        .command-button { background: #1d4ed8; color: white; padding: 9px 14px; border-radius: 4px; font-weight: 600; }
+        .secondary-button { background: #e2e8f0; color: #1e293b; padding: 7px 10px; border-radius: 4px; }
+        .danger-button { background: #fee2e2; color: #b91c1c; padding: 7px 10px; border-radius: 4px; }
+        dialog { width: min(720px, calc(100% - 32px)); border: 0; padding: 0; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+        dialog::backdrop { background: rgba(15, 23, 42, .6); }
+        .dialog-content { padding: 24px; }
+        .dialog-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .dialog-header h2 { font-size: 20px; }
+        .close-button { background: transparent; font-size: 24px; padding: 4px 8px; }
+        .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .form-field { display: flex; flex-direction: column; gap: 5px; }
+        .form-field.full { grid-column: 1 / -1; }
+        .form-field label { color: #334155; font-size: 12px; font-weight: 600; }
+        .form-field input, .form-field select { width: 100%; border: 1px solid #cbd5e1; padding: 9px; font: inherit; }
+        .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+        #form-message { min-height: 20px; margin-top: 12px; color: #b91c1c; }
+        @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } .form-field.full { grid-column: auto; } }
         
         footer {
             text-align: center;
@@ -249,16 +274,26 @@
         </header>
         
         <div class="citizens-section">
-            <h2>Registered Citizens</h2>
+            <div class="section-header">
+                <h2>Registered Citizens</h2>
+                <button class="command-button" id="add-citizen" type="button">+ Add citizen</button>
+            </div>
             
             {% if citizens %}
+            <div class="table-wrap">
                 <table>
                     <thead>
                         <tr>
                             <th>ID</th>
                             <th>National ID</th>
                             <th>Name</th>
-                            <th>Region</th>
+                            <th>Date of birth</th>
+                            <th>Street address</th>
+                            <th>Town</th>
+                            <th>State</th>
+                            <th>Socio-economic group</th>
+                            <th>Tax paid last year</th>
+                            <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -267,17 +302,52 @@
                             <td>{{ citizen.id }}</td>
                             <td><code>{{ citizen.national_id }}</code></td>
                             <td>{{ citizen.first_name }} {{ citizen.last_name }}</td>
+                            <td>{{ citizen.date_of_birth }}</td>
+                            <td>{{ citizen.address_line }}</td>
+                            <td>{{ citizen.municipality }}</td>
                             <td><span class="badge region">{{ citizen.region }}</span></td>
+                            <td>{{ citizen.socioeconomic_group }}</td>
+                            <td class="currency">N£{{ "{:,.2f}".format(citizen.tax_paid_last_year) }}</td>
+                            <td><div class="actions">
+                                <button class="secondary-button edit-citizen" type="button" data-id="{{ citizen.id }}">Edit</button>
+                                <button class="danger-button delete-citizen" type="button" data-id="{{ citizen.id }}" data-name="{{ citizen.first_name }} {{ citizen.last_name }}">Delete</button>
+                            </div></td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+            </div>
             {% else %}
                 <div class="loading">
                     Loading citizen records...
                 </div>
             {% endif %}
         </div>
+
+        <dialog id="citizen-dialog">
+            <form class="dialog-content" id="citizen-form">
+                <div class="dialog-header">
+                    <h2 id="dialog-title">Add citizen</h2>
+                    <button class="close-button" id="close-dialog" type="button" aria-label="Close">×</button>
+                </div>
+                <input id="citizen-id" type="hidden">
+                <div class="form-grid">
+                    <div class="form-field"><label for="national-id">National ID</label><input id="national-id" required maxlength="20" pattern="[A-Za-z0-9-]+"></div>
+                    <div class="form-field"><label for="date-of-birth">Date of birth</label><input id="date-of-birth" type="date" required></div>
+                    <div class="form-field"><label for="first-name">First name</label><input id="first-name" required maxlength="100"></div>
+                    <div class="form-field"><label for="last-name">Last name</label><input id="last-name" required maxlength="100"></div>
+                    <div class="form-field full"><label for="address-line">Street address</label><input id="address-line" required maxlength="200"></div>
+                    <div class="form-field"><label for="municipality">Town</label><input id="municipality" required maxlength="100"></div>
+                    <div class="form-field"><label for="region">State</label><input id="region" required maxlength="100"></div>
+                    <div class="form-field"><label for="postal-code">Postal code</label><input id="postal-code" required maxlength="10"></div>
+                    <div class="form-field"><label for="sex">Sex</label><select id="sex"><option>F</option><option>M</option><option>X</option></select></div>
+                    <div class="form-field"><label for="socioeconomic-group">Socio-economic group</label><select id="socioeconomic-group"><option>A1 - Professional</option><option>A2 - Managerial</option><option>B1 - Skilled</option><option>B2 - Intermediate</option><option>C1 - Service</option><option>C2 - Supported</option></select></div>
+                    <div class="form-field"><label for="tax-paid">Tax paid last year (N£)</label><input id="tax-paid" type="number" min="0" step="0.01" required></div>
+                </div>
+                <div id="form-message" role="alert"></div>
+                <div class="dialog-actions"><button class="secondary-button" id="cancel-dialog" type="button">Cancel</button><button class="command-button" type="submit">Save</button></div>
+            </form>
+        </dialog>
         
         <footer>
             <p>🔐 Citizen Registry Advanced | Confidential Computing on Azure | mTLS & Managed HSM</p>
@@ -317,6 +387,50 @@
             renderEvidence('private-link-evidence', data.private_link);
             renderEvidence('encryption-evidence', data.encryption_at_rest);
         }).catch(error => document.querySelectorAll('.evidence-panel').forEach(panel => { panel.textContent = 'Evidence unavailable'; }));
+
+        const dialog = document.getElementById('citizen-dialog');
+        const form = document.getElementById('citizen-form');
+        const fields = {
+            national_id: document.getElementById('national-id'), first_name: document.getElementById('first-name'),
+            last_name: document.getElementById('last-name'), date_of_birth: document.getElementById('date-of-birth'),
+            sex: document.getElementById('sex'), region: document.getElementById('region'),
+            municipality: document.getElementById('municipality'), address_line: document.getElementById('address-line'),
+            postal_code: document.getElementById('postal-code'), socioeconomic_group: document.getElementById('socioeconomic-group'),
+            tax_paid_last_year: document.getElementById('tax-paid')
+        };
+        const closeDialog = () => dialog.close();
+        document.getElementById('close-dialog').addEventListener('click', closeDialog);
+        document.getElementById('cancel-dialog').addEventListener('click', closeDialog);
+        document.getElementById('add-citizen').addEventListener('click', () => {
+            form.reset(); document.getElementById('citizen-id').value = '';
+            document.getElementById('dialog-title').textContent = 'Add citizen';
+            document.getElementById('form-message').textContent = ''; dialog.showModal();
+        });
+        document.querySelectorAll('.edit-citizen').forEach(button => button.addEventListener('click', async () => {
+            const response = await fetch(`/api/citizen/${button.dataset.id}`);
+            if (!response.ok) { alert('A valid mTLS client certificate is required to edit records.'); return; }
+            const citizen = await response.json();
+            Object.entries(fields).forEach(([key, field]) => { field.value = citizen[key] ?? ''; });
+            document.getElementById('citizen-id').value = citizen.id;
+            document.getElementById('dialog-title').textContent = 'Edit citizen';
+            document.getElementById('form-message').textContent = ''; dialog.showModal();
+        }));
+        document.querySelectorAll('.delete-citizen').forEach(button => button.addEventListener('click', async () => {
+            if (!confirm(`Delete ${button.dataset.name}?`)) return;
+            const response = await fetch(`/api/citizen/${button.dataset.id}`, { method: 'DELETE' });
+            if (response.ok) location.reload(); else alert('Delete failed. A valid mTLS client certificate is required.');
+        }));
+        form.addEventListener('submit', async event => {
+            event.preventDefault();
+            const id = document.getElementById('citizen-id').value;
+            const body = Object.fromEntries(Object.entries(fields).map(([key, field]) => [key, field.value]));
+            body.tax_paid_last_year = Number(body.tax_paid_last_year);
+            const response = await fetch(id ? `/api/citizen/${id}` : '/api/citizen', {
+                method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            });
+            if (response.ok) location.reload();
+            else document.getElementById('form-message').textContent = (await response.json()).error || 'Save failed';
+        });
     </script>
 </body>
 </html>

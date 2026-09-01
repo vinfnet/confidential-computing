@@ -19,6 +19,7 @@ import pyodbc
 import sqlite3
 import logging
 from datetime import datetime
+from decimal import Decimal
 from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
 
@@ -69,6 +70,59 @@ KEY_RELEASE_STATUS = os.environ.get('KEY_RELEASE_STATUS', 'not_configured')
 
 _credential = None
 _credential_lock = threading.Lock()
+_database_ready = False
+_database_ready_lock = threading.Lock()
+
+FIRST_NAMES = [
+    'Aisha', 'Alex', 'Amara', 'Daniel', 'Elena', 'Elias', 'Freya', 'Grace',
+    'Hana', 'Idris', 'Jonas', 'Leila', 'Mateo', 'Maya', 'Nora', 'Omar',
+    'Priya', 'Samuel', 'Sofia', 'Tomas',
+]
+LAST_NAMES = [
+    'Bennett', 'Berg', 'Chen', 'Costa', 'Dubois', 'Garcia', 'Haddad', 'Ivanov',
+    'Johnson', 'Khan', 'Larsen', 'Mensah', 'Novak', 'Okafor', 'Petrova',
+    'Rossi', 'Silva', 'Smith', 'Tanaka', 'Williams',
+]
+LOCATIONS = [
+    ('Central', 'Alderwick', 'Cedar Avenue', 'NR1'),
+    ('Central', 'Kingshaven', 'Parliament Street', 'NR2'),
+    ('North', 'Riverside', 'Mill Lane', 'NR3'),
+    ('North', 'Harbor', 'Seafarer Road', 'NR4'),
+    ('South', 'Lakeside', 'Willow Crescent', 'NR5'),
+    ('South', 'Meadowfield', 'Orchard Way', 'NR6'),
+    ('East', 'Hillview', 'Beacon Street', 'NR7'),
+    ('East', 'Stonebridge', 'Foundry Road', 'NR8'),
+    ('West', 'Oakridge', 'Maple Drive', 'NR9'),
+    ('West', 'Westport', 'Quayside Avenue', 'NR10'),
+]
+SOCIOECONOMIC_GROUPS = [
+    'A1 - Professional', 'A2 - Managerial', 'B1 - Skilled',
+    'B2 - Intermediate', 'C1 - Service', 'C2 - Supported',
+]
+
+
+def _synthetic_citizens():
+    """Build 100 deterministic, entirely fictional Republic of Norland records."""
+    citizens = []
+    for index in range(1, 101):
+        state, town, street, postal_area = LOCATIONS[(index - 1) % len(LOCATIONS)]
+        year = 1948 + ((index * 7) % 58)
+        month = 1 + ((index * 5) % 12)
+        day = 1 + ((index * 11) % 27)
+        citizens.append({
+            'national_id': f'NLD-{year % 100:02d}{chr(65 + index % 26)}-{index:04d}X',
+            'first_name': FIRST_NAMES[(index * 3) % len(FIRST_NAMES)],
+            'last_name': LAST_NAMES[(index * 7) % len(LAST_NAMES)],
+            'date_of_birth': f'{year:04d}-{month:02d}-{day:02d}',
+            'sex': ('F', 'M', 'X')[index % 3],
+            'region': state,
+            'municipality': town,
+            'address_line': f'{10 + ((index * 13) % 190)} {street}',
+            'postal_code': f'{postal_area} {index % 10}{(index * 7) % 10}Q',
+            'socioeconomic_group': SOCIOECONOMIC_GROUPS[(index * 5) % len(SOCIOECONOMIC_GROUPS)],
+            'tax_paid_last_year': Decimal(850 + ((index * 1879) % 48600)) + Decimal(index % 100) / 100,
+        })
+    return citizens
 
 # ============================================================================
 # Database Connection Management
@@ -116,6 +170,18 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute(
             f"ALTER ROLE db_datawriter ADD MEMBER [{db_user}]"
         )
+
+        # Gunicorn workers can initialize concurrently after deployment. Hold a
+        # session lock so schema migration and baseline seeding run exactly once.
+        cur.execute("""
+            DECLARE @lock_result INT;
+            EXEC @lock_result = sys.sp_getapplock
+                @Resource = N'citizen-registry-seed-v100',
+                @LockMode = N'Exclusive',
+                @LockOwner = N'Session',
+                @LockTimeout = 30000;
+            IF @lock_result < 0 THROW 51000, 'Could not acquire seed lock', 1;
+        """)
         
         # Create citizen_registry table
         cur.execute("""
@@ -137,11 +203,43 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                     employment_status NVARCHAR(30) DEFAULT N'Employed',
                     tax_bracket NVARCHAR(10) DEFAULT N'B',
                     registered_voter BIT DEFAULT 1,
+                    socioeconomic_group NVARCHAR(40),
+                    tax_paid_last_year DECIMAL(12,2),
                     created_date DATETIME DEFAULT GETUTCDATE(),
                     modified_date DATETIME DEFAULT GETUTCDATE()
                 )
             END
         """)
+
+        cur.execute("""
+            IF COL_LENGTH('dbo.citizen_registry', 'socioeconomic_group') IS NULL
+                ALTER TABLE dbo.citizen_registry ADD socioeconomic_group NVARCHAR(40) NULL;
+            IF COL_LENGTH('dbo.citizen_registry', 'tax_paid_last_year') IS NULL
+                ALTER TABLE dbo.citizen_registry ADD tax_paid_last_year DECIMAL(12,2) NULL;
+            IF OBJECT_ID(N'dbo.demo_metadata', N'U') IS NULL
+                CREATE TABLE dbo.demo_metadata (seed_version INT NOT NULL);
+        """)
+
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 100")
+        if cur.fetchone()[0] == 0:
+            cur.execute("DELETE FROM dbo.citizen_registry")
+            insert_sql = """
+                INSERT INTO dbo.citizen_registry
+                (national_id, first_name, last_name, date_of_birth, sex, region,
+                 municipality, address_line, postal_code, socioeconomic_group,
+                 tax_paid_last_year)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """
+            for citizen in _synthetic_citizens():
+                cur.execute(insert_sql, (
+                    citizen['national_id'], citizen['first_name'], citizen['last_name'],
+                    citizen['date_of_birth'], citizen['sex'], citizen['region'],
+                    citizen['municipality'], citizen['address_line'],
+                    citizen['postal_code'], citizen['socioeconomic_group'],
+                    citizen['tax_paid_last_year'],
+                ))
+            cur.execute("DELETE FROM dbo.demo_metadata")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (100)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
@@ -191,31 +289,47 @@ def _get_db_conn():
                 employment_status TEXT DEFAULT 'Employed',
                 tax_bracket TEXT DEFAULT 'B',
                 registered_voter INTEGER DEFAULT 1,
+                socioeconomic_group TEXT,
+                tax_paid_last_year NUMERIC,
                 created_date TEXT DEFAULT CURRENT_TIMESTAMP,
                 modified_date TEXT DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
-        if conn.execute('SELECT COUNT(*) FROM citizen_registry').fetchone()[0] == 0:
+        existing_columns = {
+            row[1] for row in conn.execute('PRAGMA table_info(citizen_registry)').fetchall()
+        }
+        if 'socioeconomic_group' not in existing_columns:
+            conn.execute('ALTER TABLE citizen_registry ADD COLUMN socioeconomic_group TEXT')
+        if 'tax_paid_last_year' not in existing_columns:
+            conn.execute('ALTER TABLE citizen_registry ADD COLUMN tax_paid_last_year NUMERIC')
+        conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (seed_version INTEGER NOT NULL)')
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 100').fetchone()[0] == 0:
+            conn.execute('DELETE FROM citizen_registry')
             conn.executemany(
                 """
                 INSERT INTO citizen_registry
-                (national_id, first_name, last_name, date_of_birth, sex, region, municipality)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (national_id, first_name, last_name, date_of_birth, sex, region,
+                 municipality, address_line, postal_code, socioeconomic_group,
+                 tax_paid_last_year)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
-                    ('DEMO-0001', 'John', 'Smith', '1985-04-12', 'M', 'Central', 'Capital'),
-                    ('DEMO-0002', 'Maria', 'Garcia', '1990-09-23', 'F', 'North', 'Riverside'),
-                    ('DEMO-0003', 'Alex', 'Johnson', '1978-01-30', 'X', 'South', 'Lakeside'),
+                    tuple(float(value) if isinstance(value, Decimal) else value for value in citizen.values())
+                    for citizen in _synthetic_citizens()
                 ],
             )
+            conn.execute('DELETE FROM demo_metadata')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (100)')
             conn.commit()
         return conn
     
     if DB_USER and DB_PASSWORD:
         conn_str = _build_sql_auth_conn_str(DB_HOST, DB_NAME, DB_USER, DB_PASSWORD)
         try:
-            return pyodbc.connect(conn_str)
+            conn = pyodbc.connect(conn_str)
+            _ensure_database_ready()
+            return conn
         except pyodbc.Error as e:
             error_text = str(e)
             if '4060' in error_text and DB_SA_PASSWORD:
@@ -225,6 +339,17 @@ def _get_db_conn():
             raise
     else:
         raise RuntimeError('Database credentials not configured')
+
+
+def _ensure_database_ready():
+    """Apply the demo schema and deterministic seed once per app process."""
+    global _database_ready
+    if _database_ready or not DB_SA_PASSWORD:
+        return
+    with _database_ready_lock:
+        if not _database_ready:
+            _bootstrap_demo_database(DB_HOST, DB_NAME, DB_USER, DB_PASSWORD)
+            _database_ready = True
 
 
 # ============================================================================
@@ -378,7 +503,12 @@ def index():
     try:
         conn = _get_db_conn()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, national_id, first_name, last_name, region FROM citizen_registry ORDER BY id")
+        cursor.execute("""
+            SELECT id, national_id, first_name, last_name, date_of_birth,
+                   address_line, municipality, region, socioeconomic_group,
+                   tax_paid_last_year
+            FROM citizen_registry ORDER BY id
+        """)
         citizens = []
         for row in cursor.fetchall():
             citizens.append({
@@ -386,7 +516,12 @@ def index():
                 'national_id': row[1],
                 'first_name': row[2],
                 'last_name': row[3],
-                'region': row[4]
+                'date_of_birth': str(row[4]),
+                'address_line': row[5],
+                'municipality': row[6],
+                'region': row[7],
+                'socioeconomic_group': row[8],
+                'tax_paid_last_year': float(row[9] or 0),
             })
         conn.close()
         
@@ -404,7 +539,8 @@ def get_citizens():
         cursor = conn.cursor()
         cursor.execute("""
             SELECT id, national_id, first_name, last_name, date_of_birth, 
-                   region, municipality, marital_status, employment_status
+                     address_line, municipality, region, socioeconomic_group,
+                     tax_paid_last_year, sex, postal_code
             FROM citizen_registry
             ORDER BY last_name, first_name
         """)
@@ -417,10 +553,13 @@ def get_citizens():
                 'first_name': row[2],
                 'last_name': row[3],
                 'date_of_birth': str(row[4]),
-                'region': row[5],
+                'address_line': row[5],
                 'municipality': row[6],
-                'marital_status': row[7],
-                'employment_status': row[8]
+                'region': row[7],
+                'socioeconomic_group': row[8],
+                'tax_paid_last_year': float(row[9] or 0),
+                'sex': row[10],
+                'postal_code': row[11],
             })
         conn.close()
         
@@ -436,10 +575,12 @@ def get_citizen(citizen_id):
     try:
         conn = _get_db_conn()
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT * FROM citizen_registry WHERE id = ?",
-            (citizen_id,)
-        )
+        cursor.execute("""
+            SELECT id, national_id, first_name, last_name, date_of_birth, sex,
+                   region, municipality, address_line, postal_code,
+                   socioeconomic_group, tax_paid_last_year
+            FROM citizen_registry WHERE id = ?
+        """, (citizen_id,))
         row = cursor.fetchone()
         conn.close()
         
@@ -455,8 +596,10 @@ def get_citizen(citizen_id):
             'sex': row[5],
             'region': row[6],
             'municipality': row[7],
-            'address': row[8],
-            'postal_code': row[9]
+            'address_line': row[8],
+            'postal_code': row[9],
+            'socioeconomic_group': row[10],
+            'tax_paid_last_year': float(row[11] or 0),
         })
     except Exception as e:
         logger.error(f"Error retrieving citizen {citizen_id}: {e}")
@@ -473,8 +616,10 @@ def create_citizen():
         
         cursor.execute("""
             INSERT INTO citizen_registry 
-            (national_id, first_name, last_name, date_of_birth, sex, region, municipality)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (national_id, first_name, last_name, date_of_birth, sex, region,
+             municipality, address_line, postal_code, socioeconomic_group,
+             tax_paid_last_year)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             data['national_id'],
             data['first_name'],
@@ -482,7 +627,11 @@ def create_citizen():
             data['date_of_birth'],
             data.get('sex', 'M'),
             data.get('region', 'Central'),
-            data.get('municipality', 'Capital')
+            data.get('municipality', 'Capital'),
+            data.get('address_line', ''),
+            data.get('postal_code', ''),
+            data.get('socioeconomic_group', 'B1 - Skilled'),
+            data.get('tax_paid_last_year', 0),
         ))
         
         conn.commit()
@@ -505,13 +654,23 @@ def update_citizen(citizen_id):
         
         cursor.execute("""
             UPDATE citizen_registry
-            SET first_name = ?, last_name = ?, marital_status = ?, employment_status = ?
+            SET national_id = ?, first_name = ?, last_name = ?, date_of_birth = ?,
+                sex = ?, region = ?, municipality = ?, address_line = ?,
+                postal_code = ?, socioeconomic_group = ?, tax_paid_last_year = ?,
+                modified_date = CURRENT_TIMESTAMP
             WHERE id = ?
         """, (
+            data.get('national_id'),
             data.get('first_name'),
             data.get('last_name'),
-            data.get('marital_status'),
-            data.get('employment_status'),
+            data.get('date_of_birth'),
+            data.get('sex'),
+            data.get('region'),
+            data.get('municipality'),
+            data.get('address_line'),
+            data.get('postal_code'),
+            data.get('socioeconomic_group'),
+            data.get('tax_paid_last_year'),
             citizen_id
         ))
         

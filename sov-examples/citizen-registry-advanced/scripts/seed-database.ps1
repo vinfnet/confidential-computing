@@ -53,23 +53,36 @@ if (-not (Test-Path $DataFile)) {
     Write-Host "⚠ Data file not found: $DataFile" -ForegroundColor Yellow
     Write-Host "Using default demo data..." -ForegroundColor Yellow
     
-    # Create default demo data (simplified)
-    $demoData = @{
-        citizens = @(
-            @{ id = 1; firstName = "John"; lastName = "Smith"; region = "Central"; municipality = "Capital"; dateOfBirth = "1985-04-12"; idNumber = "DEMO-0001" },
-            @{ id = 2; firstName = "Maria"; lastName = "Garcia"; region = "North"; municipality = "Riverside"; dateOfBirth = "1990-09-23"; idNumber = "DEMO-0002" },
-            @{ id = 3; firstName = "Alex"; lastName = "Johnson"; region = "South"; municipality = "Lakeside"; dateOfBirth = "1978-01-30"; idNumber = "DEMO-0003" },
-            @{ id = 4; firstName = "Aisha"; lastName = "Khan"; region = "East"; municipality = "Hillview"; dateOfBirth = "1988-06-17"; idNumber = "DEMO-0004" },
-            @{ id = 5; firstName = "Daniel"; lastName = "Rossi"; region = "West"; municipality = "Oakridge"; dateOfBirth = "1972-12-05"; idNumber = "DEMO-0005" },
-            @{ id = 6; firstName = "Elena"; lastName = "Petrova"; region = "Central"; municipality = "Capital"; dateOfBirth = "1995-02-28"; idNumber = "DEMO-0006" },
-            @{ id = 7; firstName = "Samuel"; lastName = "Okafor"; region = "North"; municipality = "Harbor"; dateOfBirth = "1981-10-11"; idNumber = "DEMO-0007" },
-            @{ id = 8; firstName = "Nora"; lastName = "Bennett"; region = "South"; municipality = "Lakeside"; dateOfBirth = "2000-07-09"; idNumber = "DEMO-0008" },
-            @{ id = 9; firstName = "Mateo"; lastName = "Silva"; region = "East"; municipality = "Border"; dateOfBirth = "1969-03-21"; idNumber = "DEMO-0009" },
-            @{ id = 10; firstName = "Hana"; lastName = "Tanaka"; region = "West"; municipality = "Coast"; dateOfBirth = "1983-11-14"; idNumber = "DEMO-0010" },
-            @{ id = 11; firstName = "Grace"; lastName = "Williams"; region = "Central"; municipality = "Capital"; dateOfBirth = "1998-05-03"; idNumber = "DEMO-0011" },
-            @{ id = 12; firstName = "Omar"; lastName = "Haddad"; region = "North"; municipality = "Riverside"; dateOfBirth = "1976-08-26"; idNumber = "DEMO-0012" }
-        )
+    $firstNames = @('Aisha', 'Alex', 'Amara', 'Daniel', 'Elena', 'Elias', 'Freya', 'Grace', 'Hana', 'Idris', 'Jonas', 'Leila', 'Mateo', 'Maya', 'Nora', 'Omar', 'Priya', 'Samuel', 'Sofia', 'Tomas')
+    $lastNames = @('Bennett', 'Berg', 'Chen', 'Costa', 'Dubois', 'Garcia', 'Haddad', 'Ivanov', 'Johnson', 'Khan', 'Larsen', 'Mensah', 'Novak', 'Okafor', 'Petrova', 'Rossi', 'Silva', 'Smith', 'Tanaka', 'Williams')
+    $locations = @(
+        @('Central', 'Alderwick', 'Cedar Avenue', 'NR1'), @('Central', 'Kingshaven', 'Parliament Street', 'NR2'),
+        @('North', 'Riverside', 'Mill Lane', 'NR3'), @('North', 'Harbor', 'Seafarer Road', 'NR4'),
+        @('South', 'Lakeside', 'Willow Crescent', 'NR5'), @('South', 'Meadowfield', 'Orchard Way', 'NR6'),
+        @('East', 'Hillview', 'Beacon Street', 'NR7'), @('East', 'Stonebridge', 'Foundry Road', 'NR8'),
+        @('West', 'Oakridge', 'Maple Drive', 'NR9'), @('West', 'Westport', 'Quayside Avenue', 'NR10')
+    )
+    $groups = @('A1 - Professional', 'A2 - Managerial', 'B1 - Skilled', 'B2 - Intermediate', 'C1 - Service', 'C2 - Supported')
+    $citizens = for ($index = 1; $index -le 100; $index++) {
+        $location = $locations[($index - 1) % $locations.Count]
+        $year = 1948 + (($index * 7) % 58)
+        $month = 1 + (($index * 5) % 12)
+        $day = 1 + (($index * 11) % 27)
+        [pscustomobject]@{
+            idNumber = 'NLD-{0:D2}{1}-{2:D4}X' -f ($year % 100), [char](65 + ($index % 26)), $index
+            firstName = $firstNames[($index * 3) % $firstNames.Count]
+            lastName = $lastNames[($index * 7) % $lastNames.Count]
+            dateOfBirth = '{0:D4}-{1:D2}-{2:D2}' -f $year, $month, $day
+            sex = @('F', 'M', 'X')[$index % 3]
+            region = $location[0]
+            municipality = $location[1]
+            addressLine = '{0} {1}' -f (10 + (($index * 13) % 190)), $location[2]
+            postalCode = '{0} {1}{2}Q' -f $location[3], ($index % 10), (($index * 7) % 10)
+            socioeconomicGroup = $groups[($index * 5) % $groups.Count]
+            taxPaidLastYear = 850 + (($index * 1879) % 48600) + (($index % 100) / 100)
+        }
     }
+    $demoData = @{ citizens = $citizens }
 } else {
     Write-Host "Loading data from: $DataFile" -ForegroundColor Yellow
     $demoData = Get-Content $DataFile | ConvertFrom-Json
@@ -80,6 +93,11 @@ Write-Host ""
 
 # Generate SQL script
 Write-Host "Generating database initialization script..." -ForegroundColor Yellow
+
+$valuesSql = ($demoData.citizens | ForEach-Object {
+    $tax = [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{0:F2}', [decimal]$_.taxPaidLastYear)
+    "('$($_.idNumber)', '$($_.firstName)', '$($_.lastName)', '$($_.dateOfBirth)', '$($_.sex)', '$($_.region)', '$($_.municipality)', '$($_.addressLine)', '$($_.postalCode)', '$($_.socioeconomicGroup)', $tax)"
+}) -join ",`n        "
 
 $sqlScript = @"
 -- Citizen Registry Database Initialization
@@ -113,6 +131,8 @@ BEGIN
         employment_status VARCHAR(30) DEFAULT 'Employed',
         tax_bracket VARCHAR(10) DEFAULT 'B',
         registered_voter BIT DEFAULT 1,
+        socioeconomic_group VARCHAR(40),
+        tax_paid_last_year DECIMAL(12,2),
         created_date DATETIME DEFAULT GETUTCDATE(),
         modified_date DATETIME DEFAULT GETUTCDATE()
     );
@@ -131,22 +151,11 @@ SELECT @citizenCount = COUNT(*) FROM citizen_registry;
 
 IF @citizenCount = 0
 BEGIN
-    INSERT INTO citizen_registry (national_id, first_name, last_name, date_of_birth, sex, region, municipality)
+    INSERT INTO citizen_registry (national_id, first_name, last_name, date_of_birth, sex, region, municipality, address_line, postal_code, socioeconomic_group, tax_paid_last_year)
     VALUES
-        ('DEMO-0001', 'John', 'Smith', '1985-04-12', 'M', 'Central', 'Capital'),
-        ('DEMO-0002', 'Maria', 'Garcia', '1990-09-23', 'F', 'North', 'Riverside'),
-        ('DEMO-0003', 'Alex', 'Johnson', '1978-01-30', 'X', 'South', 'Lakeside'),
-        ('DEMO-0004', 'Aisha', 'Khan', '1988-06-17', 'F', 'East', 'Hillview'),
-        ('DEMO-0005', 'Daniel', 'Rossi', '1972-12-05', 'M', 'West', 'Oakridge'),
-        ('DEMO-0006', 'Elena', 'Petrova', '1995-02-28', 'F', 'Central', 'Capital'),
-        ('DEMO-0007', 'Samuel', 'Okafor', '1981-10-11', 'M', 'North', 'Harbor'),
-        ('DEMO-0008', 'Nora', 'Bennett', '2000-07-09', 'F', 'South', 'Lakeside'),
-        ('DEMO-0009', 'Mateo', 'Silva', '1969-03-21', 'M', 'East', 'Border'),
-        ('DEMO-0010', 'Hana', 'Tanaka', '1983-11-14', 'F', 'West', 'Coast'),
-        ('DEMO-0011', 'Grace', 'Williams', '1998-05-03', 'F', 'Central', 'Capital'),
-        ('DEMO-0012', 'Omar', 'Haddad', '1976-08-26', 'M', 'North', 'Riverside');
+        $valuesSql;
     
-    PRINT 'Inserted 12 citizen records';
+    PRINT 'Inserted 100 fictional citizen records';
 END
 
 SELECT COUNT(*) AS record_count FROM citizen_registry;
@@ -164,7 +173,7 @@ Write-Host "1. Copy seed-database.sql to the database server"
 Write-Host "2. Run on SQL Server:"
 Write-Host "   sqlcmd -S $DbServer -U $DbUsername -P (prompt) -i seed-database.sql"
 Write-Host "3. Verify data with:"
-Write-Host "   sqlcmd -S $DbServer -U $DbUsername -d $DbName -Q \"SELECT COUNT(*) FROM citizen_registry\""
+Write-Host "   sqlcmd -S $DbServer -U $DbUsername -d $DbName -Q `"SELECT COUNT(*) FROM citizen_registry`""
 Write-Host ""
 
 Write-Host "✓ Database seeding script ready" -ForegroundColor Green

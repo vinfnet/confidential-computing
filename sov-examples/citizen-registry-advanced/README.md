@@ -29,7 +29,7 @@
 
 Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the application CVM
 (`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
-`registryadmin` login, and 12 fictional demo citizen records. The app connects over private TCP 1433.
+`registryadmin` login, and 100 fictional demo citizen records. The app connects over private TCP 1433.
 
 ### Validated Deployment
 
@@ -43,7 +43,7 @@ Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the appli
 | Disk encryption | `ConfidentialVmEncryptedWithCustomerKey` via `sgall-cvm-os-des` |
 | Secure key release | Azure CVM Orchestrator has release-only access to `sgall-cvm-os-key` |
 | Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
-| Database | Connected; 12 records |
+| Database | Connected; 100 fictional records with CRUD operations |
 | Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
 
 ### Live CMK and Secure Key Release Evidence
@@ -156,7 +156,30 @@ Validation also confirmed:
 - Managed HSM remains `publicNetworkAccess: Disabled` with no public IP rules;
 - the app identity has only `Managed HSM Crypto Auditor` on the single CMK;
 - the browser CMK foldout displays one indented JSON block with no horizontal overflow;
-- the citizen table remains populated with all 12 records.
+- the citizen table displays all 100 fictional records and government-style fields.
+
+### Citizen Registry Data and CRUD UI
+
+The demo generates 100 deterministic, entirely fictional Republic of Norland records. Each
+record includes an alphanumeric national ID, date of birth, street address, town, state,
+socio-economic group, and tax paid in the prior year. Names, locations, identifiers, and
+financial values are synthetic and must not be treated as real personal data.
+
+The web table supports:
+
+- **Add citizen** using the form above the table;
+- **Edit** on each row to retrieve and update the complete record;
+- **Delete** on each row with an explicit confirmation prompt;
+- horizontal scrolling for the expanded government-record columns on narrow screens.
+
+Create, update, and delete requests use the existing `/api/citizen` endpoints and remain
+protected by nginx client-certificate verification. A browser without the Norland demo client
+certificate can view the registry but receives HTTP `401` for protected CRUD requests.
+
+Live validation confirmed 100 unique national IDs and all requested fields. An mTLS-authenticated
+test created a record (`201`), updated its address and tax value (`200`), retrieved the changes,
+deleted it (`200`), and returned the registry to exactly 100 records. A separate edit survived a
+Gunicorn restart, confirming the seed-version marker does not overwrite subsequent CRUD changes.
 
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
