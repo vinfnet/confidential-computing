@@ -318,13 +318,13 @@ Confidential VM (Managed Identity: cvm-identity)
    └─ Attestation Service
 
 4. Configure mTLS
-   └─ Run: .\scripts\configure-mtls.ps1
+   └─ Cloud-init creates the Norland demo PKI and installs nginx configuration
 
 5. Setup Bastion
-   └─ Run: .\scripts\setup-bastion.ps1
+   └─ Bicep deploys Standard Bastion with tunneling enabled
 
 6. Seed Database
-   └─ Run: .\scripts\seed-database.ps1
+   └─ SQL CVM cloud-init creates the schema and 12 fictional records
 
 7. Output App Resources
    ├─ CVM ID & private IP
@@ -369,16 +369,11 @@ citizen-registry-advanced/
 │
 ├─ scripts/
 │  ├─ initialize-hsm.ps1              # HSM security domain setup
-│  ├─ configure-mtls.ps1              # mTLS certificate generation
-│  ├─ setup-bastion.ps1               # Bastion access configuration
 │  └─ seed-database.ps1               # Database initialization
 │
 └─ app-instance/app-src/
    ├─ app.py                          # Flask app (450 lines)
-   ├─ requirements.txt                # Python dependencies
-   ├─ Dockerfile                      # Container image build
    ├─ nginx.conf                      # Reverse proxy (mTLS config)
-   ├─ supervisord.conf                # Process management
    └─ templates/
       └─ index.html                   # Web UI
 ```

@@ -96,7 +96,7 @@ Write-Host "✓ Deployment and validation complete" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next Steps:" -ForegroundColor Cyan
 Write-Host "1. Access Bastion and verify app attestation:"
-Write-Host "   PowerShell: .\scripts\setup-bastion.ps1 -ResourceGroupPattern '$($Prefix)'"
+Write-Host "   Use the Bastion tunnel command printed by Deploy-AppInstance.ps1"
 Write-Host ""
 Write-Host "2. Test app connectivity and citizen list"
 Write-Host ""

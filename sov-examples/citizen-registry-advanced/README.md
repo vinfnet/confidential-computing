@@ -120,6 +120,44 @@ The live default CVM policy validated for this deployment is:
 This policy is Azure-compliant-CVM-bound, not VM-ID-bound. Both confidential OS disks use
 the same HSM-backed Disk Encryption Set and policy in this demo.
 
+#### Live Validation Result
+
+The deployed app CVM returned the following non-secret CMK evidence through
+`GET /security/evidence`:
+
+```json
+{
+  "status": "retrieved",
+  "key_type": "RSA-HSM",
+  "key_operations": ["unwrapKey", "wrapKey"],
+  "enabled": true,
+  "exportable": true,
+  "release_policy_content_type": "application/json; charset=utf-8",
+  "release_policy": {
+    "version": "1.0.0",
+    "anyOf": [
+      {
+        "authority": "https://sharedneu.neu.attest.azure.net/",
+        "allOf": [
+          {
+            "claim": "x-ms-compliance-status",
+            "equals": "azure-compliant-cvm"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Validation also confirmed:
+
+- HSM DNS resolves to private endpoint `10.10.1.4` from the app CVM;
+- Managed HSM remains `publicNetworkAccess: Disabled` with no public IP rules;
+- the app identity has only `Managed HSM Crypto Auditor` on the single CMK;
+- the browser CMK foldout displays one indented JSON block with no horizontal overflow;
+- the citizen table remains populated with all 12 records.
+
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
 **This example requires Azure Managed HSM (Hardware Security Module), which has significant costs.**
@@ -988,11 +1026,10 @@ CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
     ├─ Attestation validation code
     └─ Safe (secrets externalized)
 
-    Docker Configuration
-    ├─ Dockerfile: Safe
-    ├─ nginx.conf: Safe (except cert paths)
-    ├─ supervisord.conf: Safe
-    └─ No secrets in images
+    nginx Configuration
+    ├─ TLS and mTLS settings
+    ├─ Certificate paths only
+    └─ No embedded credentials
 
     Documentation (.md)
     ├─ Architecture explanations
@@ -1122,17 +1159,12 @@ citizen-registry-advanced/
 │       └── app-instance.json
 ├── scripts/
 │   ├── initialize-hsm.ps1            # HSM security domain init
-│   ├── configure-mtls.ps1            # mTLS with attestation
-│   ├── setup-bastion.ps1             # Bastion configuration
 │   └── seed-database.ps1             # Demo data loading
 ├── app-instance/
 │   ├── app-src/                      # Citizen registry app code
-│   │   ├── Dockerfile                # Container for CVM
-│   │   ├── requirements.txt
 │   │   ├── app.py
-│   │   └── nginx.conf
-│   ├── nginx.conf                    # Reverse proxy config (mTLS)
-│   └── supervisord.conf              # Process management
+│   │   ├── nginx.conf                # Reverse proxy config (mTLS)
+│   │   └── templates/index.html      # Security evidence UI
 └── shared-infra/
     ├── certificates/                 # (gitignored) mTLS certs
     └── security-domain/              # (gitignored) HSM domain backup
@@ -1606,9 +1638,9 @@ az monitor metrics alert create `
 
 ### mTLS Certificate Validation Fails
 
-- Run: `az attestation policy list --resource-group {appRg}`
-- Compare with expected app measurements
-- Re-run `configure-mtls.ps1` to refresh certificates
+- Check `/etc/citizen-registry/certs` on the app CVM.
+- Run `nginx -t` and inspect `/var/log/nginx/error.log`.
+- Replace the demo PKI files and restart nginx when rotating certificates.
 
 ---
 
