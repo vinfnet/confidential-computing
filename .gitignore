@@ -200,6 +200,9 @@ PublishScripts/
 csx/
 *.build.csdef
 
+# Confidential data disk encryption preview artifacts
+/vm-samples/confidential-data-disk-encryption/cdde-preview/
+
 # Microsoft Azure Emulator
 ecf/
 rcf/
