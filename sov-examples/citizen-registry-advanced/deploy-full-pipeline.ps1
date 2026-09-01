@@ -9,7 +9,7 @@ $WarningPreference = "Continue"
 
 # Configuration
 $Prefix = "sgall"
-$Location = "eastus"
+$Location = "northeurope"
 $SharedInfraRg = "$($Prefix)sharedinfra"
 
 Write-Host "╔══════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan

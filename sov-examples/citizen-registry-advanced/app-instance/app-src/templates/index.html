@@ -47,7 +47,27 @@
             margin-top: 20px;
             padding-top: 20px;
             border-top: 1px solid #eee;
+            flex-wrap: wrap;
         }
+
+        .security-toggle { position: absolute; opacity: 0; pointer-events: none; }
+        .security-badge { cursor: pointer; }
+        .security-badge:focus-within { outline: 2px solid #2563eb; outline-offset: 3px; }
+        .evidence-panel {
+            display: none;
+            flex-basis: 100%;
+            background: #f8fafc;
+            border: 1px solid #dbe3ee;
+            border-left: 4px solid #2563eb;
+            padding: 16px;
+            color: #334155;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .security-toggle:checked + .security-badge + .evidence-panel { display: block; }
+        .evidence-panel dl { display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 4px 16px; margin: 0; }
+        .evidence-panel dt { font-weight: 600; }
+        .evidence-panel dd { margin: 0; overflow-wrap: anywhere; }
         
         .security-badge {
             display: flex;
@@ -185,24 +205,36 @@
             <p>Advanced Confidential Computing Deployment with mTLS & Azure Attestation</p>
             
             <div class="security-info">
-                <div class="security-badge {% if mtls_enabled %}enabled{% else %}disabled{% endif %}">
+                <input class="security-toggle" type="checkbox" id="mtls-toggle">
+                <label class="security-badge {% if mtls_enabled %}enabled{% else %}disabled{% endif %}" for="mtls-toggle">
                     <div class="badge-icon {% if mtls_enabled %}enabled{% else %}disabled{% endif %}">
                         {% if mtls_enabled %}✓{% else %}✗{% endif %}
                     </div>
                     <span>mTLS: {% if mtls_enabled %}ENABLED{% else %}DISABLED{% endif %}</span>
-                </div>
+                </label>
+                <div class="evidence-panel" id="mtls-evidence">Loading mTLS evidence...</div>
                 <div class="security-badge enabled">
                     <div class="badge-icon enabled">✓</div>
                     <span>Confidential VM: ACTIVE</span>
                 </div>
-                <div class="security-badge enabled">
+                <input class="security-toggle" type="checkbox" id="attestation-details-toggle">
+                <label class="security-badge enabled" for="attestation-details-toggle">
                     <div class="badge-icon enabled">✓</div>
-                    <span>Attestation: VERIFIED</span>
-                </div>
-                <div class="security-badge enabled">
+                    <span>Attestation: CONFIGURED</span>
+                </label>
+                <div class="evidence-panel" id="attestation-evidence">Loading attestation evidence...</div>
+                <input class="security-toggle" type="checkbox" id="private-link-toggle">
+                <label class="security-badge enabled" for="private-link-toggle">
                     <div class="badge-icon enabled">✓</div>
-                    <span>Private Link: CONNECTED</span>
-                </div>
+                    <span>Private Link: CONFIGURED</span>
+                </label>
+                <div class="evidence-panel" id="private-link-evidence">Loading private-link evidence...</div>
+                <input class="security-toggle" type="checkbox" id="encryption-toggle">
+                <label class="security-badge enabled" for="encryption-toggle">
+                    <div class="badge-icon enabled">✓</div>
+                    <span>Encryption at-rest: CMK</span>
+                </label>
+                <div class="evidence-panel" id="encryption-evidence">Loading encryption evidence...</div>
             </div>
         </header>
         
@@ -242,5 +274,14 @@
             <p style="margin-top: 10px; opacity: 0.8;">All connections encrypted in transit | Confidential VM with OS disk encryption | Private Link only</p>
         </footer>
     </div>
+    <script>
+        fetch('/security/evidence').then(response => response.json()).then(data => {
+            const rows = values => Object.entries(values).map(([key, value]) => `<dt>${key.replaceAll('_', ' ')}</dt><dd>${typeof value === 'object' ? JSON.stringify(value) : (value || 'not reported')}</dd>`).join('');
+            document.getElementById('mtls-evidence').innerHTML = `<dl>${rows(data.mtls)}</dl>`;
+            document.getElementById('attestation-evidence').innerHTML = `<dl>${rows(data.attestation)}</dl>`;
+            document.getElementById('private-link-evidence').innerHTML = `<dl>${rows(data.private_link)}</dl>`;
+            document.getElementById('encryption-evidence').innerHTML = `<dl>${rows(data.encryption_at_rest)}</dl>`;
+        }).catch(error => document.querySelectorAll('.evidence-panel').forEach(panel => { panel.textContent = 'Evidence unavailable'; }));
+    </script>
 </body>
 </html>

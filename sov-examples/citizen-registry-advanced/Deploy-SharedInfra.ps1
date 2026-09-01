@@ -16,7 +16,7 @@
     Used to create resource group: {prefix}sharedinfra
 
 .PARAMETER Location
-    Azure region for resources. Defaults to "eastus".
+    Azure region for resources. Defaults to "northeurope".
     Managed HSM availability may vary by region.
 
 .PARAMETER Deploy
@@ -29,7 +29,7 @@
     Delete the shared infrastructure resource group and all resources.
 
 .EXAMPLE
-    .\Deploy-SharedInfra.ps1 -Prefix "sgall" -Location "eastus" -Deploy
+    .\Deploy-SharedInfra.ps1 -Prefix "sgall" -Location "northeurope" -Deploy
 
 .EXAMPLE
     .\Deploy-SharedInfra.ps1 -Prefix "sgall" -ValidateOnly
@@ -46,7 +46,7 @@ param(
     [ValidatePattern('^[a-z0-9]{3,12}$')]
     [string]$Prefix,
 
-    [string]$Location = "eastus",
+    [string]$Location = "northeurope",
 
     [switch]$Deploy,
     [switch]$ValidateOnly,
@@ -61,7 +61,6 @@ $RgName = "$($Prefix)sharedinfra"
 $HsmName = "$($Prefix)hsm$(Get-Random -Minimum 100 -Maximum 999)"
 $VnetName = "$($Prefix)-shared-vnet"
 $PrivateLinkSubnetName = "privatelink-subnet"
-$PrivateDnsZoneName = "mhsm.azure.net"
 
 Write-Host "╔════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║  Citizen Registry Advanced — Stage 1: Shared Infrastructure ║" -ForegroundColor Cyan
@@ -159,6 +158,15 @@ if ($Deploy) {
         $deployment | Out-File -FilePath $outputFile
         Write-Host ""
         Write-Host "Outputs saved to: $outputFile" -ForegroundColor Green
+
+        $deploymentOutputs = $deployment | ConvertFrom-Json
+        $deployedHsmName = $deploymentOutputs.hsmName.value
+        & "$PSScriptRoot\scripts\initialize-hsm.ps1" `
+            -HsmName $deployedHsmName `
+            -ResourceGroupName $RgName `
+            -QuorumThreshold 2 `
+            -AdminPrincipal $userId
+        if ($LASTEXITCODE -ne 0) { throw "Managed HSM activation failed" }
         
         # Export for Stage 2
         Write-Host ""

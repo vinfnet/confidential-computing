@@ -1,8 +1,10 @@
 # Citizen Registry Advanced — Two-Stage Confidential Deployment
 
 **Topology:** App Confidential VM ↔ SQL Server Confidential VM on a private subnet ↔ Managed HSM
+
+> **Implementation status:** Stage 2 now provisions an RSA-HSM customer-managed key in the shared Managed HSM and a `ConfidentialVmEncryptedWithCustomerKey` Disk Encryption Set. Azure Confidential VM secure key release binds the OS-disk encryption key to each VM's attested vTPM/platform state. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
-**Date:** August 2026
+**Validated:** September 1, 2026
 
 ---
 
@@ -22,12 +24,27 @@
 
   Workstation -- Bastion tunnel --> App CVM
   App/SQL subnet -- NAT Gateway --> outbound package access only
-  Shared HSM <-- Private Endpoint + Private DNS -- VNet
+  Shared HSM (10.10.1.4) <-- Private Endpoint + peered VNet
 ```
 
 Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the application CVM
 (`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
-`registryadmin` login, and three demo citizen records. The app connects over private TCP 1433.
+`registryadmin` login, and 12 fictional demo citizen records. The app connects over private TCP 1433.
+
+### Validated Deployment
+
+| Resource | Validated value |
+|---|---|
+| Region | North Europe |
+| Shared resource group | `sgallsharedinfra` |
+| App resource group | `sgall67380app` |
+| Managed HSM | `sgallhsm239`, public access disabled, purge protection enabled |
+| Private DNS | `privatelink.managedhsm.azure.net` → `10.10.1.4` |
+| Disk encryption | `ConfidentialVmEncryptedWithCustomerKey` via `sgall-cvm-os-des` |
+| Secure key release | Azure CVM Orchestrator has release-only access to `sgall-cvm-os-key` |
+| Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
+| Database | Connected; 12 records |
+| Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
 
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
@@ -73,7 +90,7 @@ Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the appli
 
 1. **Ensure Managed HSM quota** in your target region:
    ```powershell
-   az vm list-usage --location eastus --query "[?name.value=='Standard_B1']"
+  az vm list-usage --location northeurope --query "[?contains(name.localizedValue, 'DCasv5')]"
    ```
 
 2. **Verify cost center/chargeback** is set up for Managed HSM (quota requirement):
@@ -148,7 +165,7 @@ This advanced deployment splits citizen registry infrastructure into **two stage
         └─────────────────┘  └──────────────┘
                  │
                  │ Private DNS Resolution
-                 │ (mhsm.azure.net → 10.0.1.x)
+                 │ (privatelink.managedhsm.azure.net → 10.10.1.4)
                  │
    ┌─────────────────────────────────────────────┐
    │       STAGE 1: SHARED INFRASTRUCTURE        │
@@ -156,24 +173,24 @@ This advanced deployment splits citizen registry infrastructure into **two stage
    │                                             │
    │  ┌──────────────────────────────────────┐  │
    │  │   MANAGED HSM (B1 SKU)               │  │
-   │  │   AMD-backed, SEV-SNP                │  │
+  │  │   FIPS 140-3 Level 3                 │  │
    │  │   Private Link Only                  │  │
    │  │   NO PUBLIC IP                       │  │
    │  │                                      │  │
-   │  │  ┌─ Key Management                   │  │
-   │  │  ├─ Certificate Issuance (mTLS)      │  │
-   │  │  ├─ Disk Encryption Key Storage      │  │
-   │  │  └─ Attestation Service Integration  │  │
+   │  │  ┌─ HSM-backed CMK for OS disks      │  │
+   │  │  ├─ Disk Encryption Set integration  │  │
+   │  │  ├─ Private key operations           │  │
+   │  │  └─ Shared key custody               │  │
    │  │                                      │  │
    │  └──────────────────────────────────────┘  │
    └─────────────────────────────────────────────┘
                  │
     ┌────────────────────────────────────────────────────────┐
     │  AZURE ATTESTATION SERVICE                             │
-    │  - Validates Confidential VM enclave                   │
-    │  - Issues mTLS certificates (signed by attestation)    │
-    │  - Enforces attestation policies                       │
-    │  - Key release based on TEE measurements               │
+    │  - Provides the attestation authority endpoint         │
+    │  - CVM boot attestation gates Azure CMK release        │
+    │  - Flask reports endpoint and configured policy state  │
+    │  - Demo mTLS certificates are CA-signed locally        │
     └────────────────────────────────────────────────────────┘
 ```
 
@@ -190,9 +207,9 @@ EXTERNAL USER ACCESS (via Bastion Tunnel)
     
 CONFIDENTIAL VM (C-vn2 with SEV-SNP TEE)
     │
-    ├─ OS Disk: Encrypted at-rest (AES-256)
-    │  └─ Key: Managed by Managed HSM
-    │  └─ Protection: Hardware-backed (confidential computing)
+    ├─ OS Disk: Confidential OS disk encryption (AES-256)
+    │  └─ CMK: RSA-HSM key in shared Managed HSM via DES
+    │  └─ Release: Azure CVM attestation-bound secure key release
     │
     ├─ Nginx (Reverse Proxy)
     │  ├─ TLS 1.3 termination
@@ -206,16 +223,16 @@ CONFIDENTIAL VM (C-vn2 with SEV-SNP TEE)
     │  ├─ Managed Identity for HSM auth
     │  └─ Attestation token validation
     │
-    ├─ Managed Identity
-    │  ├─ Authenticates to: Managed HSM
-    │  ├─ Authenticates to: Azure Attestation Service
-    │  └─ No secret keys in code
+    ├─ Disk Encryption Set identity
+    │  ├─ Managed HSM Crypto User on the OS key only
+    │  ├─ Wraps and unwraps the disk encryption key
+    │  └─ No key material in code
     │
     └─ Confidential OS Disk
-       ├─ Encrypted: AES-256 at-rest
+       ├─ Encryption type: ConfidentialVmEncryptedWithCustomerKey
        ├─ Key stored in: Managed HSM (not on disk)
-       ├─ Encryption state: Verified by Attestation
-       └─ Hardware TEE: SEV-SNP isolation
+       ├─ DES identity: key-scoped crypto access
+       └─ Hardware TEE: SEV-SNP/vTPM release binding
     
     ▼
     
@@ -233,20 +250,17 @@ DATABASE (SQL Server on ACC)
 MANAGED HSM (B1 SKU, Shared)
     │
     ├─ Private Link Only: No public access
-    ├─ Access: Via private endpoint (10.0.1.x)
+    ├─ Access: Via private endpoint (10.10.1.4)
     ├─ Key Management:
     │  ├─ OS disk encryption keys
-    │  ├─ mTLS certificate signing
-    │  └─ Key release gates (attestation-backed)
+    │  └─ Confidential OS disk CMK and release policy
     │
-    ├─ Managed Identity Permissions:
-    │  └─ Role: Managed HSM Crypto User
-    │     ├─ Wrap/Unwrap keys
-    │     ├─ Get certificates
-    │     └─ Sign operations
+    ├─ Key-scoped permissions:
+    │  ├─ DES: Managed HSM Crypto Service Encryption User
+    │  └─ CVM Orchestrator: Managed HSM Crypto Service Release User
     │
     └─ Private DNS Resolution:
-       ├─ Zone: mhsm.azure.net
+      ├─ Zone: privatelink.managedhsm.azure.net
        ├─ A Record: Points to private endpoint IP
        └─ No internet routing
 ```
@@ -315,18 +329,18 @@ MANAGED HSM (B1 SKU, Shared)
 │                                                                   │
 └───────────────────────────────────────────────────────────────────┘
 
-┌─ LAYER 5: PRIVATE LINK BOUNDARY (10.0.1.0/24) ────────────────────┐
+┌─ LAYER 5: PRIVATE LINK BOUNDARY (10.10.1.0/24) ───────────────────┐
 │                                                                   │
 │  Private Link Endpoint (HSM):                                    │
-│    • Deployment: 10.0.1.x (managed by Azure)                     │
-│    • DNS: mhsm.azure.net → Private A record                      │
+│    • Deployment: 10.10.1.4 (managed by Azure)                    │
+│    • DNS: privatelink.managedhsm.azure.net → Private A record    │
 │    • Access: Via VNet peering (App Instance ← Shared Infra)      │
 │    • Protocol: HTTPS (TLS 1.2/1.3)                               │
 │    • No NSG needed (private link endpoint)                       │
 │                                                                   │
 │  Private DNS Zone:                                               │
-│    • Zone: mhsm.azure.net                                        │
-│    • A Record: mhsm.azure.net → 10.0.1.x                        │
+│    • Zone: privatelink.managedhsm.azure.net                       │
+│    • A Record: sgallhsm239 → 10.10.1.4                          │
 │    • Linked to: Both VNets (shared + app instance)               │
 │    • Result: Seamless hostname resolution on private subnets     │
 │                                                                   │
@@ -354,11 +368,11 @@ MANAGED HSM (B1 SKU, Shared)
 Creates resource group: **`{prefix}sharedinfra`**
 
 **Resources:**
-- **Managed HSM** — AMD-backed HSM with SEV-SNP attestation
+- **Managed HSM** — single-tenant, FIPS 140-3 Level 3 key custody
   - Private Link endpoint (no public access)
   - Cost control tag for resource authorization
   - Security domain initialized
-  - Ready for mTLS certificate management
+  - Activated with locally protected 2-of-3 recovery material
 - **Virtual Network (VNet)** — Private backbone
   - Private DNS zone for Managed HSM
   - Private Link subnet reserved
@@ -387,7 +401,7 @@ Creates resource group: **`{prefix}{random5digit}app`** (e.g., `sgall18447app`)
   - No public IPs on app resources
 - **Azure Attestation Service** — mTLS enablement
   - Validates CVM confidentiality
-  - Issues mTLS certificates via key release
+  - Publishes provider metadata for explicit guest-attestation integrations
   - Attestation policy tied to citizen-registry app
 
 **Security Model:**
@@ -932,7 +946,7 @@ cd .\citizen-registry-advanced
 
 # First time setup
 .\Deploy-SharedInfra.ps1 -Prefix "sgall" `
-  -Location "eastus" `
+  -Location "northeurope" `
   -Deploy
 
 # Output: Resource group "sgallsharedinfra" with Managed HSM
@@ -940,7 +954,7 @@ cd .\citizen-registry-advanced
 
 **Parameters:**
 - `-Prefix` (required) — Naming prefix (3-12 chars)
-- `-Location` — Azure region (default: `eastus`)
+- `-Location` — Azure region (default: `northeurope`)
 - `-Deploy` — Execute deployment
 - `-ValidateOnly` — Validate templates without deploying
 
@@ -956,7 +970,7 @@ cd .\citizen-registry-advanced
 ```powershell
 # Deploy one or more app instances sharing the same HSM
 .\Deploy-AppInstance.ps1 -Prefix "sgall" `
-  -Location "eastus" `
+  -Location "northeurope" `
   -SharedInfraRg "sgallsharedinfra" `
   -Deploy
 
@@ -966,11 +980,11 @@ cd .\citizen-registry-advanced
 
 **Parameters:**
 - `-Prefix` (required) — Naming prefix
-- `-Location` — App instance region (default: `eastus`)
+- `-Location` — App instance region (default: `northeurope`)
 - `-SharedInfraRg` (required) — Shared infrastructure RG name
 - `-Deploy` — Execute deployment
 - `-ValidateOnly` — Validate templates
-- `-CvmSize` — CVM SKU (default: `Standard_DC2as_v6`)
+- `-CvmSize` — CVM SKU (default: `Standard_DC2as_v5`)
 
 **What it does:**
 1. Creates app instance RG
@@ -1104,10 +1118,10 @@ See `.gitignore` for complete exclusion list.
 ### Geographic Data Residency
 
 ```
-DEPLOYMENT: eastus (Default)
-├─ Physical Location: Virginia, USA
-├─ Data Residency: East US region
-├─ Paired Region: West US (for geo-redundancy)
+DEPLOYMENT: North Europe (validated default)
+├─ Azure region: northeurope
+├─ App, SQL, HSM, DES, Bastion, and Attestation: North Europe
+├─ Private DNS resources: global Azure DNS control-plane resources
 └─ Alternative Regions: Replace in deployment script
 
 DATA LOCATION GUARANTEES:
@@ -1309,9 +1323,8 @@ curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2017-
 /opt/mssql-tools/bin/sqlcmd -S 10.0.4.5 -U sqladmin -P [password] -Q "SELECT @@VERSION"
 
 # 5. Check HSM connectivity (requires certificate)
-curl -v --cert citizen.crt --key citizen.key \
-  https://mhsm.azure.net/keys/citizen-registry-key/versions \
-  --resolve mhsm.azure.net:443:10.0.1.x
+getent ahostsv4 sgallhsm239.managedhsm.azure.net
+# Expected private endpoint address: 10.10.1.4
 
 # 6. Validate mTLS with client certificate
 curl -v --cert /path/to/client.crt --key /path/to/client.key \

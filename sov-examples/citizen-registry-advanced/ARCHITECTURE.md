@@ -9,8 +9,8 @@
                       |
            +----------------+----------------+
            |                                 |
-      App subnet: 10.0.3.0/24          Private Link subnet
-           |                         10.0.1.0/24
+       App subnet: 10.0.3.0/24          Private Link subnet
+          |                         10.10.1.0/24
      +---------+---------+                       |
      |                   |                 HSM Private Endpoint
   App CVM              SQL CVM                       |
@@ -39,7 +39,7 @@ Stage 1: SHARED INFRASTRUCTURE RG                Stage 2: APP INSTANCE RG
 │  ┌─────────────────────────────────┐  │      │  ┌────────────────────┐  │
 │  │   MANAGED HSM (Private Link)    │  │      │  │  CONFIDENTIAL VM   │  │
 │  │   - B1 SKU                      │  │      │  │  (C-vn2 / SEV-SNP) │  │
-│  │   - AMD-backed HSM              │  │      │  │  - DC2as_v6 (2CPU) │  │
+│  │   - FIPS 140-3 Level 3          │  │      │  │  - DC2as_v5 (2CPU) │  │
 │  │   - Private endpoint only       │  │      │  │  - OS disk enc.    │  │
 │  │   - No public IP                │  │      │  │  - Managed ID      │  │
 │  │   - Key management              │  │      │  │  - Private IP only │  │
@@ -48,15 +48,15 @@ Stage 1: SHARED INFRASTRUCTURE RG                Stage 2: APP INSTANCE RG
 │          │                             │      │          │               │
 │  ┌─────────────────────────────────┐  │      │  ┌────────────────────┐  │
 │  │  VIRTUAL NETWORK                │  │      │  │  SQL CONFIDENTIAL  │  │
-│  │  - 10.0.0.0/16                  │  │      │  │  - SQL Server      │  │
+│  │  - 10.10.0.0/16                 │  │      │  │  - SQL Server      │  │
 │  │  - Subnets:                     │  │      │  │  - TDE enabled     │  │
-│  │    • Private Link (10.0.1.0/24) │  │      │  │  - Private subnet  │  │
-│  │    • Bastion (10.0.2.0/24)      │  │      │  │  - Port 1433 only  │  │
-│  │    • App (10.0.3.0/24)          │  │      │  │                    │  │
+│  │    • Private Link (10.10.1/24)  │  │      │  │  - Private subnet  │  │
+│  │    • Bastion (10.10.2.0/24)     │  │      │  │  - Port 1433 only  │  │
+│  │    • App (10.10.3.0/24)         │  │      │  │                    │  │
 │  │    • DB (10.0.4.0/24)           │  │      │  └────────────────────┘  │
 │  │  - NSGs with strict rules       │  │      │                          │
 │  │  - Private DNS zone             │  │      │  ┌────────────────────┐  │
-│  │    (mhsm.azure.net)             │  │      │  │  BASTION HOST      │  │
+│  │    (privatelink.managedhsm...)  │  │      │  │  BASTION HOST      │  │
 │  └─────────────────────────────────┘  │      │  │  - Standard SKU    │  │
 │                                       │      │  │  - Public IP only  │  │
 │                                       │      │  │  - SSH/RDP tunnel  │  │
@@ -90,7 +90,7 @@ User Machine
     └─ HTTPS via Bastion  
        └─ Port 8443 (mTLS)
           └─ Client cert required
-             └─ Azure Attestation validates
+             └─ Azure CVM boot attestation gates CMK release
 
          ↓↓↓ (Mutual TLS Handshake) ↓↓↓
 
@@ -152,25 +152,23 @@ Flask App
     ├─ Azure Identity SDK
     │  └─ Managed Identity credential
     │
-    ├─ Key Vault Python SDK
-    │  └─ HSM endpoint: https://mhsm.azure.net
+   ├─ Azure managed disk service
+   │  └─ HSM-backed CMK through the Disk Encryption Set
     │
     ↓ (DNS resolution via Private DNS Zone)
     
-Private DNS Zone (mhsm.azure.net)
-    └─ A record → 10.0.1.x (HSM private endpoint IP)
+Private DNS Zone (privatelink.managedhsm.azure.net)
+   └─ A record → 10.10.1.4 (HSM private endpoint IP)
 
 Private Link Endpoint
-    ├─ VNet: 10.0.0.0/16
-    ├─ Subnet: 10.0.1.0/24
+   ├─ VNet: 10.10.0.0/16
+   ├─ Subnet: 10.10.1.0/24
     └─ HSM connectivity (encrypted)
 
 Managed HSM
-    ├─ Key operations
-    │  ├─ Get (HSM does not export keys)
-    │  ├─ Sign (mTLS certs)
-    │  ├─ Wrap/Unwrap (disk encryption)
-    │  └─ GenerateKey
+   ├─ Key operations
+   │  ├─ Read/Wrap/Unwrap for the DES identity
+   │  └─ Attestation-gated release for Azure CVM Orchestrator
     │
     └─ Audit logging
        └─ All operations logged
@@ -184,11 +182,9 @@ Managed HSM
 ┌─────────────────────────────────────┐
 │  Azure Attestation Service          │
 │  ─────────────────────────────────  │
-│  ✓ Validates CVM enclave            │
-│  ✓ Verifies OS disk encryption      │
-│  ✓ Checks app measurements          │
-│  ✓ Issues mTLS certificates         │
-│  ✓ Enforces policies                │
+│  ✓ Publishes provider metadata      │
+│  ✓ Supports guest attestation flows │
+│  ✓ Does not issue demo mTLS certs   │
 └─────────────────────────────────────┘
          │
          ├─ Policy: Attestation_v1

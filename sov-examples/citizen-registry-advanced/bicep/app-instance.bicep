@@ -10,11 +10,6 @@ param cvmName string
 
 @minLength(1)
 @maxLength(64)
-@description('Name of the database')
-param dbName string
-
-@minLength(1)
-@maxLength(64)
 @description('Name of the Bastion host')
 param bastionName string
 
@@ -47,8 +42,8 @@ param ownerTag string
 @description('Shared Infrastructure Resource Group Name')
 param sharedInfraRgName string
 
-@description('Managed HSM Resource ID')
-param managedHsmId string
+@description('Managed HSM-backed Disk Encryption Set Resource ID for confidential OS disks')
+param diskEncryptionSetId string
 
 @description('Enable Confidential OS Disk Encryption')
 param confidentialOsDisk bool = true
@@ -58,6 +53,9 @@ param attestationEnabled bool = true
 
 @description('SSH public key for the Confidential VM administrator')
 param sshPublicKey string
+
+@description('Administrator username for both Confidential VMs')
+param adminUsername string = 'azureuser'
 
 @description('Base64-encoded cloud-init script for application bootstrap')
 param customData string = ''
@@ -81,8 +79,13 @@ var vmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
 var vmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
 var vmDataDiskSize = 64
-var dbAdminUsername = 'sqladmin'
 var sqlPrivateIp = '10.0.3.5'
+var sharedVnetName = '${prefix}-shared-vnet'
+
+resource sharedVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
+  scope: resourceGroup(sharedInfraRgName)
+  name: sharedVnetName
+}
 
 // NAT provides controlled outbound access for package and image bootstrap traffic.
 resource appNatPublicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
@@ -166,6 +169,20 @@ resource appVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
         }
       }
     ]
+  }
+}
+
+resource appToSharedPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-09-01' = {
+  parent: appVnet
+  name: 'app-to-shared'
+  properties: {
+    allowVirtualNetworkAccess: true
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    useRemoteGateways: false
+    remoteVirtualNetwork: {
+      id: sharedVnet.id
+    }
   }
 }
 
@@ -392,7 +409,8 @@ resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
       {
         name: 'ipconfig1'
         properties: {
-          privateIPAllocationMethod: 'Dynamic'
+          privateIPAllocationMethod: 'Static'
+          privateIPAddress: '10.0.3.4'
           subnet: {
             id: '${appVnet.id}/subnets/${appSubnetName}'
           }
@@ -422,14 +440,14 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     osProfile: {
       computerName: cvmName
-      adminUsername: 'azureuser'
+      adminUsername: adminUsername
       customData: customData
       linuxConfiguration: {
         disablePasswordAuthentication: true
         ssh: {
           publicKeys: [
             {
-              path: '/home/azureuser/.ssh/authorized_keys'
+              path: '/home/${adminUsername}/.ssh/authorized_keys'
               keyData: sshPublicKey
             }
           ]
@@ -448,7 +466,10 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         managedDisk: {
           storageAccountType: 'Premium_LRS'
           securityProfile: {
-            securityEncryptionType: 'DiskWithVMGuestState'
+            securityEncryptionType: confidentialOsDisk ? 'DiskWithVMGuestState' : 'DiskWithoutVMGuestState'
+            diskEncryptionSet: {
+              id: diskEncryptionSetId
+            }
           }
         }
       }
@@ -518,14 +539,14 @@ resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     }
     osProfile: {
       computerName: sqlVmName
-      adminUsername: 'azureuser'
+      adminUsername: adminUsername
       customData: sqlCustomData
       linuxConfiguration: {
         disablePasswordAuthentication: true
         ssh: {
           publicKeys: [
             {
-              path: '/home/azureuser/.ssh/authorized_keys'
+              path: '/home/${adminUsername}/.ssh/authorized_keys'
               keyData: sshPublicKey
             }
           ]
@@ -544,7 +565,10 @@ resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         managedDisk: {
           storageAccountType: 'Premium_LRS'
           securityProfile: {
-            securityEncryptionType: 'DiskWithVMGuestState'
+            securityEncryptionType: confidentialOsDisk ? 'DiskWithVMGuestState' : 'DiskWithoutVMGuestState'
+            diskEncryptionSet: {
+              id: diskEncryptionSetId
+            }
           }
         }
       }
@@ -615,6 +639,7 @@ resource attestationProvider 'Microsoft.Attestation/attestationProviders@2021-06
   name: attestationName
   location: location
   tags: commonTags
+  #disable-next-line BCP187 // The 2021-06-01 API accepts this live-validated property.
   sku: {
     name: 'Standard'
   }
@@ -632,8 +657,8 @@ output sqlVmName string = sqlVm.name
 output sqlVmPrivateIp string = sqlPrivateIp
 output bastionId string = bastionHost.id
 output bastionName string = bastionHost.name
-output attestationEndpoint string = attestationEnabled ? attestationProvider.properties.attestUri : ''
-output attestationId string = attestationEnabled ? attestationProvider.id : ''
+output attestationEndpoint string = attestationEnabled ? attestationProvider!.properties.attestUri : ''
+output attestationId string = attestationEnabled ? attestationProvider!.id : ''
 output vnetId string = appVnet.id
 output appSubnetId string = '${appVnet.id}/subnets/${appSubnetName}'
 output dbSubnetId string = '${appVnet.id}/subnets/${dbSubnetName}'

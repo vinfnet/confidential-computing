@@ -30,7 +30,7 @@ az account set --subscription "your-subscription-id"
 ```powershell
 # Define your deployment parameters
 $Prefix = "sgall"           # 3-12 char identifier
-$Location = "eastus"        # Azure region
+$Location = "northeurope"   # Azure region validated by this sample
 $Environment = "demo"       # Environment type
 
 Write-Host "Deploying with:"
@@ -50,7 +50,7 @@ cd .\citizen-registry-advanced
 # If validation succeeds, deploy
 .\Deploy-SharedInfra.ps1 -Prefix $Prefix -Location $Location -Deploy
 
-# Wait for Managed HSM to be provisioned (~2-3 minutes)
+# Managed HSM provisioning and security-domain activation can take several minutes.
 # Output will show:
 #   ✓ Resource group ready
 #   ✓ Deployment completed successfully
@@ -59,6 +59,8 @@ cd .\citizen-registry-advanced
 **What this creates:**
 - Resource group: `{prefix}sharedinfra`
 - Managed HSM (B1 SKU)
+- Local 2-of-3 recovery material under the ignored `shared-infra/security-domain/`
+  directory. Protect and back up these files securely.
 - Virtual Network with private subnets
 - Private Link endpoint for HSM
 - Private DNS zones
@@ -86,7 +88,7 @@ cd .\citizen-registry-advanced
 - App Confidential VM (C-vn2 with SEV-SNP)
 - SQL Server Confidential VM on the same private app subnet
 - Private app-to-database connection on TCP 1433
-- SQL Server database `citizendb` seeded with three demo citizens
+- SQL Server database `citizendb` seeded with 12 fictional demo citizens
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM
@@ -100,7 +102,7 @@ cd .\citizen-registry-advanced
 2. Navigate to: Resource Groups > {your-app-rg} > {cvm-name}
 3. Click "Connect" > "Bastion"
 4. Login with SSH (key-based) or RDP
-5. From the CVM: curl https://localhost:8443/health
+5. From the CVM: curl -k https://localhost/health
 ```
 
 #### Option B: Using Azure CLI
@@ -136,8 +138,13 @@ tail -f /var/log/citizen-registry/app.log
 # Check database connectivity
 curl -s https://localhost/db/status | jq .
 
-# View attestation status
+# View configured security status and non-secret evidence
 curl -s https://localhost/config | jq '.environment'
+curl -s https://localhost/security/evidence | jq .
+
+# From the deployment workstation, verify the HSM key and DES (names are printed by deployment)
+az keyvault key show --hsm-name <shared-hsm-name> --name <os-disk-key-name> --query '{id:kid,kty: key.kty, ops:key.key_ops}'
+az disk-encryption-set show --resource-group <app-resource-group> --name <disk-encryption-set-name> --query '{id:id,encryptionType:properties.encryptionType,identity:identity.principalId}'
 ```
 
 ### Step 6: Test Data Access
@@ -179,7 +186,7 @@ curl -X POST -k --cert citizen.crt --key citizen.key \
 
 | Component | Purpose | Security |
 |-----------|---------|----------|
-| **Confidential VM** | Application runtime (C-vn2 TEE) | SEV-SNP, OS disk encryption |
+| **Confidential VM** | Application runtime (C-vn2 TEE) | SEV-SNP/vTPM, HSM CMK via DES, attestation-bound secure release |
 | **Database on ACC** | Data persistence | Private subnet, TDE enabled |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
 | **Attestation Service** | mTLS certificate validation | Attestation-backed verification |

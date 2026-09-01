@@ -8,10 +8,10 @@ param ownerTag string
 param costControlTag string = 'confidential-computing'
 param initialAdminObjectId string
 
-var vnetAddressPrefix = '10.0.0.0/16'
-var privateLinkSubnetPrefix = '10.0.1.0/24'
-var bastionSubnetPrefix = '10.0.2.0/24'
-var appSubnetPrefix = '10.0.3.0/24'
+var vnetAddressPrefix = '10.10.0.0/16'
+var privateLinkSubnetPrefix = '10.10.1.0/24'
+var bastionSubnetPrefix = '10.10.2.0/24'
+var appSubnetPrefix = '10.10.3.0/24'
 
 // Create Virtual Network
 resource vnet 'Microsoft.Network/virtualNetworks@2023-11-01' = {
@@ -72,12 +72,13 @@ resource managedHsm 'Microsoft.KeyVault/managedHSMs@2023-07-01' = {
       initialAdminObjectId
     ]
     softDeleteRetentionInDays: 7
-    enablePurgeProtection: false
+    enablePurgeProtection: true
     enableSoftDelete: true
     networkAcls: {
-      bypass: 'None'
-      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
     }
+    publicNetworkAccess: 'Enabled'
   }
 }
 
@@ -109,7 +110,7 @@ resource hsmPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-11-01' = {
 
 // Private DNS Zone for Managed HSM
 resource hsmPrivateDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: 'mhsm.azure.net'
+  name: 'privatelink.managedhsm.azure.net'
   location: 'global'
   tags: {
     environment: 'demo'

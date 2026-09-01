@@ -35,6 +35,14 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024
 
+
+@app.before_request
+def enforce_mtls_for_api():
+    """Require nginx to verify a client certificate for registry mutations/reads."""
+    if MTLS_ENABLED and request.path.startswith('/api') and request.headers.get('X-Client-Verify') != 'SUCCESS':
+        return jsonify({'error': 'Valid client certificate required'}), 401
+
+
 # mTLS Configuration
 MTLS_ENABLED = os.environ.get('MTLS_ENABLED', 'true').lower() == 'true'
 CERT_PATH = os.environ.get('CERT_PATH', '/etc/citizen-registry/certs/citizen-registry.crt')
@@ -51,6 +59,11 @@ LOCAL_DB_PATH = os.environ.get('LOCAL_DB_PATH', '/var/lib/citizen-registry/citiz
 
 # Managed HSM configuration
 HSM_ENDPOINT = os.environ.get('HSM_ENDPOINT', '')
+APP_CVM_IP = os.environ.get('APP_CVM_IP', '')
+SQL_CVM_IP = os.environ.get('SQL_CVM_IP', DB_HOST)
+HSM_NAME = os.environ.get('HSM_NAME', '')
+OS_DISK_KEY_NAME = os.environ.get('OS_DISK_KEY_NAME', '')
+KEY_RELEASE_STATUS = os.environ.get('KEY_RELEASE_STATUS', 'not_configured')
 
 _credential = None
 _credential_lock = threading.Lock()
@@ -215,22 +228,26 @@ def _get_db_conn():
 # ============================================================================
 
 def _validate_attestation():
-    """Validate CVM attestation status via Azure Attestation Service"""
-    if not ATTESTATION_ENDPOINT or not MTLS_ENABLED:
-        return {'status': 'disabled'}
+    """Check Azure Attestation provider metadata availability."""
+    if not ATTESTATION_ENDPOINT:
+        return {'status': 'not_configured'}
     
     try:
         response = requests.get(
-            f"{ATTESTATION_ENDPOINT}/attestation/sgx/openid4p/metadata",
+            f"{ATTESTATION_ENDPOINT}/.well-known/openid-configuration",
             timeout=5
         )
         if response.status_code == 200:
-            logger.info("✓ Azure Attestation Service verified")
-            return {'status': 'verified', 'endpoint': ATTESTATION_ENDPOINT}
+            logger.info("Azure Attestation provider metadata is reachable")
+            return {
+                'status': 'provider_reachable',
+                'endpoint': ATTESTATION_ENDPOINT,
+                'verification': 'metadata_only',
+            }
     except Exception as e:
         logger.warning(f"Attestation check failed: {e}")
     
-    return {'status': 'not_available'}
+    return {'status': 'provider_unreachable'}
 
 
 def _verify_mtls_certificate():
@@ -483,6 +500,38 @@ def config():
             'database_configured': bool(DB_HOST) or bool(LOCAL_DB_PATH),
             'hsm_configured': bool(HSM_ENDPOINT)
         }
+    })
+
+
+@app.route('/security/evidence', methods=['GET'])
+def security_evidence():
+    """Return non-secret evidence used by the security detail panels."""
+    return jsonify({
+        'mtls': {
+            'enabled': MTLS_ENABLED,
+            'server_certificate': CERT_PATH,
+            'client_certificate_check': 'nginx ssl_verify_client + X-Client-Verify',
+            'client_certificate': '/etc/citizen-registry/certs/citizen.crt',
+            'handshake_result': request.headers.get('X-Client-Verify', 'not_present'),
+            'client_subject': request.headers.get('X-Client-DN', 'not_present'),
+        },
+        'attestation': {
+            'endpoint': ATTESTATION_ENDPOINT,
+            'result': _validate_attestation(),
+            'cvm_measurement_source': 'Azure Confidential VM vTPM/SEV-SNP',
+        },
+        'private_link': {
+            'app_cvm_ip': APP_CVM_IP,
+            'sql_cvm_ip': SQL_CVM_IP,
+            'sql_port': 1433,
+            'hsm_endpoint': HSM_ENDPOINT,
+        },
+        'encryption_at_rest': {
+            'os_disk_encryption': 'Confidential OS disk encryption',
+            'key_name': OS_DISK_KEY_NAME,
+            'hsm_name': HSM_NAME,
+            'secure_key_release': KEY_RELEASE_STATUS,
+        },
     })
 
 

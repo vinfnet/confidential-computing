@@ -15,17 +15,13 @@
 .PARAMETER DbUsername
     Database admin username.
 
-.PARAMETER DbPassword
-    Database admin password.
-
 .PARAMETER DataFile
     Path to JSON file containing citizen records (default: ../citizen-registry-config.json).
 
 .EXAMPLE
     .\seed-database.ps1 -DbServer "sgall-sql.local" `
       -DbName "citizendb" `
-      -DbUsername "sqladmin" `
-      -DbPassword "P@ssw0rd!"
+    -DbUsername "sqladmin"
 #>
 param(
     [Parameter(Mandatory = $true)]
@@ -35,9 +31,6 @@ param(
 
     [Parameter(Mandatory = $true)]
     [string]$DbUsername,
-
-    [Parameter(Mandatory = $true)]
-    [string]$DbPassword,
 
     [string]$DataFile = "../citizen-registry-config.json"
 )
@@ -110,14 +103,21 @@ BEGIN
         last_name VARCHAR(100) NOT NULL,
         date_of_birth DATE NOT NULL,
         national_id VARCHAR(50) UNIQUE NOT NULL,
+        sex VARCHAR(10),
         region VARCHAR(100),
         municipality VARCHAR(100),
+        address_line VARCHAR(200),
+        postal_code VARCHAR(10),
+        household_size INT DEFAULT 1,
+        marital_status VARCHAR(20) DEFAULT 'Single',
+        employment_status VARCHAR(30) DEFAULT 'Employed',
+        tax_bracket VARCHAR(10) DEFAULT 'B',
+        registered_voter BIT DEFAULT 1,
         created_date DATETIME DEFAULT GETUTCDATE(),
-        modified_date DATETIME DEFAULT GETUTCDATE(),
-        archived BIT DEFAULT 0
+        modified_date DATETIME DEFAULT GETUTCDATE()
     );
     
-    CREATE INDEX idx_id_number ON citizen_registry(id_number);
+    CREATE INDEX idx_national_id ON citizen_registry(national_id);
     CREATE INDEX idx_last_name ON citizen_registry(last_name);
     CREATE INDEX idx_region ON citizen_registry(region);
     
@@ -146,7 +146,7 @@ BEGIN
         ('DEMO-0011', 'Grace', 'Williams', '1998-05-03', 'F', 'Central', 'Capital'),
         ('DEMO-0012', 'Omar', 'Haddad', '1976-08-26', 'M', 'North', 'Riverside');
     
-    PRINT 'Inserted 5 citizen records';
+    PRINT 'Inserted 12 citizen records';
 END
 
 SELECT COUNT(*) AS record_count FROM citizen_registry;

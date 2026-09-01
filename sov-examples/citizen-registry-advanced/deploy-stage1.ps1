@@ -14,7 +14,7 @@ Write-Host ""
 
 # Parameters
 $Prefix = "sgall"
-$Location = "eastus"
+$Location = "northeurope"
 $RgName = "$($Prefix)sharedinfra"
 
 Write-Host "Configuration:" -ForegroundColor Yellow
