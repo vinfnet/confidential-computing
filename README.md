@@ -21,7 +21,7 @@ urlFragment: confidential-computing-samples
 
 ![MIT license badge](https://img.shields.io/badge/license-MIT-green.svg)
 
-**Last Updated:** June 2026
+**Last Updated:** September 2026
 
 > **Heads up — this is the new home for Azure Confidential Computing samples.**
 > [`https://aka.ms/accsamples`](https://aka.ms/accsamples) now redirects here.
@@ -47,7 +47,13 @@ Confidential computing is the protection of data-in-use through isolating comput
   - Any data processed using these samples
 - **AI-Assisted Content:** Several samples in this repository were created with significant assistance from AI coding tools, primarily [GitHub Copilot](https://github.com/features/copilot) inside [Visual Studio Code](https://code.visualstudio.com/), to showcase modern AI-assisted development. While functional, AI-assisted code should always be reviewed by qualified security professionals before use in sensitive scenarios.
 
-## 🆕 What's New (June 2026)
+## 🆕 What's New (September 2026)
+
+| Addition | Description |
+|---|---|
+| **[NVIDIA H100 Confidential GPU VMs](/vm-samples/README.md#gpu-mode--h100-confidential-gpu-vm)** 🆕 | [`BuildRandomCVM.ps1`](/vm-samples/BuildRandomCVM.ps1) now deploys `Standard_NCC40ads_H100_v5` confidential GPU VMs with the checksum-pinned Azure CGPU onboarding V4.3.3 flow. It verifies production CC mode, requires successful NVIDIA H100 attestation, and then requires AMD SEV-SNP compliance from Microsoft Azure Attestation. The private, NAT-enabled flow was validated end to end in West Europe with NVIDIA driver `595.71.05`, Secure Boot, vTPM, a CMK-backed confidential OS disk, and automatic smoke-test cleanup. |
+
+### Previously (June 2026)
 
 | Addition | Description |
 |---|---|
@@ -154,9 +160,9 @@ Simpler 2-container demonstration (Contoso, Fabrikam Fashion) without partner an
 
 ### [VM Samples](/vm-samples/README.md)
 Confidential Virtual Machine (CVM) deployment scripts:
-- **BuildRandomCVM.ps1** 🆕 *Updated June 2026* — Deploy CVMs with **Confidential OS disk encryption bound to a Customer Managed Key (CMK)** and automated in-VM attestation. The OS disk and VM Guest State (vTPM + Secure Boot) are encrypted with an HSM-backed RSA-3072 key in your Key Vault Premium; the key is only released after Microsoft Azure Attestation (MAA) verifies the VM is a genuine SEV-SNP / TDX CVM, so even the Azure host fabric cannot read the disk. See [What is Confidential OS disk encryption with CMK?](/vm-samples/README.md#what-is-confidential-os-disk-encryption-with-cmk) and [`https://aka.ms/accdocs`](https://aka.ms/accdocs).
+- **BuildRandomCVM.ps1** 🆕 *Updated September 2026* — Deploy CVMs with **Confidential OS disk encryption bound to a Customer Managed Key (CMK)** and automated in-VM attestation. The OS disk and VM Guest State (vTPM + Secure Boot) are encrypted with an HSM-backed RSA-3072 key in your Key Vault Premium; the key is only released after Microsoft Azure Attestation (MAA) verifies the VM is a genuine SEV-SNP / TDX CVM, so even the Azure host fabric cannot read the disk. See [What is Confidential OS disk encryption with CMK?](/vm-samples/README.md#what-is-confidential-os-disk-encryption-with-cmk) and [`https://aka.ms/accdocs`](https://aka.ms/accdocs).
   - **AMD SEV-SNP** (`DCa*` / `ECa*`, default `Standard_DC2as_v6`) **and Intel TDX** (`DCe*` / `ECe*`, e.g. `Standard_DC2es_v6`) — auto-detected from the chosen VM SKU, with the matching attestation config selected automatically
-  - **Optional `-GPU` mode** — provisions an NVIDIA H100 confidential GPU VM (`Standard_NCC40ads_H100_v5`), installs the NVIDIA open-kernel driver + `nvtrust` local GPU verifier inside the VM, and includes a kernel/module convergence fallback (Azure FDE LTS kernel + matching NVIDIA meta package) before GPU CC-mode attestation
+  - **NVIDIA H100 `-GPU` mode** (`Standard_NCC40ads_H100_v5`) — runs checksum-pinned Azure CGPU onboarding V4.3.3, verifies `CC status: ON` and `CC Environment: PRODUCTION`, and requires successful GPU and AMD SEV-SNP CPU attestations
   - Windows Server 2022 Datacenter, Windows Server 2019, Windows 11 Enterprise 24H2, Ubuntu 24.04 LTS, RHEL 9.5 — all confidential-VM images
   - **New attestation flow** — runs the latest pre-built `attest` binary from [`Azure/cvm-attestation-tools`](https://github.com/Azure/cvm-attestation-tools/releases/latest) inside the freshly deployed VM (Linux + Windows) and decodes the returned MAA JWT (header, payload, key claims like `x-ms-attestation-type`, `x-ms-compliance-status`, `secure-boot`, `tpm-enabled`) using `jq` on Linux / built-in `ConvertFrom-Json` on Windows
   - **Pre-flight checks** before any resources are created: rejects Intel SGX SKUs (different isolation model), validates the chosen SKU is offered in the target region, and confirms there is enough vCPU quota in the VM family
