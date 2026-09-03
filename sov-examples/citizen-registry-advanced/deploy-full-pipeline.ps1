@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 $WarningPreference = "Continue"
 
 # Configuration
-$Prefix = "sgall"
+$Prefix = "yourprefix"
 $Location = "northeurope"
 $SharedInfraRg = "$($Prefix)sharedinfra"
 

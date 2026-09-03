@@ -29,13 +29,13 @@
     Delete the shared infrastructure resource group and all resources.
 
 .EXAMPLE
-    .\Deploy-SharedInfra.ps1 -Prefix "sgall" -Location "northeurope" -Deploy
+    .\Deploy-SharedInfra.ps1 -Prefix "yourprefix" -Location "northeurope" -Deploy
 
 .EXAMPLE
-    .\Deploy-SharedInfra.ps1 -Prefix "sgall" -ValidateOnly
+    .\Deploy-SharedInfra.ps1 -Prefix "yourprefix" -ValidateOnly
 
 .EXAMPLE
-    .\Deploy-SharedInfra.ps1 -Prefix "sgall" -Cleanup
+    .\Deploy-SharedInfra.ps1 -Prefix "yourprefix" -Cleanup
 
 .NOTES
     Author: Autonomous AI-Assisted Development
@@ -48,6 +48,9 @@ param(
 
     [string]$Location = "northeurope",
 
+    [ValidatePattern('^[a-z0-9-]{3,24}$')]
+    [string]$HsmName,
+
     [switch]$Deploy,
     [switch]$ValidateOnly,
     [switch]$Cleanup
@@ -58,7 +61,9 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 # Configuration
 $RgName = "$($Prefix)sharedinfra"
-$HsmName = "$($Prefix)hsm$(Get-Random -Minimum 100 -Maximum 999)"
+if (-not $HsmName) {
+    $HsmName = "$($Prefix)hsm$(Get-Random -Minimum 100 -Maximum 999)"
+}
 $VnetName = "$($Prefix)-shared-vnet"
 $PrivateLinkSubnetName = "privatelink-subnet"
 
@@ -145,6 +150,7 @@ if ($Deploy) {
             --resource-group $RgName `
             --template-file "./bicep/shared-infra.bicep" `
             --parameters $bicepParams `
+            --only-show-errors `
             --query "properties.outputs" `
             2>&1
         
@@ -185,4 +191,4 @@ if ($Deploy) {
 
 # If no action specified
 Write-Host "No action specified. Use one of: -Deploy, -ValidateOnly, or -Cleanup" -ForegroundColor Yellow
-Write-Host "Example: .\Deploy-SharedInfra.ps1 -Prefix `"sgall`" -Deploy" -ForegroundColor Cyan
+Write-Host "Example: .\Deploy-SharedInfra.ps1 -Prefix `"yourprefix`" -Deploy" -ForegroundColor Cyan

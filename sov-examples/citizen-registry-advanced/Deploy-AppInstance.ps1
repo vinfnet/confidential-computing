@@ -21,7 +21,7 @@
 
 .PARAMETER SharedInfraRg
     REQUIRED. Name of the shared infrastructure resource group from Stage 1.
-    Example: "sgallsharedinfra"
+    Example: "yourprefixsharedinfra"
 
 .PARAMETER CvmSize
     Confidential VM SKU. Defaults to "Standard_DC2as_v6".
@@ -37,18 +37,18 @@
     Delete the app instance resource group and all resources.
 
 .EXAMPLE
-    .\Deploy-AppInstance.ps1 -Prefix "sgall" `
-      -SharedInfraRg "sgallsharedinfra" `
-    -Location "northeurope" `
+    .\Deploy-AppInstance.ps1 -Prefix "yourprefix" `
+      -SharedInfraRg "yourprefixsharedinfra" `
+      -Location "northeurope" `
       -Deploy
 
 .EXAMPLE
-    .\Deploy-AppInstance.ps1 -Prefix "sgall" `
-      -SharedInfraRg "sgallsharedinfra" `
+    .\Deploy-AppInstance.ps1 -Prefix "yourprefix" `
+      -SharedInfraRg "yourprefixsharedinfra" `
       -ValidateOnly
 
 .EXAMPLE
-    .\Deploy-AppInstance.ps1 -Prefix "sgall" -Cleanup
+    .\Deploy-AppInstance.ps1 -Prefix "yourprefix" -Cleanup
 
 .NOTES
     Author: Autonomous AI-Assisted Development
@@ -64,6 +64,9 @@ param(
     [string]$SharedInfraRg,
 
     [string]$Location = "northeurope",
+
+    [ValidateRange(0, 255)]
+    [int]$NetworkSecondOctet = 0,
 
     [ValidateSet("Standard_DC1as_v5", "Standard_DC2as_v5", "Standard_DC1as_v6", "Standard_DC2as_v6", "Standard_DC4as_v6")]
     [string]$CvmSize = "Standard_DC2as_v5",
@@ -81,7 +84,7 @@ if (-not $Cleanup) {
     # Check if outputs from Stage 1 exist
     if (-not $SharedInfraRg) {
         Write-Host "ERROR: -SharedInfraRg is required (from Stage 1 deployment)" -ForegroundColor Red
-        Write-Host "Example: .\Deploy-AppInstance.ps1 -Prefix `"sgall`" -SharedInfraRg `"sgallsharedinfra`" -Deploy" -ForegroundColor Yellow
+        Write-Host "Example: .\Deploy-AppInstance.ps1 -Prefix `"yourprefix`" -SharedInfraRg `"yourprefixsharedinfra`" -Deploy" -ForegroundColor Yellow
         exit 1
     }
 }
@@ -153,6 +156,13 @@ if (-not $hsmId) {
 }
 Write-Host "✓ Managed HSM ID: $hsmId" -ForegroundColor Green
 
+$sharedVnetName = az network vnet list --resource-group $SharedInfraRg --query "[0].name" -o tsv
+if (-not $sharedVnetName) {
+    Write-Host "✗ Shared virtual network not found in shared infrastructure RG" -ForegroundColor Red
+    exit 1
+}
+Write-Host "✓ Shared virtual network: $sharedVnetName" -ForegroundColor Green
+
 # Ensure app instance resource group exists
 Write-Host "Creating app instance resource group: $RgName" -ForegroundColor Yellow
 az group create --name $RgName --location $Location | Out-Null
@@ -182,7 +192,8 @@ $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
 $sqlSaPassword = "Cvm$(Get-Random -Minimum 100000 -Maximum 999999)!A"
 $sqlAppPassword = "App$(Get-Random -Minimum 100000 -Maximum 999999)!A"
 $sqlVmName = "$Prefix-sql-cvm"
-$sqlPrivateIp = '10.0.3.5'
+$appPrivateIp = "10.$NetworkSecondOctet.3.4"
+$sqlPrivateIp = "10.$NetworkSecondOctet.3.5"
 $hsmName = $hsmId.Split('/')[-1]
 $osDiskKeyName = "$Prefix-cvm-os-key"
 $diskEncryptionSetName = "$Prefix-cvm-os-des"
@@ -239,7 +250,7 @@ python3 /tmp/get-pip.py --break-system-packages
 pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn
 openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/C=NL/O=Norland IT Department/OU=Registry PKI/CN=Norland Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
 openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
-printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:10.0.3.4' > /tmp/server-ext.cnf
+printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' > /tmp/server-ext.cnf
 openssl x509 -req -in /tmp/citizen-registry.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen-registry.crt -days 365 -sha256 -extfile /tmp/server-ext.cnf
 openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen.key -out /tmp/citizen.csr -subj '/C=NL/O=Norland IT Department/OU=Registry Clients/CN=citizen-registry-demo-client'
 printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' 'extendedKeyUsage=clientAuth' > /tmp/client-ext.cnf
@@ -247,7 +258,7 @@ openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca
 chmod 600 /etc/citizen-registry/certs/*.key
 chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=10.0.3.4\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.neu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target
@@ -310,9 +321,11 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         bastionName = @{ value = $BastionName }
         attestationName = @{ value = $AttestationName }
         vnetName = @{ value = $VnetName }
+        networkSecondOctet = @{ value = $NetworkSecondOctet }
         location = @{ value = $Location }
         ownerTag = @{ value = $userUpn }
         sharedInfraRgName = @{ value = $SharedInfraRg }
+        sharedVnetName = @{ value = $sharedVnetName }
         diskEncryptionSetId = @{ value = $diskEncryptionSetId }
         confidentialOsDisk = @{ value = $true }
         attestationEnabled = @{ value = $true }
@@ -355,6 +368,7 @@ if ($Deploy) {
             --resource-group $RgName `
             --template-file "./bicep/app-instance.bicep" `
             --parameters "@$parametersFile" `
+            --only-show-errors `
             --query "properties.outputs" `
             2>&1
         
@@ -383,7 +397,7 @@ if ($Deploy) {
 
         # Complete cross-resource-group networking from the shared-infrastructure side.
         $appVnetId = $deploymentOutputs.vnetId.value
-        az network vnet peering create --resource-group $SharedInfraRg --vnet-name "$Prefix-shared-vnet" --name shared-to-app --remote-vnet $appVnetId --allow-vnet-access | Out-Null
+        az network vnet peering create --resource-group $SharedInfraRg --vnet-name $sharedVnetName --name "shared-to-$VnetName" --remote-vnet $appVnetId --allow-vnet-access | Out-Null
         az network private-dns link vnet create --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --virtual-network $appVnetId --registration-enabled false | Out-Null
         Write-Host "Bidirectional VNet peering and HSM private DNS link ready" -ForegroundColor Green
         
@@ -416,4 +430,4 @@ if ($Deploy) {
 
 # If no action specified
 Write-Host "No action specified. Use one of: -Deploy, -ValidateOnly, or -Cleanup" -ForegroundColor Yellow
-Write-Host "Example: .\Deploy-AppInstance.ps1 -Prefix `"sgall`" -SharedInfraRg `"sgallsharedinfra`" -Deploy" -ForegroundColor Cyan
+Write-Host "Example: .\Deploy-AppInstance.ps1 -Prefix `"yourprefix`" -SharedInfraRg `"yourprefixsharedinfra`" -Deploy" -ForegroundColor Cyan

@@ -266,12 +266,12 @@ Confidential VM (Managed Identity: cvm-identity)
 
 ```
 1. Parse Parameters
-   ├─ Prefix: sgall
-   ├─ Location: eastus
+   ├─ Prefix: yourprefix
+   ├─ Location: northeurope
    └─ Validate naming conventions
 
 2. Create Resource Group
-   └─ {Prefix}sharedinfra (e.g., sgallsharedinfra)
+   └─ {Prefix}sharedinfra (e.g., yourprefixsharedinfra)
 
 3. Deploy Bicep Template (shared-infra.bicep)
    ├─ Virtual Network (10.0.0.0/16)
@@ -296,14 +296,14 @@ Confidential VM (Managed Identity: cvm-identity)
 
 ```
 1. Parse Parameters
-   ├─ Prefix: sgall
-   ├─ SharedInfraRg: sgallsharedinfra
-   ├─ Location: eastus
-   ├─ CvmSize: Standard_DC2as_v6
+   ├─ Prefix: yourprefix
+   ├─ SharedInfraRg: yourprefixsharedinfra
+   ├─ Location: northeurope
+   ├─ CvmSize: Standard_DC2as_v5
    └─ Validate and link to shared infra
 
 2. Create Resource Group
-   └─ {Prefix}{random5digit}app (e.g., sgall12345app)
+   └─ {Prefix}{random5digit}app (e.g., yourprefix12345app)
 
 3. Deploy Bicep Template (app-instance.bicep)
    ├─ Virtual Network (10.0.0.0/16, different VNet)

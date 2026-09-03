@@ -19,7 +19,7 @@
     Object ID of the admin principal to authorize (default: current user).
 
 .EXAMPLE
-    .\initialize-hsm.ps1 -HsmName "sgallhsm234" -ResourceGroupName "sgallsharedinfra"
+    .\initialize-hsm.ps1 -HsmName "yourprefixhsm234" -ResourceGroupName "yourprefixsharedinfra"
 #>
 param(
     [Parameter(Mandatory = $true)]

@@ -23,6 +23,11 @@ param attestationName string
 @description('Name of the virtual network')
 param vnetName string
 
+@minValue(0)
+@maxValue(255)
+@description('Second octet for the app VNet and its subnets')
+param networkSecondOctet int = 0
+
 @description('Azure region')
 param location string = resourceGroup().location
 
@@ -41,6 +46,9 @@ param ownerTag string
 
 @description('Shared Infrastructure Resource Group Name')
 param sharedInfraRgName string
+
+@description('Shared infrastructure virtual network name')
+param sharedVnetName string
 
 @description('Managed HSM-backed Disk Encryption Set Resource ID for confidential OS disks')
 param diskEncryptionSetId string
@@ -70,17 +78,17 @@ param sqlCustomData string = ''
 var appSubnetName = 'app-subnet'
 var bastionSubnetName = 'AzureBastionSubnet'
 var dbSubnetName = 'db-subnet'
-var addressPrefix = '10.0.0.0/16'
-var appSubnetPrefix = '10.0.3.0/24'
-var bastionSubnetPrefix = '10.0.2.0/24'
-var dbSubnetPrefix = '10.0.4.0/24'
+var addressPrefix = '10.${networkSecondOctet}.0.0/16'
+var appSubnetPrefix = '10.${networkSecondOctet}.3.0/24'
+var bastionSubnetPrefix = '10.${networkSecondOctet}.2.0/24'
+var dbSubnetPrefix = '10.${networkSecondOctet}.4.0/24'
 var vmOsPublisher = 'Canonical'
 var vmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
 var vmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
 var vmDataDiskSize = 64
-var sqlPrivateIp = '10.0.3.5'
-var sharedVnetName = '${prefix}-shared-vnet'
+var appPrivateIp = '10.${networkSecondOctet}.3.4'
+var sqlPrivateIp = '10.${networkSecondOctet}.3.5'
 
 resource sharedVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
   scope: resourceGroup(sharedInfraRgName)
@@ -410,7 +418,7 @@ resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
         name: 'ipconfig1'
         properties: {
           privateIPAllocationMethod: 'Static'
-          privateIPAddress: '10.0.3.4'
+          privateIPAddress: appPrivateIp
           subnet: {
             id: '${appVnet.id}/subnets/${appSubnetName}'
           }

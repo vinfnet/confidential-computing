@@ -31,17 +31,24 @@ Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the appli
 (`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
 `registryadmin` login, and 100 fictional demo citizen records. The app connects over private TCP 1433.
 
+CRUD means **create, read, update, and delete**, the four basic operations used to manage stored
+records. It is relevant here because the sample demonstrates more than a read-only connection:
+authorized users can exercise the complete citizen-record lifecycle through the confidential app,
+while mTLS protects changes in transit and SQL Server persists them on the confidential database VM.
+
 ### Validated Deployment
+
+Resource names below use the placeholder `yourprefix`; substitute the prefix selected for your deployment.
 
 | Resource | Validated value |
 |---|---|
 | Region | North Europe |
-| Shared resource group | `sgallsharedinfra` |
-| App resource group | `sgall67380app` |
-| Managed HSM | `sgallhsm239`, public access disabled, purge protection enabled |
-| Private DNS | `privatelink.managedhsm.azure.net` → `10.10.1.4` |
-| Disk encryption | `ConfidentialVmEncryptedWithCustomerKey` via `sgall-cvm-os-des` |
-| Secure key release | Azure CVM Orchestrator has release-only access to `sgall-cvm-os-key` |
+| Shared resource group | `yourprefixsharedinfra` |
+| App resource group | `yourprefix{random5digit}app` |
+| Managed HSM | `yourprefixhsm{random3digit}`, public access disabled, purge protection enabled |
+| Private DNS | `privatelink.managedhsm.azure.net` → private endpoint address |
+| Disk encryption | `ConfidentialVmEncryptedWithCustomerKey` via `yourprefix-cvm-os-des` |
+| Secure key release | Azure CVM Orchestrator has release-only access to `yourprefix-cvm-os-key` |
 | Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
 | Database | Connected; 100 fictional records with CRUD operations |
 | Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
@@ -80,7 +87,7 @@ Managed HSM protects key metadata and release policies on its authenticated data
 app identity therefore receives **Managed HSM Crypto Auditor**, scoped only to:
 
 ```text
-/keys/sgall-cvm-os-key
+/keys/yourprefix-cvm-os-key
 ```
 
 This role supplies key metadata read access required by the evidence endpoint. It does not
@@ -94,7 +101,7 @@ that operate the disk remain separate:
 | Azure CVM Orchestrator | Managed HSM Crypto Service Release User | Release after successful CVM attestation |
 
 The HSM remains public-disabled after role assignment. Runtime retrieval resolves
-`sgallhsm239.managedhsm.azure.net` to the private endpoint (`10.10.1.4`). If identity,
+`yourprefixhsm{random3digit}.managedhsm.azure.net` to the private endpoint address. If identity,
 network, or HSM access fails, the application reports `cmk.status = unavailable` and a
 non-sensitive exception class instead of fabricating policy evidence.
 
@@ -477,7 +484,7 @@ MANAGED HSM (B1 SKU, Shared)
 │                                                                   │
 │  Private DNS Zone:                                               │
 │    • Zone: privatelink.managedhsm.azure.net                       │
-│    • A Record: sgallhsm239 → 10.10.1.4                          │
+│    • A Record: {hsm-name} → private endpoint address             │
 │    • Linked to: Both VNets (shared + app instance)               │
 │    • Result: Seamless hostname resolution on private subnets     │
 │                                                                   │
@@ -522,7 +529,7 @@ Creates resource group: **`{prefix}sharedinfra`**
 
 ### Stage 2: App Instance (`Deploy-AppInstance.ps1`)
 
-Creates resource group: **`{prefix}{random5digit}app`** (e.g., `sgall18447app`)
+Creates resource group: **`{prefix}{random5digit}app`** (e.g., `yourprefix18447app`)
 
 **Resources:**
 - **Confidential VM (C-vn2)** — AMD SEV-SNP
@@ -865,7 +872,7 @@ CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
     │    ├─ Signed by: HSM CA key             │
     │    ├─ Algorithm: RSA-2048 or EC         │
     │    ├─ Validity: 1 year (configurable)   │
-    │    ├─ Subject: CN=sgall-citizen-cvm     │
+    │    ├─ Subject: CN={prefix}-citizen-cvm  │
     │    ├─ Extensions: KeyUsage, SAN         │
     │    └─ Delivery: Returned to CVM app     │
     │                                         │
@@ -1072,7 +1079,7 @@ CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
 - **Azure CLI** (`az` command)
 - **PowerShell 7+**
 - **Bicep CLI** (`az bicep`)
-- **Your prefix** (3-12 chars, e.g., `sgall`)
+- **Your prefix** (3-12 chars, e.g., `yourprefix`)
 - **PIM elevation** (if required for your subscription)
 
 ### Step 1: Deploy Shared Infrastructure
@@ -1080,12 +1087,15 @@ CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
 ```powershell
 cd .\citizen-registry-advanced
 
+$Prefix = "yourprefix" # Replace with your unique 3-12 character prefix
+$Location = "northeurope"
+
 # First time setup
-.\Deploy-SharedInfra.ps1 -Prefix "sgall" `
-  -Location "northeurope" `
+.\Deploy-SharedInfra.ps1 -Prefix $Prefix `
+  -Location $Location `
   -Deploy
 
-# Output: Resource group "sgallsharedinfra" with Managed HSM
+# Output: resource group "${Prefix}sharedinfra" with Managed HSM
 ```
 
 **Parameters:**
@@ -1105,12 +1115,12 @@ cd .\citizen-registry-advanced
 
 ```powershell
 # Deploy one or more app instances sharing the same HSM
-.\Deploy-AppInstance.ps1 -Prefix "sgall" `
-  -Location "northeurope" `
-  -SharedInfraRg "sgallsharedinfra" `
+.\Deploy-AppInstance.ps1 -Prefix $Prefix `
+  -Location $Location `
+  -SharedInfraRg "${Prefix}sharedinfra" `
   -Deploy
 
-# Output: Resource group "sgall12345app" (random 5-digit suffix)
+# Output: resource group "${Prefix}12345app" (random 5-digit suffix)
 #         Bastion accessible, CVM running citizen-registry
 ```
 
@@ -1177,7 +1187,7 @@ In Terminal 2, transfer and install the client identity and public demo CA. Wind
 an explicit confirmation before trusting the CA; review and accept it for this demo only.
 
 ```powershell
-$sshKey = Join-Path $env:TEMP "citizen-registry-sgall"
+$sshKey = Join-Path $env:TEMP "citizen-registry-$Prefix"
 $pfx = Join-Path $env:TEMP "norland-client.pfx"
 $ca = Join-Path $env:TEMP "norland-demo-ca.crt"
 
@@ -1222,10 +1232,10 @@ curl -k --cert citizen.crt --key citizen.key https://localhost/health
 
 ```powershell
 # Delete one app instance
-.\Deploy-AppInstance.ps1 -Prefix "sgall" -Cleanup
+.\Deploy-AppInstance.ps1 -Prefix $Prefix -Cleanup
 
-# Delete all (app + shared infrastructure)
-.\Deploy-SharedInfra.ps1 -Prefix "sgall" -Cleanup
+# Delete shared infrastructure after deleting all app instances
+.\Deploy-SharedInfra.ps1 -Prefix $Prefix -Cleanup
 ```
 
 ## File Structure
@@ -1424,7 +1434,7 @@ AzureDiagnostics
 
 // Failed authentication attempts on app
 SecurityEvent
-| where Computer contains "sgall-citizen-cvm"
+| where Computer contains "yourprefix-citizen-cvm"
 | where EventID == 4625  // Failed logon
 | summarize Count=count() by Account, IpAddress
 | order by Count desc
@@ -1452,7 +1462,7 @@ az bicep build --file bicep/shared-infra.bicep --output-format json
 az bicep build --file bicep/app-instance.bicep --output-format json
 
 # 3. Validate resource naming conventions
-$Prefix = "sgall"  # Must be 3-12 chars
+$Prefix = "yourprefix"  # Replace with your unique 3-12 character prefix
 if ($Prefix.Length -lt 3 -or $Prefix.Length -gt 12) {
     Write-Error "Prefix must be 3-12 characters"
 }
@@ -1482,7 +1492,7 @@ az network private-endpoint show `
 
 # 3. Verify CVM is in confidential state
 az vm show --resource-group "{appRg}" `
-  --name "sgall-citizen-cvm" `
+  --name "${Prefix}-citizen-cvm" `
   --query "securityProfile.securityType" `
   --output tsv
 # Expected: ConfidentialVM
@@ -1515,9 +1525,9 @@ curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2017-
 # 4. Test database connectivity
 /opt/mssql-tools/bin/sqlcmd -S 10.0.4.5 -U sqladmin -P [password] -Q "SELECT @@VERSION"
 
-# 5. Check HSM connectivity (requires certificate)
-getent ahostsv4 sgallhsm239.managedhsm.azure.net
-# Expected private endpoint address: 10.10.1.4
+# 5. Check HSM connectivity (use your deployed HSM name)
+getent ahostsv4 yourprefixhsm123.managedhsm.azure.net
+# Expected: the HSM private endpoint address
 
 # 6. Validate mTLS with client certificate
 curl -v --cert /path/to/client.crt --key /path/to/client.key \
@@ -1689,13 +1699,14 @@ az monitor metrics alert create `
 
 1. **Deploy Stage 1:**
    ```powershell
-   .\Deploy-SharedInfra.ps1 -Prefix "sgall" -Deploy
+   $Prefix = "yourprefix"
+   .\Deploy-SharedInfra.ps1 -Prefix $Prefix -Deploy
    ```
 
 2. **Deploy Stage 2:**
    ```powershell
-   .\Deploy-AppInstance.ps1 -Prefix "sgall" `
-     -SharedInfraRg "sgallsharedinfra" `
+   .\Deploy-AppInstance.ps1 -Prefix $Prefix `
+     -SharedInfraRg "${Prefix}sharedinfra" `
      -Deploy
    ```
 

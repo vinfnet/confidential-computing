@@ -29,7 +29,7 @@ az account set --subscription "your-subscription-id"
 
 ```powershell
 # Define your deployment parameters
-$Prefix = "sgall"           # 3-12 char identifier
+$Prefix = "yourprefix"      # Replace with a unique 3-12 character identifier
 $Location = "northeurope"   # Azure region validated by this sample
 $Environment = "demo"       # Environment type
 
@@ -68,24 +68,24 @@ cd .\citizen-registry-advanced
 ### Step 3: Deploy App Instance (5 min)
 
 ```powershell
-# Deploy your first app instance
-# Note: Replace "sgallsharedinfra" with your actual shared RG name
+# Deploy your first app instance. The shared RG name derives from your prefix.
+$SharedInfraRg = "${Prefix}sharedinfra"
 
 .\Deploy-AppInstance.ps1 `
   -Prefix $Prefix `
   -Location $Location `
-  -SharedInfraRg "${Prefix}sharedinfra" `
+  -SharedInfraRg $SharedInfraRg `
   -Deploy
 
 # Output will show:
 #   ✓ App instance resource group ready
 #   ✓ Deployment completed successfully
-#   Resource Group: sgall12345app (with random 5-digit suffix)
+#   Resource Group: ${Prefix}12345app (with random 5-digit suffix)
 ```
 
 **What this creates:**
 - Resource group: `{prefix}{random5digit}app`
-- App Confidential VM (C-vn2 with SEV-SNP)
+- App DCasv5-series Confidential VM with AMD SEV-SNP
 - SQL Server Confidential VM on the same private app subnet
 - Private app-to-database connection on TCP 1433
 - SQL Server database `citizendb` seeded with 100 fictional government-style citizen records
@@ -96,9 +96,10 @@ cd .\citizen-registry-advanced
 ### Step 4: Access the Web Application
 
 ```powershell
-$appRg = "sgall12345app"  # Your app instance RG
-$bastionName = "sgall-12345-bastion"
-$cvmId = az vm show -g $appRg -n sgall-citizen-cvm --query id -o tsv
+$appRg = "${Prefix}12345app"  # Replace 12345 with the deployed random suffix
+$bastionName = "${Prefix}-12345-bastion"
+$cvmName = "${Prefix}-citizen-cvm"
+$cvmId = az vm show -g $appRg -n $cvmName --query id -o tsv
 
 # Keep this terminal open while using the web interface.
 az network bastion tunnel `
@@ -112,7 +113,7 @@ az network bastion tunnel `
 Open `https://localhost:8443/`. The registry is readable without a client certificate.
 Add, Edit, and Delete require the Norland demo mTLS client certificate.
 
-### Step 5: Enable Browser CRUD Access
+### Step 5: Enable Browser CRUD (Create, Read, Update, and Delete) Access
 
 A web page cannot install a client certificate safely. Install the demo client identity through
 a temporary Bastion SSH tunnel by following
@@ -176,7 +177,7 @@ HSM hostname resolving privately to `10.10.1.x`.
 
 | Component | Purpose | Security |
 |-----------|---------|----------|
-| **Confidential VM** | Application runtime (C-vn2 TEE) | SEV-SNP/vTPM, HSM CMK via DES, attestation-bound secure release |
+| **Confidential VM** | Application runtime (`Standard_DC2as_v5` by default) | AMD SEV-SNP/vTPM, HSM CMK via DES, attestation-bound secure release |
 | **Database on ACC** | Data persistence | Private subnet, TDE enabled |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
 | **Attestation Service** | Provider metadata and guest-attestation integration | Metadata health is separate from CVM boot attestation |
@@ -202,13 +203,13 @@ HSM hostname resolving privately to `10.10.1.x`.
 
 ```powershell
 # Delete specific app instance
-.\Deploy-AppInstance.ps1 -Prefix "sgall" -Cleanup
+.\Deploy-AppInstance.ps1 -Prefix $Prefix -Cleanup
 
-# Delete shared infrastructure (and all app instances)
-.\Deploy-SharedInfra.ps1 -Prefix "sgall" -Cleanup
+# Delete shared infrastructure after deleting all app instances
+.\Deploy-SharedInfra.ps1 -Prefix $Prefix -Cleanup
 
 # Verify deletion
-az group list --query "[?contains(name, 'sgall')].name" -o table
+az group list --query "[?starts_with(name, '$Prefix')].name" -o table
 ```
 
 ## 🐛 Troubleshooting

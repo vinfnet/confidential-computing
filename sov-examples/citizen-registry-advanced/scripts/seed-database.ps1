@@ -19,9 +19,9 @@
     Path to JSON file containing citizen records (default: ../citizen-registry-config.json).
 
 .EXAMPLE
-    .\seed-database.ps1 -DbServer "sgall-sql.local" `
+    .\seed-database.ps1 -DbServer "yourprefix-sql.local" `
       -DbName "citizendb" `
-    -DbUsername "sqladmin"
+      -DbUsername "sqladmin"
 #>
 param(
     [Parameter(Mandatory = $true)]
