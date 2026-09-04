@@ -1,24 +1,24 @@
 # Citizen Registry Advanced — Two-Stage Confidential Deployment
 
-**Topology:** App Confidential VM ↔ SQL Server Confidential VM on a private subnet ↔ Managed HSM
+**Topology:** App Confidential H100 GPU VM ↔ SQL Server Confidential VM on a private subnet ↔ Managed HSM
 
 > **Implementation status:** Stage 2 now provisions an RSA-HSM customer-managed key in the shared Managed HSM and a `ConfidentialVmEncryptedWithCustomerKey` Disk Encryption Set. Azure Confidential VM secure key release binds the OS-disk encryption key to each VM's attested vTPM/platform state. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
-**Validated:** September 1, 2026
+**GPU configuration updated:** September 3, 2026
 
 ---
 
 ### Deployed Stage 2 Topology
 
 ```text
-                 North Europe VNet: 10.0.0.0/16
+                  West Europe VNet: 10.0.0.0/16
                               |
                     App subnet: 10.0.3.0/24
                     (private IPs only)
                   +-----------+-----------+
                   |                       |
           App CVM: 10.0.3.4       SQL CVM: 10.0.3.5
-          Flask + nginx            SQL Server 2022
+          Flask + H100 CUDA        SQL Server 2022
                   |                       |
                   +------ TLS :1433 -----+
 
@@ -27,7 +27,7 @@
   Shared HSM (10.10.1.4) <-- Private Endpoint + peered VNet
 ```
 
-Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the application CVM
+Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the NCC40ads H100 application CVM
 (`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
 `registryadmin` login, and 100 fictional demo citizen records. The app connects over private TCP 1433.
 
@@ -36,13 +36,15 @@ records. It is relevant here because the sample demonstrates more than a read-on
 authorized users can exercise the complete citizen-record lifecycle through the confidential app,
 while mTLS protects changes in transit and SQL Server persists them on the confidential database VM.
 
-### Validated Deployment
+### GPU Deployment Configuration
 
 Resource names below use the placeholder `yourprefix`; substitute the prefix selected for your deployment.
+The West Europe NCC40 quota and SKU availability were verified, but this new GPU application
+configuration has not yet been deployed end to end.
 
 | Resource | Validated value |
 |---|---|
-| Region | North Europe |
+| Region | West Europe |
 | Shared resource group | `yourprefixsharedinfra` |
 | App resource group | `yourprefix{random5digit}app` |
 | Managed HSM | `yourprefixhsm{random3digit}`, public access disabled, purge protection enabled |
@@ -52,6 +54,7 @@ Resource names below use the placeholder `yourprefix`; substitute the prefix sel
 | Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
 | Database | Connected; 100 fictional records with CRUD operations |
 | Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
+| Confidential GPU | H100 production CC mode plus successful nvtrust GPU attestation |
 
 ### Live CMK and Secure Key Release Evidence
 
@@ -180,6 +183,16 @@ The web table supports:
 - a sticky Add toolbar during vertical scrolling;
 - a sticky Actions column that keeps Edit/Delete visible during horizontal scrolling;
 - horizontal scrolling for the expanded government-record columns on narrow screens.
+- startup progress for GPU-generated portraits and click-to-expand fictional credentials.
+
+Portrait model tensors and inference execute on `cuda:0` only after the app verifies an H100,
+`CC status: ON`, `CC Environment: PRODUCTION`, and successful GPU attestation from the current
+VM boot. Prompt preparation and final JPEG/credential composition occur in SEV-SNP-protected
+CPU memory; the sample does not claim that all processing stays exclusively in GPU memory.
+Credentials use an invented Norland layout, omit valid MRZ data and real-country emblems, and
+carry a permanent `NOT A REAL PASSPORT` label.
+The app service requires a boot-time `citizen-gpu-attestation` systemd unit, so nvtrust
+attestation and the boot-bound evidence marker are renewed after every VM restart.
 
 Create, update, and delete requests use the existing `/api/citizen` endpoints and remain
 protected by nginx client-certificate verification. A browser without the Norland demo client
@@ -199,12 +212,12 @@ Gunicorn restart, confirming the seed-version marker does not overwrite subseque
 | Component | SKU | Daily Cost | Monthly Cost |
 |-----------|-----|-----------|--------------|
 | **Managed HSM** | B1 Standard | ~$13.33 | $400 |
-| **App Confidential VM** | DC2as_v5 (2 CPU) | ~$7.29 | $220 |
+| **App Confidential GPU VM** | NCC40ads H100 v5 (40 CPU, one H100) | Check current West Europe pricing | Check current West Europe pricing |
 | **SQL Server Confidential VM** | DC2as_v5 (2 CPU) | ~$7.29 | $220 |
 | **Bastion Host** | Standard (2 units) | ~$1.67 | $50 |
 | **Storage** | Premium SSD (64 GB OS + 64 GB Data) | ~$1.00 | $30 |
 | **Attestation** | Per-request (~1000/day) | ~$0.10 | $3 |
-| **Total (1 App + SQL Instance)** | | **~$30.68/day** | **~$923/month** |
+| **Total (1 App + SQL Instance)** | | Use the Azure pricing calculator | Use the Azure pricing calculator |
 
 > **Pricing information:** The estimates above are provided for planning purposes only and are not quotes. Azure prices can change and may vary by region, currency, agreement, usage, operating system, and selected configuration. Check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the current service pricing pages before deployment:
 >
@@ -234,7 +247,7 @@ Gunicorn restart, confirming the seed-version marker does not overwrite subseque
 
 1. **Ensure Managed HSM quota** in your target region:
    ```powershell
-  az vm list-usage --location northeurope --query "[?contains(name.localizedValue, 'DCasv5')]"
+  az vm list-usage --location westeurope --query "[?name.value=='StandardNCCads2023Family']"
    ```
 
 2. **Verify cost center/chargeback** is set up for Managed HSM (quota requirement):

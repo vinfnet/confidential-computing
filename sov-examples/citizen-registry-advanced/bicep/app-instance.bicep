@@ -23,15 +23,34 @@ param attestationName string
 @description('Name of the virtual network')
 param vnetName string
 
+@minLength(1)
+@maxLength(64)
+@description('Name of the SQL virtual network')
+param sqlVnetName string
+
 @minValue(0)
 @maxValue(255)
-@description('Second octet for the app VNet and its subnets')
+@description('Second octet for the app VNet')
 param networkSecondOctet int = 0
 
-@description('Azure region')
+@minValue(0)
+@maxValue(255)
+@description('Second octet for the SQL VNet')
+param sqlNetworkSecondOctet int = 1
+
+@description('Azure region for the H100 app tier')
 param location string = resourceGroup().location
 
-@description('Confidential VM SKU')
+@description('Azure region for the SQL tier')
+param sqlLocation string
+
+@description('Confidential GPU VM SKU for the application')
+@allowed([
+  'Standard_NCC40ads_H100_v5'
+])
+param appCvmSize string = 'Standard_NCC40ads_H100_v5'
+
+@description('Confidential CPU VM SKU for SQL Server')
 @allowed([
   'Standard_DC1as_v5'
   'Standard_DC2as_v5'
@@ -39,7 +58,7 @@ param location string = resourceGroup().location
   'Standard_DC2as_v6'
   'Standard_DC4as_v6'
 ])
-param cvmSize string = 'Standard_DC2as_v5'
+param sqlCvmSize string = 'Standard_DC2as_v5'
 
 @description('Owner tag (UPN)')
 param ownerTag string
@@ -78,17 +97,18 @@ param sqlCustomData string = ''
 var appSubnetName = 'app-subnet'
 var bastionSubnetName = 'AzureBastionSubnet'
 var dbSubnetName = 'db-subnet'
-var addressPrefix = '10.${networkSecondOctet}.0.0/16'
+var appAddressPrefix = '10.${networkSecondOctet}.0.0/16'
+var sqlAddressPrefix = '10.${sqlNetworkSecondOctet}.0.0/16'
 var appSubnetPrefix = '10.${networkSecondOctet}.3.0/24'
 var bastionSubnetPrefix = '10.${networkSecondOctet}.2.0/24'
-var dbSubnetPrefix = '10.${networkSecondOctet}.4.0/24'
+var dbSubnetPrefix = '10.${sqlNetworkSecondOctet}.4.0/24'
 var vmOsPublisher = 'Canonical'
 var vmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
 var vmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
 var vmDataDiskSize = 64
 var appPrivateIp = '10.${networkSecondOctet}.3.4'
-var sqlPrivateIp = '10.${networkSecondOctet}.3.5'
+var sqlPrivateIp = '10.${sqlNetworkSecondOctet}.4.5'
 
 resource sharedVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
   scope: resourceGroup(sharedInfraRgName)
@@ -140,7 +160,7 @@ resource appVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
   properties: {
     addressSpace: {
       addressPrefixes: [
-        addressPrefix
+        appAddressPrefix
       ]
     }
     subnets: [
@@ -166,6 +186,48 @@ resource appVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
           }
         }
       }
+    ]
+  }
+}
+
+resource sqlNatPublicIp 'Microsoft.Network/publicIPAddresses@2023-09-01' = {
+  name: '${sqlVnetName}-nat-pip'
+  location: sqlLocation
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    publicIPAllocationMethod: 'Static'
+  }
+}
+
+resource sqlNatGateway 'Microsoft.Network/natGateways@2023-09-01' = {
+  name: '${sqlVnetName}-nat'
+  location: sqlLocation
+  sku: {
+    name: 'Standard'
+  }
+  properties: {
+    idleTimeoutInMinutes: 10
+    publicIpAddresses: [
+      {
+        id: sqlNatPublicIp.id
+      }
+    ]
+  }
+}
+
+resource sqlVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
+  name: sqlVnetName
+  location: sqlLocation
+  tags: commonTags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        sqlAddressPrefix
+      ]
+    }
+    subnets: [
       {
         name: dbSubnetName
         properties: {
@@ -173,10 +235,40 @@ resource appVnet 'Microsoft.Network/virtualNetworks@2023-09-01' = {
           networkSecurityGroup: {
             id: dbNsg.id
           }
-          privateEndpointNetworkPolicies: 'Disabled'
+          natGateway: {
+            id: sqlNatGateway.id
+          }
         }
       }
     ]
+  }
+}
+
+resource appToSqlPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-09-01' = {
+  parent: appVnet
+  name: 'app-to-sql'
+  properties: {
+    allowVirtualNetworkAccess: true
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    useRemoteGateways: false
+    remoteVirtualNetwork: {
+      id: sqlVnet.id
+    }
+  }
+}
+
+resource sqlToAppPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2023-09-01' = {
+  parent: sqlVnet
+  name: 'sql-to-app'
+  properties: {
+    allowVirtualNetworkAccess: true
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    useRemoteGateways: false
+    remoteVirtualNetwork: {
+      id: appVnet.id
+    }
   }
 }
 
@@ -366,7 +458,7 @@ resource bastionNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
 
 resource dbNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
   name: '${prefix}-db-nsg'
-  location: location
+  location: sqlLocation
   tags: commonTags
   properties: {
     securityRules: [
@@ -380,6 +472,19 @@ resource dbNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {
           destinationAddressPrefix: '*'
           access: 'Allow'
           priority: 100
+          direction: 'Inbound'
+        }
+      }
+      {
+        name: 'AllowSshFromBastion'
+        properties: {
+          protocol: 'Tcp'
+          sourcePortRange: '*'
+          destinationPortRange: '22'
+          sourceAddressPrefix: bastionSubnetPrefix
+          destinationAddressPrefix: '*'
+          access: 'Allow'
+          priority: 110
           direction: 'Inbound'
         }
       }
@@ -431,7 +536,7 @@ resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
   }
 }
 
-// Confidential VM (C-vn2 with SEV-SNP TEE)
+// Confidential GPU VM with SEV-SNP CPU isolation and an H100 GPU.
 resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: cvmName
   location: location
@@ -444,7 +549,7 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   }
   properties: {
     hardwareProfile: {
-      vmSize: cvmSize
+      vmSize: appCvmSize
     }
     osProfile: {
       computerName: cvmName
@@ -513,10 +618,10 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   }
 }
 
-// SQL Server Confidential VM on the same private app subnet.
+// SQL Server Confidential VM in a globally peered regional VNet.
 resource sqlNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
   name: '${sqlVmName}-nic'
-  location: location
+  location: sqlLocation
   tags: commonTags
   properties: {
     ipConfigurations: [
@@ -526,24 +631,24 @@ resource sqlNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
           privateIPAllocationMethod: 'Static'
           privateIPAddress: sqlPrivateIp
           subnet: {
-            id: '${appVnet.id}/subnets/${appSubnetName}'
+            id: '${sqlVnet.id}/subnets/${dbSubnetName}'
           }
         }
       }
     ]
     networkSecurityGroup: {
-      id: appNsg.id
+      id: dbNsg.id
     }
   }
 }
 
 resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: sqlVmName
-  location: location
+  location: sqlLocation
   tags: commonTags
   properties: {
     hardwareProfile: {
-      vmSize: cvmSize
+      vmSize: sqlCvmSize
     }
     osProfile: {
       computerName: sqlVmName
@@ -573,10 +678,7 @@ resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
         managedDisk: {
           storageAccountType: 'Premium_LRS'
           securityProfile: {
-            securityEncryptionType: confidentialOsDisk ? 'DiskWithVMGuestState' : 'DiskWithoutVMGuestState'
-            diskEncryptionSet: {
-              id: diskEncryptionSetId
-            }
+            securityEncryptionType: 'VMGuestStateOnly'
           }
         }
       }
@@ -668,5 +770,6 @@ output bastionName string = bastionHost.name
 output attestationEndpoint string = attestationEnabled ? attestationProvider!.properties.attestUri : ''
 output attestationId string = attestationEnabled ? attestationProvider!.id : ''
 output vnetId string = appVnet.id
+output sqlVnetId string = sqlVnet.id
 output appSubnetId string = '${appVnet.id}/subnets/${appSubnetName}'
-output dbSubnetId string = '${appVnet.id}/subnets/${dbSubnetName}'
+output dbSubnetId string = '${sqlVnet.id}/subnets/${dbSubnetName}'

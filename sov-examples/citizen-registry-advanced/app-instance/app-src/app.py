@@ -1,20 +1,22 @@
 """
 Citizen Registry Advanced — Flask App with mTLS and Azure Attestation
 
-Deployed on Confidential VM (C-vn2) with:
+Deployed on an NCC40ads H100 Confidential GPU VM with:
 - Mutual TLS (mTLS) for client-server authentication
 - Azure Attestation integration for certificate validation
 - SQL Server on ACC for encrypted data storage
 - Managed HSM integration for key management
+- Attested CUDA portrait generation on an NVIDIA H100
 """
 
-from flask import Flask, jsonify, request, render_template, redirect, url_for
+from flask import Flask, jsonify, request, render_template, send_file
 import base64
 import json
 import os
 import secrets
 import ssl
 import threading
+import time
 import pyodbc
 import sqlite3
 import logging
@@ -22,6 +24,7 @@ from datetime import datetime
 from decimal import Decimal
 from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
+from media_generator import MediaGenerator, get_gpu_attestation_evidence
 
 # Configure logging
 logging.basicConfig(
@@ -37,6 +40,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024
+media_generator = MediaGenerator()
 
 
 @app.before_request
@@ -67,6 +71,10 @@ SQL_CVM_IP = os.environ.get('SQL_CVM_IP', DB_HOST)
 HSM_NAME = os.environ.get('HSM_NAME', '')
 OS_DISK_KEY_NAME = os.environ.get('OS_DISK_KEY_NAME', '')
 KEY_RELEASE_STATUS = os.environ.get('KEY_RELEASE_STATUS', 'not_configured')
+CPU_ATTESTATION_PATH = os.environ.get(
+    'CPU_ATTESTATION_PATH',
+    '/var/lib/citizen-registry/cpu-attestation.json',
+)
 
 _credential = None
 _credential_lock = threading.Lock()
@@ -352,6 +360,52 @@ def _ensure_database_ready():
             _database_ready = True
 
 
+def _citizens_for_media():
+    conn = _get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, national_id, first_name, last_name, date_of_birth,
+               address_line, municipality, region, socioeconomic_group,
+               tax_paid_last_year, sex, postal_code
+        FROM citizen_registry ORDER BY id
+    """)
+    citizens = [{
+        'id': row[0],
+        'national_id': row[1],
+        'first_name': row[2],
+        'last_name': row[3],
+        'date_of_birth': str(row[4]),
+        'address_line': row[5],
+        'municipality': row[6],
+        'region': row[7],
+        'socioeconomic_group': row[8],
+        'tax_paid_last_year': float(row[9] or 0),
+        'sex': row[10],
+        'postal_code': row[11],
+    } for row in cursor.fetchall()]
+    conn.close()
+    return citizens
+
+
+def _schedule_media_generation():
+    def wait_for_database():
+        for attempt in range(60):
+            try:
+                media_generator.ensure_started(_citizens_for_media())
+                return
+            except Exception as error:
+                if attempt == 59:
+                    logger.error(f'Could not start GPU media generation: {error}')
+                    return
+                time.sleep(5)
+
+    threading.Thread(
+        target=wait_for_database,
+        daemon=True,
+        name='citizen-media-startup',
+    ).start()
+
+
 # ============================================================================
 # Attestation and mTLS Functions
 # ============================================================================
@@ -377,6 +431,37 @@ def _validate_attestation():
         logger.warning(f"Attestation check failed: {e}")
     
     return {'status': 'provider_unreachable'}
+
+
+def _get_cpu_attestation_evidence():
+    """Return selected claims from a successful current-boot MAA attestation."""
+    try:
+        with open(CPU_ATTESTATION_PATH, encoding='utf-8') as evidence_file:
+            evidence = json.load(evidence_file)
+        with open('/proc/sys/kernel/random/boot_id', encoding='utf-8') as boot_file:
+            current_boot = evidence.get('boot_id') == boot_file.read().strip()
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {
+            'verified': False,
+            'current_boot': False,
+            'status': 'evidence unavailable',
+            'claims': {},
+        }
+
+    claims = evidence.get('claims', {})
+    token_current = claims.get('expires_at', 0) > int(time.time())
+    verified = bool(evidence.get('verified')) and current_boot and token_current
+    return {
+        'verified': verified,
+        'current_boot': current_boot,
+        'token_current': token_current,
+        'status': 'verified for current boot' if verified else 'stale or unverified',
+        'verifier': evidence.get('verifier', 'Microsoft Azure Attestation'),
+        'result': evidence.get('result', 'not reported'),
+        'attested_at': evidence.get('attested_at', 'not reported'),
+        'token_sha256': evidence.get('token_sha256', 'not reported'),
+        'claims': claims,
+    }
 
 
 def _verify_mtls_certificate():
@@ -501,34 +586,37 @@ def db_status():
 def index():
     """Main citizen registry page"""
     try:
-        conn = _get_db_conn()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, national_id, first_name, last_name, date_of_birth,
-                   address_line, municipality, region, socioeconomic_group,
-                   tax_paid_last_year
-            FROM citizen_registry ORDER BY id
-        """)
-        citizens = []
-        for row in cursor.fetchall():
-            citizens.append({
-                'id': row[0],
-                'national_id': row[1],
-                'first_name': row[2],
-                'last_name': row[3],
-                'date_of_birth': str(row[4]),
-                'address_line': row[5],
-                'municipality': row[6],
-                'region': row[7],
-                'socioeconomic_group': row[8],
-                'tax_paid_last_year': float(row[9] or 0),
-            })
-        conn.close()
+        citizens = _citizens_for_media()
+        media_generator.ensure_started(citizens)
         
         return render_template('index.html', citizens=citizens, mtls_enabled=MTLS_ENABLED)
     except Exception as e:
         logger.error(f"Error loading citizen list: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/media/status', methods=['GET'])
+def media_status():
+    """Return CUDA portrait-generation progress without exposing citizen data."""
+    return jsonify(media_generator.status())
+
+
+@app.route('/media/portrait/<int:citizen_id>', methods=['GET'])
+def citizen_portrait(citizen_id):
+    """Return a completed fictional citizen portrait."""
+    path = media_generator.portrait_path(citizen_id)
+    if not path.is_file():
+        return jsonify({'error': 'Portrait is not ready'}), 404
+    return send_file(path, mimetype='image/jpeg', conditional=True, max_age=86400)
+
+
+@app.route('/media/credential/<int:citizen_id>', methods=['GET'])
+def citizen_credential(citizen_id):
+    """Return a completed, visibly fictional Norland credential."""
+    path = media_generator.credential_path(citizen_id)
+    if not path.is_file():
+        return jsonify({'error': 'Credential is not ready'}), 404
+    return send_file(path, mimetype='image/jpeg', conditional=True, max_age=86400)
 
 
 @app.route('/api/citizens', methods=['GET'])
@@ -636,6 +724,7 @@ def create_citizen():
         
         conn.commit()
         conn.close()
+        _schedule_media_generation()
         
         logger.info(f"Created citizen record: {data['national_id']}")
         return jsonify({'status': 'created'}), 201
@@ -676,6 +765,7 @@ def update_citizen(citizen_id):
         
         conn.commit()
         conn.close()
+        _schedule_media_generation()
         
         logger.info(f"Updated citizen record: {citizen_id}")
         return jsonify({'status': 'updated'})
@@ -693,6 +783,7 @@ def delete_citizen(citizen_id):
         cursor.execute("DELETE FROM citizen_registry WHERE id = ?", (citizen_id,))
         conn.commit()
         conn.close()
+        _schedule_media_generation()
         
         logger.info(f"Deleted citizen record: {citizen_id}")
         return jsonify({'status': 'deleted'})
@@ -733,6 +824,8 @@ def security_evidence():
             'result': _validate_attestation(),
             'cvm_measurement_source': 'Azure Confidential VM vTPM/SEV-SNP',
         },
+        'cpu_attestation': _get_cpu_attestation_evidence(),
+        'gpu_attestation': get_gpu_attestation_evidence(),
         'private_link': {
             'app_cvm_ip': APP_CVM_IP,
             'sql_cvm_ip': SQL_CVM_IP,
@@ -767,6 +860,8 @@ def server_error(e):
 # ============================================================================
 # Application Startup
 # ============================================================================
+
+_schedule_media_generation()
 
 if __name__ == '__main__':
     logger.info("╔════════════════════════════════════════════════════════════╗")

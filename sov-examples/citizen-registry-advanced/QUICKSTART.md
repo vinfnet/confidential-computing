@@ -14,6 +14,7 @@ This guide walks you through deploying the citizen registry advanced app with ma
 # - PowerShell 7+ — https://github.com/PowerShell/PowerShell
 # - Bicep CLI — az bicep install
 # - Git for version control
+# - 40 available Standard NCCads2023 Family vCPUs in West Europe
 
 # Verify installations
 az --version
@@ -30,7 +31,7 @@ az account set --subscription "your-subscription-id"
 ```powershell
 # Define your deployment parameters
 $Prefix = "yourprefix"      # Replace with a unique 3-12 character identifier
-$Location = "northeurope"   # Azure region validated by this sample
+$Location = "westeurope"    # Region with NCC40ads H100 capacity for this sample
 $Environment = "demo"       # Environment type
 
 Write-Host "Deploying with:"
@@ -65,7 +66,7 @@ cd .\citizen-registry-advanced
 - Private Link endpoint for HSM
 - Private DNS zones
 
-### Step 3: Deploy App Instance (5 min)
+### Step 3: Deploy App Instance
 
 ```powershell
 # Deploy your first app instance. The shared RG name derives from your prefix.
@@ -80,18 +81,31 @@ $SharedInfraRg = "${Prefix}sharedinfra"
 # Output will show:
 #   ✓ App instance resource group ready
 #   ✓ Deployment completed successfully
+#   ✓ Confidential H100 onboarding and attestation succeeded
 #   Resource Group: ${Prefix}12345app (with random 5-digit suffix)
 ```
 
 **What this creates:**
 - Resource group: `{prefix}{random5digit}app`
-- App DCasv5-series Confidential VM with AMD SEV-SNP
-- SQL Server Confidential VM on the same private app subnet
+- App `Standard_NCC40ads_H100_v5` Confidential GPU VM with AMD SEV-SNP and one NVIDIA H100
+- SQL Server `Standard_DC2as_v5` Confidential VM on the same private app subnet
 - Private app-to-database connection on TCP 1433
 - SQL Server database `citizendb` seeded with 100 fictional government-style citizen records
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM
+
+The script validates NCC40 availability and 40-vCPU family quota before creating the app
+resource group. It then uses the checksum-pinned Azure CGPU onboarding V4.3.3 release to:
+
+1. install the supported FDE kernel and reboot;
+2. install the NVIDIA 595 open driver and reboot;
+3. require `CC status: ON` and `CC Environment: PRODUCTION`;
+4. run nvtrust GPU attestation and require `GPU Attestation is Successful.`;
+5. bind a local attestation marker to the current VM boot before starting GPU inference.
+
+The `citizen-gpu-attestation` systemd unit repeats steps 3-5 after every reboot and is a
+required startup dependency of the registry service.
 
 ### Step 4: Access the Web Application
 
@@ -136,6 +150,9 @@ Do not expose the PFX through a web download or commit it to the repository.
 - **Add citizen** remains visible in the sticky toolbar while scrolling.
 - **Edit** and **Delete** remain visible in the sticky right-hand Actions column.
 - The table contains 100 deterministic, entirely fictional records.
+- Startup progress reports generation of fictional citizen portraits on the attested H100.
+- Select a portrait thumbnail to expand its fictional Norland credential.
+- Every credential is permanently labeled `NOT A REAL PASSPORT` and has no valid MRZ or real emblem.
 - Fields include national ID, date of birth, street address, town, state, socio-economic group,
   and tax paid last year.
 - The expanded table scrolls horizontally on narrow screens.
@@ -177,7 +194,7 @@ HSM hostname resolving privately to `10.10.1.x`.
 
 | Component | Purpose | Security |
 |-----------|---------|----------|
-| **Confidential VM** | Application runtime (`Standard_DC2as_v5` by default) | AMD SEV-SNP/vTPM, HSM CMK via DES, attestation-bound secure release |
+| **Confidential GPU VM** | App and CUDA inference (`Standard_NCC40ads_H100_v5`) | SEV-SNP/vTPM plus production H100 CC mode and nvtrust attestation |
 | **Database on ACC** | Data persistence | Private subnet, TDE enabled |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
 | **Attestation Service** | Provider metadata and guest-attestation integration | Metadata health is separate from CVM boot attestation |
@@ -187,15 +204,15 @@ HSM hostname resolving privately to `10.10.1.x`.
 | Component | SKU | Monthly Cost (approx) |
 |-----------|-----|----------------------|
 | **Managed HSM** | B1 | $400 |
-| **App Confidential VM** | DC2as_v5 (2 vCPU) | $220 |
+| **App Confidential GPU VM** | NCC40ads H100 v5 (40 vCPU, one H100) | Check current West Europe pricing |
 | **SQL Confidential VM** | DC2as_v5 (2 vCPU) | $220 |
 | **Bastion** | Standard (2 scale units) | $50 |
 | **Attestation** | Per-request | $5-10 |
 | **Storage** | Premium LRS disks | $30 |
-| **Total** | | ~$940/month |
+| **Total** | | Use the Azure pricing calculator before deployment |
 
 **To reduce costs:**
-- Use a smaller supported CVM SKU where available
+- Delete the app instance when confidential GPU generation is not being tested
 - Reduce Bastion scale units
 - Delete app instances when not in use (keep shared infrastructure)
 

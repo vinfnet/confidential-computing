@@ -78,6 +78,12 @@
             white-space: pre-wrap;
             font: 12px/1.5 Consolas, monospace;
         }
+        .claim-list { display: grid; gap: 8px; margin-top: 10px; }
+        .claim-row { display: grid; grid-template-columns: minmax(150px, 220px) 1fr; gap: 16px; padding: 8px 0; border-bottom: 1px solid #dbe3ee; }
+        .claim-name { color: #475569; font-weight: 600; }
+        .claim-value { color: #0f172a; overflow-wrap: anywhere; font-family: Consolas, monospace; }
+        .verification-result { padding: 10px 12px; margin-bottom: 14px; border-left: 4px solid #ef4444; background: #fef2f2; color: #991b1b; font-weight: 700; }
+        .verification-result.verified { border-left-color: #16a34a; background: #f0fdf4; color: #166534; }
         
         .security-badge {
             display: flex;
@@ -140,6 +146,17 @@
             margin-bottom: 8px;
         }
         .table-wrap { overflow-x: auto; border: 1px solid #e5e7eb; }
+
+        .media-progress { padding: 14px 0 18px; }
+        .media-progress[hidden] { display: none; }
+        .media-progress-row { display: flex; justify-content: space-between; gap: 16px; color: #475569; font-size: 13px; margin-bottom: 7px; }
+        .media-progress progress { width: 100%; height: 12px; accent-color: #0f766e; }
+        .portrait-button { display: block; width: 48px; height: 60px; background: #e2e8f0; overflow: hidden; }
+        .portrait-button:focus-visible { outline: 3px solid #0f766e; outline-offset: 2px; }
+        .portrait { width: 48px; height: 60px; display: block; object-fit: cover; }
+        .portrait:not([src]) { visibility: hidden; }
+        .credential-dialog { width: min(980px, calc(100% - 32px)); }
+        .credential-image { display: block; width: 100%; height: auto; background: #d9eef2; }
         
         table {
             width: 100%;
@@ -275,16 +292,24 @@
                     <span>mTLS: {% if mtls_enabled %}ENABLED{% else %}DISABLED{% endif %}</span>
                 </label>
                 <div class="evidence-panel" id="mtls-evidence">Loading mTLS evidence...</div>
-                <div class="security-badge enabled">
-                    <div class="badge-icon enabled">✓</div>
-                    <span>Confidential VM: ACTIVE</span>
-                </div>
+                <input class="security-toggle" type="checkbox" id="cpu-attestation-toggle">
+                <label class="security-badge disabled" id="cpu-attestation-badge" for="cpu-attestation-toggle">
+                    <div class="badge-icon disabled" id="cpu-attestation-icon">…</div>
+                    <span id="cpu-attestation-label">CPU Attestation: CHECKING</span>
+                </label>
+                <div class="evidence-panel" id="cpu-attestation-evidence">Loading CPU attestation evidence...</div>
                 <input class="security-toggle" type="checkbox" id="attestation-details-toggle">
-                <label class="security-badge enabled" for="attestation-details-toggle">
-                    <div class="badge-icon enabled">✓</div>
-                    <span>Attestation: CONFIGURED</span>
+                <label class="security-badge disabled" id="attestation-provider-badge" for="attestation-details-toggle">
+                    <div class="badge-icon disabled" id="attestation-provider-icon">…</div>
+                    <span id="attestation-provider-label">MAA Provider: CHECKING</span>
                 </label>
                 <div class="evidence-panel" id="attestation-evidence">Loading attestation evidence...</div>
+                <input class="security-toggle" type="checkbox" id="gpu-attestation-toggle">
+                <label class="security-badge disabled" id="gpu-attestation-badge" for="gpu-attestation-toggle">
+                    <div class="badge-icon disabled" id="gpu-attestation-icon">…</div>
+                    <span id="gpu-attestation-label">GPU Attestation: CHECKING</span>
+                </label>
+                <div class="evidence-panel" id="gpu-attestation-evidence">Loading GPU attestation evidence...</div>
                 <input class="security-toggle" type="checkbox" id="private-link-toggle">
                 <label class="security-badge enabled" for="private-link-toggle">
                     <div class="badge-icon enabled">✓</div>
@@ -305,12 +330,17 @@
                 <h2>Registered Citizens</h2>
                 <button class="command-button" id="add-citizen" type="button">+ Add citizen</button>
             </div>
+            <div class="media-progress" id="media-progress">
+                <div class="media-progress-row"><span id="media-progress-message">Preparing fictional citizen credentials</span><span id="media-progress-count">0%</span></div>
+                <progress id="media-progress-bar" max="100" value="0"></progress>
+            </div>
             
             {% if citizens %}
             <div class="table-wrap">
                 <table>
                     <thead>
                         <tr>
+                            <th>Photo</th>
                             <th>ID</th>
                             <th>National ID</th>
                             <th>Name</th>
@@ -326,6 +356,7 @@
                     <tbody>
                         {% for citizen in citizens %}
                         <tr>
+                            <td><button class="portrait-button" type="button" data-citizen-id="{{ citizen.id }}" data-citizen-name="{{ citizen.first_name }} {{ citizen.last_name }}" aria-label="Open fictional credential for {{ citizen.first_name }} {{ citizen.last_name }}"><img class="portrait" data-src="{{ url_for('citizen_portrait', citizen_id=citizen.id) }}" alt=""></button></td>
                             <td>{{ citizen.id }}</td>
                             <td><code>{{ citizen.national_id }}</code></td>
                             <td>{{ citizen.first_name }} {{ citizen.last_name }}</td>
@@ -375,6 +406,16 @@
                 <div class="dialog-actions"><button class="secondary-button" id="cancel-dialog" type="button">Cancel</button><button class="command-button" type="submit">Save</button></div>
             </form>
         </dialog>
+
+        <dialog class="credential-dialog" id="credential-dialog">
+            <div class="dialog-content">
+                <div class="dialog-header">
+                    <h2 id="credential-title">Fictional citizen credential</h2>
+                    <button class="close-button" id="close-credential" type="button" aria-label="Close">×</button>
+                </div>
+                <img class="credential-image" id="credential-image" alt="Fictional Norland citizen credential">
+            </div>
+        </dialog>
         
         <footer>
             <p>🔐 Citizen Registry Advanced | Confidential Computing on Azure | mTLS & Managed HSM</p>
@@ -384,15 +425,47 @@
     <script>
         fetch('/security/evidence').then(response => response.json()).then(data => {
             const displayName = key => key.replaceAll('_', ' ');
+            const setVerificationBadge = (prefix, verified, verifiedText, failedText) => {
+                const badge = document.getElementById(`${prefix}-badge`);
+                const icon = document.getElementById(`${prefix}-icon`);
+                badge.classList.toggle('enabled', verified);
+                badge.classList.toggle('disabled', !verified);
+                icon.classList.toggle('enabled', verified);
+                icon.classList.toggle('disabled', !verified);
+                icon.textContent = verified ? '✓' : '✗';
+                document.getElementById(`${prefix}-label`).textContent = verified ? verifiedText : failedText;
+            };
             const renderEvidence = (panelId, values) => {
                 const panel = document.getElementById(panelId);
                 panel.replaceChildren();
+                if (typeof values.verified === 'boolean') {
+                    const result = document.createElement('div');
+                    result.className = `verification-result${values.verified ? ' verified' : ''}`;
+                    result.textContent = values.verified ? 'Attestation verified' : 'Attestation not verified';
+                    panel.append(result);
+                }
                 const list = document.createElement('dl');
                 Object.entries(values).forEach(([key, value]) => {
                     const term = document.createElement('dt');
                     term.textContent = displayName(key);
                     const detail = document.createElement('dd');
-                    if (value && typeof value === 'object') {
+                    if (key === 'claims' && value && typeof value === 'object') {
+                        const claims = document.createElement('div');
+                        claims.className = 'claim-list';
+                        Object.entries(value).forEach(([claimName, claimValue]) => {
+                            const row = document.createElement('div');
+                            row.className = 'claim-row';
+                            const name = document.createElement('span');
+                            name.className = 'claim-name';
+                            name.textContent = displayName(claimName);
+                            const claim = document.createElement('span');
+                            claim.className = 'claim-value';
+                            claim.textContent = claimValue ?? 'not reported';
+                            row.append(name, claim);
+                            claims.append(row);
+                        });
+                        detail.append(claims);
+                    } else if (value && typeof value === 'object') {
                         const group = document.createElement('section');
                         group.className = 'evidence-group';
                         const heading = document.createElement('h3');
@@ -411,11 +484,21 @@
             };
             renderEvidence('mtls-evidence', data.mtls);
             renderEvidence('attestation-evidence', data.attestation);
+            renderEvidence('cpu-attestation-evidence', data.cpu_attestation);
+            renderEvidence('gpu-attestation-evidence', data.gpu_attestation);
+            const cpuVerified = data.cpu_attestation.verified === true;
+            const gpuVerified = data.gpu_attestation.verified === true;
+            const providerReachable = data.attestation.result.status === 'provider_reachable';
+            setVerificationBadge('cpu-attestation', cpuVerified, 'CPU Attestation: VERIFIED', 'CPU Attestation: UNVERIFIED');
+            setVerificationBadge('gpu-attestation', gpuVerified, 'GPU Attestation: VERIFIED', 'GPU Attestation: UNVERIFIED');
+            setVerificationBadge('attestation-provider', providerReachable, 'MAA Provider: REACHABLE', 'MAA Provider: UNREACHABLE');
             renderEvidence('private-link-evidence', data.private_link);
             renderEvidence('encryption-evidence', data.encryption_at_rest);
         }).catch(error => document.querySelectorAll('.evidence-panel').forEach(panel => { panel.textContent = 'Evidence unavailable'; }));
 
         const dialog = document.getElementById('citizen-dialog');
+        const credentialDialog = document.getElementById('credential-dialog');
+        const credentialImage = document.getElementById('credential-image');
         const form = document.getElementById('citizen-form');
         const fields = {
             national_id: document.getElementById('national-id'), first_name: document.getElementById('first-name'),
@@ -426,6 +509,33 @@
             tax_paid_last_year: document.getElementById('tax-paid')
         };
         const closeDialog = () => dialog.close();
+        document.getElementById('close-credential').addEventListener('click', () => credentialDialog.close());
+        document.querySelectorAll('.portrait-button').forEach(button => button.addEventListener('click', () => {
+            const id = button.dataset.citizenId;
+            credentialImage.src = `/media/credential/${id}`;
+            document.getElementById('credential-title').textContent = `${button.dataset.citizenName} - fictional credential`;
+            credentialDialog.showModal();
+        }));
+
+        const refreshMedia = async () => {
+            const response = await fetch('/media/status', { cache: 'no-store' });
+            const status = await response.json();
+            document.getElementById('media-progress-message').textContent = status.message;
+            document.getElementById('media-progress-count').textContent = `${status.percent}%`;
+            document.getElementById('media-progress-bar').value = status.percent;
+            document.querySelectorAll('.portrait').forEach(image => {
+                if (!image.src && status.completed > 0) image.src = `${image.dataset.src}?v=${status.updated_at}`;
+            });
+            if (status.state === 'complete') {
+                document.getElementById('media-progress').hidden = true;
+                return;
+            }
+            if (status.state !== 'failed') window.setTimeout(refreshMedia, 2000);
+        };
+        refreshMedia().catch(() => {
+            document.getElementById('media-progress-message').textContent = 'Credential generation status unavailable';
+        });
+
         document.getElementById('close-dialog').addEventListener('click', closeDialog);
         document.getElementById('cancel-dialog').addEventListener('click', closeDialog);
         document.getElementById('add-citizen').addEventListener('click', () => {
