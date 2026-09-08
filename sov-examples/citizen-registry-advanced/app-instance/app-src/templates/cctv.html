@@ -60,6 +60,7 @@
         }
         button:hover { background: #00594f; }
         button:focus-visible { outline: 3px solid #f0b429; outline-offset: 3px; }
+        button:disabled { background: #73808a; cursor: default; }
         button svg { width: 20px; height: 20px; fill: currentColor; }
         a { color: var(--accent); font: 700 15px/1.4 "Trebuchet MS", sans-serif; }
         .viewer { display: none; margin-top: 30px; border-top: 1px solid var(--line); padding-top: 26px; }
@@ -141,6 +142,10 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
                 Start comparison
             </button>
+            <button id="pause-comparison" type="button" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg>
+                Pause comparison
+            </button>
             <a href="{{ url_for('citizens') }}">Return to Citizen Registry</a>
         </div>
         <section class="viewer" id="viewer" aria-label="CCTV source and anonymized video comparison">
@@ -180,6 +185,7 @@
     <script src="{{ url_for('static', filename='vendor/hls.min.js') }}"></script>
     <script>
         const openButton = document.getElementById('open-viewer');
+        const pauseButton = document.getElementById('pause-comparison');
         const viewer = document.getElementById('viewer');
         const sourceVideo = document.getElementById('source-video');
         const processedVideo = document.getElementById('processed-video');
@@ -195,6 +201,7 @@
         const processedUrl = '/cctv/processed/index.m3u8';
         let hls = null;
         let statusTimer = null;
+        let comparisonPaused = false;
 
         function formatMediaTime(seconds) {
             if (!Number.isFinite(seconds) || seconds < 0) return '--:--.-';
@@ -211,6 +218,21 @@
         function bindTimestamp(video, timestamp) {
             ['loadedmetadata', 'durationchange', 'timeupdate', 'ended'].forEach((eventName) => {
                 video.addEventListener(eventName, () => updateTimestamp(video, timestamp));
+            });
+        }
+
+        function pauseComparison() {
+            comparisonPaused = true;
+            pauseButton.disabled = true;
+            if (!sourceVideo.paused) sourceVideo.pause();
+            if (!processedVideo.paused) processedVideo.pause();
+        }
+
+        function bindComparisonControls(video) {
+            video.addEventListener('pause', pauseComparison);
+            video.addEventListener('play', () => {
+                comparisonPaused = false;
+                pauseButton.disabled = false;
             });
         }
 
@@ -254,7 +276,7 @@
         function attachProcessedStream() {
             if (processedVideo.canPlayType('application/vnd.apple.mpegurl')) {
                 processedVideo.src = processedUrl;
-                processedVideo.play().catch(() => {});
+                if (!comparisonPaused) processedVideo.play().catch(() => {});
                 return;
             }
             if (!window.Hls || !Hls.isSupported()) {
@@ -264,7 +286,9 @@
             hls = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 5 });
             hls.loadSource(processedUrl);
             hls.attachMedia(processedVideo);
-            hls.on(Hls.Events.MANIFEST_PARSED, () => processedVideo.play().catch(() => {}));
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (!comparisonPaused) processedVideo.play().catch(() => {});
+            });
             hls.on(Hls.Events.ERROR, (_event, data) => {
                 if (!data.fatal) return;
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
@@ -280,6 +304,7 @@
         openButton.addEventListener('click', async () => {
             viewer.classList.add('is-visible');
             openButton.hidden = true;
+            pauseButton.hidden = false;
             const source = sourceVideo.querySelector('source');
             source.src = source.dataset.src;
             sourceVideo.load();
@@ -289,8 +314,11 @@
             statusTimer = window.setInterval(refreshStatus, 3000);
         });
 
+        pauseButton.addEventListener('click', pauseComparison);
         bindTimestamp(sourceVideo, sourceTimestamp);
         bindTimestamp(processedVideo, processedTimestamp);
+        bindComparisonControls(sourceVideo);
+        bindComparisonControls(processedVideo);
 
         window.addEventListener('beforeunload', () => {
             if (statusTimer) window.clearInterval(statusTimer);

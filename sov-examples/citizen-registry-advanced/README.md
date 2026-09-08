@@ -314,6 +314,11 @@ confidential H100. Both videos show elapsed and total timestamps and stop at the
 33.5-second clip. Output becomes available after GPU verification, model loading, and completion
 of the confidential processing pass.
 
+![Confidential CCTV page showing synchronized source and H100-anonymized feeds with the Pause comparison control](docs/images/confidential-cctv-pause-comparison.png)
+
+*Completed confidential processing run with current-boot H100 evidence, frame lag, processing
+rate, face count, synchronized source and anonymized video, and a control that pauses both feeds.*
+
 The `citizen-cctv-anonymizer` systemd service:
 
 1. requires successful `citizen-gpu-attestation` evidence from the current VM boot;
