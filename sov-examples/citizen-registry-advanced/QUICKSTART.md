@@ -90,7 +90,8 @@ $SharedInfraRg = "${Prefix}sharedinfra"
 - App `Standard_NCC40ads_H100_v5` Confidential GPU VM with AMD SEV-SNP and one NVIDIA H100
 - SQL Server `Standard_DC2as_v5` Confidential VM on the same private app subnet
 - Private app-to-database connection on TCP 1433
-- SQL Server database `citizendb` seeded with 100 fictional government-style citizen records
+- SQL Server database `citizendb` seeded with 100 uniquely named fictional citizens spanning 20
+  synthetic heritage profiles and `F`, `M`, and `X` gender markers
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM

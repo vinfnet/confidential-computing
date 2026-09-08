@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+PORTRAIT_PROMPT_VERSION = 2
 
 
 def get_gpu_attestation_evidence():
@@ -136,12 +137,13 @@ class MediaGenerator:
 
     @staticmethod
     def _fingerprint(citizens):
-        identity_fields = [
+        identity_fields = [PORTRAIT_PROMPT_VERSION, [
             (citizen['id'], citizen['national_id'], citizen['first_name'],
              citizen['last_name'], citizen['date_of_birth'],
+             citizen.get('sex'), citizen.get('portrait_profile'),
              citizen.get('region'), citizen.get('municipality'))
             for citizen in citizens
-        ]
+        ]]
         payload = json.dumps(identity_fields, separators=(',', ':'), sort_keys=False)
         return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
@@ -241,8 +243,23 @@ class MediaGenerator:
     def _generate_portrait(pipeline, torch, citizen):
         seed_bytes = hashlib.sha256(citizen['national_id'].encode('utf-8')).digest()[:8]
         seed = int.from_bytes(seed_bytes, 'big') & 0x7FFFFFFFFFFFFFFF
+        birth_year = int(str(citizen['date_of_birth'])[:4])
+        age = max(18, datetime.now(timezone.utc).year - birth_year)
+        presentation = {
+            'F': 'woman',
+            'M': 'man',
+            'X': 'non-binary adult with an androgynous presentation',
+        }.get(citizen.get('sex'), 'adult')
+        portrait_profile = citizen.get('portrait_profile')
+        profile_clause = ''
+        if portrait_profile == 'Mixed heritage':
+            profile_clause = ' with a mixed heritage background'
+        elif portrait_profile:
+            profile_clause = f' with {portrait_profile} heritage'
         prompt = (
-            'photorealistic head and shoulders studio portrait of a fictional adult, '
+            f'photorealistic head and shoulders studio portrait of a fictional {age}-year-old '
+            f'{presentation}{profile_clause}, '
+            'exactly one person and one face, centered symmetrical composition, '
             'neutral expression, looking directly at camera, plain light gray background, '
             'even passport-photo lighting, natural skin detail, conservative everyday clothing, '
             'no text, no logos, no uniform, no document'
@@ -251,7 +268,10 @@ class MediaGenerator:
         with torch.inference_mode():
             return pipeline(
                 prompt=prompt,
-                negative_prompt='child, celebrity, text, watermark, logo, uniform, document, blurry',
+                negative_prompt=(
+                    'child, celebrity, text, watermark, logo, uniform, document, blurry, '
+                    'multiple people, multiple faces, group photo, collage, diptych, twins'
+                ),
                 num_inference_steps=4,
                 guidance_scale=0.0,
                 height=512,

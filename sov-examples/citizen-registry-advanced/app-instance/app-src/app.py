@@ -90,15 +90,87 @@ _credential_lock = threading.Lock()
 _database_ready = False
 _database_ready_lock = threading.Lock()
 
-FIRST_NAMES = [
-    'Aisha', 'Alex', 'Amara', 'Daniel', 'Elena', 'Elias', 'Freya', 'Grace',
-    'Hana', 'Idris', 'Jonas', 'Leila', 'Mateo', 'Maya', 'Nora', 'Omar',
-    'Priya', 'Samuel', 'Sofia', 'Tomas',
-]
-LAST_NAMES = [
-    'Bennett', 'Berg', 'Chen', 'Costa', 'Dubois', 'Garcia', 'Haddad', 'Ivanov',
-    'Johnson', 'Khan', 'Larsen', 'Mensah', 'Novak', 'Okafor', 'Petrova',
-    'Rossi', 'Silva', 'Smith', 'Tanaka', 'Williams',
+PERSONA_GROUPS = [
+    ('West African', [
+        ('Ama', 'Mensah', 'F'), ('Kwame', 'Boateng', 'M'), ('Kofi', 'Owusu', 'X'),
+        ('Adwoa', 'Asante', 'F'), ('Chinedu', 'Okafor', 'M'),
+    ]),
+    ('East African', [
+        ('Wanjiku', 'Kamau', 'F'), ('Dawit', 'Bekele', 'M'), ('Amani', 'Njoroge', 'X'),
+        ('Selam', 'Tesfaye', 'F'), ('Abdi', 'Warsame', 'M'),
+    ]),
+    ('North African', [
+        ('Nadia', 'Bensaid', 'F'), ('Karim', 'El Amrani', 'M'), ('Noor', 'Mansouri', 'X'),
+        ('Salma', 'Benali', 'F'), ('Youssef', 'Haddad', 'M'),
+    ]),
+    ('Arab', [
+        ('Layla', 'Khalil', 'F'), ('Omar', 'Darwish', 'M'), ('Rayan', 'Nasser', 'X'),
+        ('Mariam', 'Saleh', 'F'), ('Zaid', 'Hamdan', 'M'),
+    ]),
+    ('Persian', [
+        ('Shirin', 'Farhadi', 'F'), ('Arman', 'Daryaei', 'M'), ('Kian', 'Navidi', 'X'),
+        ('Niloofar', 'Rahimi', 'F'), ('Darius', 'Mehrabi', 'M'),
+    ]),
+    ('South Asian Indian', [
+        ('Priya', 'Nair', 'F'), ('Arjun', 'Mehta', 'M'), ('Kiran', 'Rao', 'X'),
+        ('Ananya', 'Iyer', 'F'), ('Vikram', 'Singh', 'M'),
+    ]),
+    ('South Asian Pakistani', [
+        ('Sana', 'Qureshi', 'F'), ('Hamza', 'Khan', 'M'), ('Ari', 'Siddiqui', 'X'),
+        ('Mahnoor', 'Abbasi', 'F'), ('Bilal', 'Chaudhry', 'M'),
+    ]),
+    ('South Asian Bangladeshi', [
+        ('Nusrat', 'Rahman', 'F'), ('Tanvir', 'Hossain', 'M'), ('Shafin', 'Karim', 'X'),
+        ('Farzana', 'Ahmed', 'F'), ('Rafiq', 'Chowdhury', 'M'),
+    ]),
+    ('Chinese', [
+        ('Mei', 'Chen', 'F'), ('Jian', 'Wang', 'M'), ('Yu', 'Lin', 'X'),
+        ('Xia', 'Zhou', 'F'), ('Wei', 'Huang', 'M'),
+    ]),
+    ('Japanese', [
+        ('Aiko', 'Tanaka', 'F'), ('Haruto', 'Sato', 'M'), ('Ren', 'Mori', 'X'),
+        ('Yui', 'Nakamura', 'F'), ('Daichi', 'Kobayashi', 'M'),
+    ]),
+    ('Korean', [
+        ('Seo-yeon', 'Kim', 'F'), ('Min-jun', 'Park', 'M'), ('Ji', 'Lee', 'X'),
+        ('Hana', 'Choi', 'F'), ('Hyun-woo', 'Kang', 'M'),
+    ]),
+    ('Southeast Asian', [
+        ('Linh', 'Nguyen', 'F'), ('Minh', 'Tran', 'M'), ('Anh', 'Le', 'X'),
+        ('Mai', 'Phan', 'F'), ('Duc', 'Vo', 'M'),
+    ]),
+    ('Filipino', [
+        ('Mara', 'Santos', 'F'), ('Paolo', 'Reyes', 'M'), ('Alex', 'Cruz', 'X'),
+        ('Liza', 'Bautista', 'F'), ('Ramon', 'Garcia', 'M'),
+    ]),
+    ('Latin American', [
+        ('Camila', 'Alvarez', 'F'), ('Mateo', 'Rojas', 'M'), ('Dani', 'Rivera', 'X'),
+        ('Lucia', 'Morales', 'F'), ('Santiago', 'Vega', 'M'),
+    ]),
+    ('Caribbean', [
+        ('Simone', 'Baptiste', 'F'), ('Malik', 'Campbell', 'M'), ('Kai', 'Joseph', 'X'),
+        ('Althea', 'Clarke', 'F'), ('Andre', 'Richards', 'M'),
+    ]),
+    ('Nordic', [
+        ('Freja', 'Larsen', 'F'), ('Soren', 'Berg', 'M'), ('Robin', 'Lind', 'X'),
+        ('Ingrid', 'Nygaard', 'F'), ('Mikael', 'Sundstrom', 'M'),
+    ]),
+    ('Eastern European', [
+        ('Aneta', 'Novak', 'F'), ('Marek', 'Kowalski', 'M'), ('Sasha', 'Petrov', 'X'),
+        ('Iryna', 'Bondarenko', 'F'), ('Tomas', 'Horvat', 'M'),
+    ]),
+    ('Mediterranean European', [
+        ('Sofia', 'Rossi', 'F'), ('Nikos', 'Papadakis', 'M'), ('Andrea', 'Costa', 'X'),
+        ('Elena', 'Marino', 'F'), ('Tiago', 'Silva', 'M'),
+    ]),
+    ('Western European', [
+        ('Amelie', 'Dubois', 'F'), ('Jonas', 'Schmidt', 'M'), ('Sam', 'Bennett', 'X'),
+        ('Maeve', 'OConnell', 'F'), ('Elias', 'de Vries', 'M'),
+    ]),
+    ('Mixed heritage', [
+        ('Maya', 'Johnson-Chen', 'F'), ('Idris', 'Williams', 'M'), ('Taylor', 'Okafor-Smith', 'X'),
+        ('Leila', 'Garcia-Haddad', 'F'), ('Noah', 'Tanaka-Rossi', 'M'),
+    ]),
 ]
 LOCATIONS = [
     ('Central', 'Alderwick', 'Cedar Avenue', 'NR1'),
@@ -121,17 +193,22 @@ SOCIOECONOMIC_GROUPS = [
 def _synthetic_citizens():
     """Build 100 deterministic, entirely fictional Republic of Norland records."""
     citizens = []
-    for index in range(1, 101):
+    personas = [
+        (first_name, last_name, sex, portrait_profile)
+        for portrait_profile, group in PERSONA_GROUPS
+        for first_name, last_name, sex in group
+    ]
+    for index, (first_name, last_name, sex, _) in enumerate(personas, start=1):
         state, town, street, postal_area = LOCATIONS[(index - 1) % len(LOCATIONS)]
         year = 1948 + ((index * 7) % 58)
         month = 1 + ((index * 5) % 12)
         day = 1 + ((index * 11) % 27)
         citizens.append({
             'national_id': f'NLD-{year % 100:02d}{chr(65 + index % 26)}-{index:04d}X',
-            'first_name': FIRST_NAMES[(index * 3) % len(FIRST_NAMES)],
-            'last_name': LAST_NAMES[(index * 7) % len(LAST_NAMES)],
+            'first_name': first_name,
+            'last_name': last_name,
             'date_of_birth': f'{year:04d}-{month:02d}-{day:02d}',
-            'sex': ('F', 'M', 'X')[index % 3],
+            'sex': sex,
             'region': state,
             'municipality': town,
             'address_line': f'{10 + ((index * 13) % 190)} {street}',
@@ -140,6 +217,17 @@ def _synthetic_citizens():
             'tax_paid_last_year': Decimal(850 + ((index * 1879) % 48600)) + Decimal(index % 100) / 100,
         })
     return citizens
+
+
+def _portrait_profile(national_id):
+    for index, (portrait_profile, group) in enumerate(PERSONA_GROUPS, start=1):
+        for offset, _ in enumerate(group):
+            citizen_index = ((index - 1) * 5) + offset + 1
+            year = 1948 + ((citizen_index * 7) % 58)
+            expected_id = f'NLD-{year % 100:02d}{chr(65 + citizen_index % 26)}-{citizen_index:04d}X'
+            if national_id == expected_id:
+                return portrait_profile
+    return None
 
 # ============================================================================
 # Database Connection Management
@@ -193,7 +281,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute("""
             DECLARE @lock_result INT;
             EXEC @lock_result = sys.sp_getapplock
-                @Resource = N'citizen-registry-seed-v100',
+                @Resource = N'citizen-registry-seed-v101',
                 @LockMode = N'Exclusive',
                 @LockOwner = N'Session',
                 @LockTimeout = 30000;
@@ -237,7 +325,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                 CREATE TABLE dbo.demo_metadata (seed_version INT NOT NULL);
         """)
 
-        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 100")
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 101")
         if cur.fetchone()[0] == 0:
             cur.execute("DELETE FROM dbo.citizen_registry")
             insert_sql = """
@@ -256,7 +344,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                     citizen['tax_paid_last_year'],
                 ))
             cur.execute("DELETE FROM dbo.demo_metadata")
-            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (100)")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (101)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
@@ -321,7 +409,7 @@ def _get_db_conn():
         if 'tax_paid_last_year' not in existing_columns:
             conn.execute('ALTER TABLE citizen_registry ADD COLUMN tax_paid_last_year NUMERIC')
         conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (seed_version INTEGER NOT NULL)')
-        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 100').fetchone()[0] == 0:
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 101').fetchone()[0] == 0:
             conn.execute('DELETE FROM citizen_registry')
             conn.executemany(
                 """
@@ -337,7 +425,7 @@ def _get_db_conn():
                 ],
             )
             conn.execute('DELETE FROM demo_metadata')
-            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (100)')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (101)')
             conn.commit()
         return conn
     
@@ -391,6 +479,7 @@ def _citizens_for_media():
         'tax_paid_last_year': float(row[9] or 0),
         'sex': row[10],
         'postal_code': row[11],
+        'portrait_profile': _portrait_profile(row[1]),
     } for row in cursor.fetchall()]
     conn.close()
     return citizens

@@ -8,6 +8,57 @@
 
 ---
 
+## Cost Warning and Controls
+
+> [!WARNING]
+> This is an expensive demonstration. In West Europe, the app's Linux
+> `Standard_NCC40ads_H100_v5` VM is **$8.90/hour** pay-as-you-go, and the required
+> Managed HSM Standard B1 pool is **$3.20/hour**. Those two resources alone cost
+> **$12.10/hour**, **$290.40/day**, or approximately **$8,833/month** at 730 hours.
+> SQL Server licensing/compute, the SQL CVM, Bastion, disks, Private Link, VNet peering,
+> logs, and data transfer are additional.
+
+Prices are USD retail estimates retrieved September 8, 2026. They are planning figures,
+not quotes; region, currency, operating system, agreement, and meter changes affect the
+actual bill.
+
+| Core resource | Current retail rate | 4 hours | 8 hours | 24 hours | 730 hours |
+|---|---:|---:|---:|---:|---:|
+| H100 app CVM, Linux PAYG | $8.90/hour | $35.60 | $71.20 | $213.60 | $6,497 |
+| Managed HSM Standard B1 | $3.20/hour | $12.80 | $25.60 | $76.80 | $2,336 |
+| **Core subtotal** | **$12.10/hour** | **$48.40** | **$96.80** | **$290.40** | **$8,833** |
+
+### Keep Demo Runs Short
+
+1. **Deploy for a scheduled test window.** Prefer a 4-8 hour demonstration run over an
+  always-on deployment. Create a budget and cost alert before provisioning.
+2. **Enable VM auto-shutdown immediately.** Apply it to both the H100 app CVM and SQL CVM.
+  Verify the VMs reach **Stopped (deallocated)**; an OS shutdown or **Stopped** state can
+  continue compute billing. Deallocation stops VM compute charges, but attached disks and
+  networking resources can still incur charges.
+3. **Do not leave Managed HSM provisioned for an occasional demo.** Managed HSM has no
+  stop/deallocate state and its hourly pool charge continues while it is provisioned. Share
+  one pool across authorized workloads when isolation requirements permit, or delete the
+  Stage 1 shared infrastructure after the final run only after preserving the security-domain
+  backup and confirming the key-recovery plan.
+4. **Delete Stage 2 after each run.** Retaining an H100 VM in a deallocated state avoids compute
+  charges but still leaves disk and related resource costs. Full Stage 2 cleanup gives the
+  largest savings between demos.
+5. **Treat Spot as optional and interruptible.** The September 2026 West Europe Linux Spot meter
+  was about **$1.64/hour**, but capacity and eviction are not guaranteed. Use it only if the
+  deployment and confidential GPU processing can tolerate interruption; never budget on Spot
+  availability.
+6. **Use commitments only for sustained workloads.** Reservations or savings plans may reduce
+  VM cost, but they are usually a poor fit for a short-lived sample. Confirm that the exact
+  confidential GPU SKU and region are eligible before committing.
+
+Check current prices before every deployment:
+
+- [Azure Key Vault Managed HSM pricing](https://azure.microsoft.com/pricing/details/key-vault/)
+- [Azure Virtual Machines pricing](https://azure.microsoft.com/pricing/details/virtual-machines/linux/)
+- [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/)
+- [Microsoft Cost Management budgets](https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets)
+
 ### Confidential-Compute and Browser-Protection Boundary
 
 All sensitive server-side application processing runs within customer-controlled confidential
@@ -232,6 +283,11 @@ The web table supports:
 - horizontal scrolling for the expanded government-record columns on narrow screens.
 - startup progress for GPU-generated portraits and click-to-expand fictional credentials.
 
+The deterministic seed contains 100 unique fictional names across 20 explicitly curated synthetic
+heritage profiles, with 40 `F`, 40 `M`, and 20 `X` gender markers. Portrait prompts use each
+record's explicit synthetic profile, age, and gender presentation; they do not infer those traits
+from a user-entered name.
+
 Portrait model tensors and inference execute on `cuda:0` only after the app verifies an H100,
 `CC status: ON`, `CC Environment: PRODUCTION`, and successful GPU attestation from the current
 VM boot. Prompt preparation and final JPEG/credential composition occur in SEV-SNP-protected
@@ -336,66 +392,6 @@ visible in the footage. The close-angle excerpt and face-blurred HLS output are 
 distributed under CC BY-SA 4.0 with the source attribution displayed on the CCTV page. Deployment
 verifies the original Commons SHA-256, records the exact excerpt recipe, and writes a SHA-256
 sidecar for integrity checks of the generated adaptation.
-
-## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
-
-**This example requires Azure Managed HSM (Hardware Security Module), which has significant costs.**
-
-### Monthly Cost Estimate
-
-| Component | SKU | Daily Cost | Monthly Cost |
-|-----------|-----|-----------|--------------|
-| **Managed HSM** | B1 Standard | ~$13.33 | $400 |
-| **App Confidential GPU VM** | NCC40ads H100 v5 (40 CPU, one H100) | Check current West Europe pricing | Check current West Europe pricing |
-| **SQL Server Confidential VM** | DC2as_v5 (2 CPU) | ~$7.29 | $220 |
-| **Bastion Host** | Standard (2 units) | ~$1.67 | $50 |
-| **Storage** | Premium SSD (64 GB OS + 64 GB Data) | ~$1.00 | $30 |
-| **Attestation** | Per-request (~1000/day) | ~$0.10 | $3 |
-| **Total (1 App + SQL Instance)** | | Use the Azure pricing calculator | Use the Azure pricing calculator |
-
-> **Pricing information:** The estimates above are provided for planning purposes only and are not quotes. Azure prices can change and may vary by region, currency, agreement, usage, operating system, and selected configuration. Check the [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/) and the current service pricing pages before deployment:
->
-> - [Azure Key Vault Managed HSM pricing](https://azure.microsoft.com/pricing/details/key-vault/)
-> - [Azure Virtual Machines pricing](https://azure.microsoft.com/pricing/details/virtual-machines/linux/)
-> - [Azure SQL Database pricing](https://azure.microsoft.com/pricing/details/azure-sql-database/)
-> - [Azure Bastion pricing](https://azure.microsoft.com/pricing/details/azure-bastion/)
-> - [Azure Attestation pricing](https://azure.microsoft.com/pricing/details/azure-attestation/)
-
-### Cost Optimization Strategies
-
-✅ **Do This to Save Money:**
-- **Share Managed HSM** — Deploy multiple app instances (Stage 2) to amortize HSM cost
-  - With 3 app instances: ~$31/month HSM per app (shared)
-  - Total: ~$333/month per app instance
-- **Use smaller CVM** — Standard_DC1as_v6 (1 CPU): saves ~$110/month
-- **Reduce Bastion** — 1 scale unit instead of 2: saves ~$25/month
-- **Delete when not in use** — Keep Stage 1, delete Stage 2 instances: save $280+/month per instance
-- **Reserved instances** — 1-year commitment: save ~20-30%
-
-❌ **Avoid Doing This:**
-- Don't deploy HSM in production regions you don't need (unnecessary cost)
-- Don't leave Stage 2 instances running if not actively testing
-- Don't create multiple HSMs (share across all apps)
-
-### Before You Deploy
-
-1. **Ensure Managed HSM quota** in your target region:
-   ```powershell
-  az vm list-usage --location westeurope --query "[?name.value=='StandardNCCads2023Family']"
-   ```
-
-2. **Verify cost center/chargeback** is set up for Managed HSM (quota requirement):
-   - Tag: `costControl: confidential-computing`
-   - You may need to request HSM quota approval from your Azure admin
-
-3. **Understand commitment** — This is a **$400+/month standing charge** even if running minimal workload
-
-4. **Consider alternatives** if cost is prohibitive:
-   - Use standard Key Vault (not HSM-backed) for development
-   - Use Azure Confidential Ledger for audit scenarios
-   - See Azure Confidential Computing docs for other patterns
-
----
 
 ## 🔒 Architecture Overview
 
@@ -1400,139 +1396,11 @@ openssl x509 -in /etc/citizen-registry/certs/citizen-registry.crt `
 
 ## Cost Optimization
 
-> **Note:** See [⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning](#-important-managed-hsm-requirement--cost-warning) at the top of this README for detailed cost breakdown and optimization strategies.
-
-### Detailed Pricing Breakdown
-
-**Managed HSM (B1 SKU) — $400/month (Fixed)**
-- **Cost Type:** Hourly reservation (not consumption-based)
-- **Shared Infrastructure Cost:** One HSM shared across all app instances
-- **Optimization:** Deploy 3-5 app instances to amortize cost
-- **Minimum Commitment:** Must have cost control tag (subscription policy)
-- **Region Variation:** Prices vary by Azure region (~$400 in eastus)
-
-**Confidential VM — ~$220/month per instance**
-- **SKU Options:**
-  - DC1as_v6 (1 vCPU, 4 GB): ~$110/month (budget option)
-  - DC2as_v6 (2 vCPU, 8 GB): ~$220/month (recommended)
-  - DC4as_v6 (4 vCPU, 16 GB): ~$440/month (production)
-- **Includes:** Confidential OS disk, SEV-SNP TEE, managed identity
-- **Additional:** Premium storage ~$30/month (OS + data disks)
-
-**Database on ACC — ~$30/month (SQL Server)**
-- **Size:** 10 GB default (configurable)
-- **Encryption:** TDE enabled at no additional cost
-- **Backups:** Included (geo-redundant)
-- **Growth:** ~$3 per additional 10 GB/month
-
-**Bastion Host — ~$50/month**
-- **SKU:** Standard (2 scale units, sufficient for dev/test)
-- **Optimization:** Reduce to 1 scale unit (~$25/month) if low usage
-- **Monitoring:** No metered charges, only hosting
-
-**Azure Attestation Service — ~$3-10/month**
-- **Pricing:** $0.01 per 1,000 requests
-- **Typical Usage:** 10-100 attestation tokens/day
-- **Negligible Cost:** Often free tier for testing
-
-**Network & Storage — ~$60/month**
-- **VNet Peering:** Free within region
-- **Private Link:** Free (part of VNet)
-- **Premium SSD Storage:** 128 GB default = ~$30/month
-- **Data Transfer:** No egress charges (private VNet)
-
-### Total Cost Examples
-
-```
-SCENARIO 1: Single App Instance (Development)
-─────────────────────────────────────────────
-  HSM (shared)               $400
-  CVM (DC2as_v6)             $220
-  Database                    $30
-  Bastion (2 units)           $50
-  Storage & Network           $60
-  Attestation                  $3
-  ─────────────────────────────────
-  MONTHLY TOTAL:             $763
-  DAILY COST:              $25.43
-  HOURLY COST:             $1.06
-
-SCENARIO 2: Multiple App Instances (Cost Sharing)
-──────────────────────────────────────────────────
-  Deployment: 3 app instances sharing 1 HSM
-  
-  HSM (shared by 3)          $133  per app
-  CVM × 3 (each)             $220  per app
-  Database × 3               $30   per app
-  Bastion × 3                $50   per app
-  Storage & Network × 3      $60   per app
-  Attestation × 3             $3   per app
-  ─────────────────────────────────────
-  PER APP MONTHLY:           $496
-  PER APP DAILY:           $16.53
-  PER APP HOURLY:           $0.69
-
-SCENARIO 3: Production with Reserved Instances
-───────────────────────────────────────────────
-  (Assuming 1-year reserved instance discount: 20%)
-  
-  HSM (no discount)          $400
-  CVM (DC2as_v6, -20%)       $176
-  Database (-15%)             $26
-  Bastion (-15%)              $43
-  ─────────────────────────────────
-  MONTHLY TOTAL:             $645
-  DAILY COST:              $21.50
-  Annual Savings:           ~$1,416
-
-SCENARIO 4: Budget Option (Minimal Resources)
-──────────────────────────────────────────────
-  HSM (shared by 5 apps)     $80   per app
-  CVM (DC1as_v6)             $110  per app
-  Database (5 GB)            $15   per app
-  Bastion (1 unit, shared)   $10   per app
-  Storage (64 GB)            $30   per app
-  ─────────────────────────────────
-  MONTHLY TOTAL:             $245
-  DAILY COST:              $8.17
-```
-
-### Cost-Saving Actions (Ranked by Impact)
-
-| Action | Savings | Effort | Complexity |
-|--------|---------|--------|-----------|
-| Share HSM across 5 apps | **$280/app** | Moderate | Medium |
-| Use DC1as_v6 instead of DC2as_v6 | **$110/month** | 1 param change | Low |
-| Reduce Bastion from 2 to 1 scale unit | **$25/month** | 1 param change | Low |
-| Deploy on-demand (delete when not used) | **Up to 90%** | 5 mins to redeploy | Low |
-| Reserve instances (1-year commitment) | **20-30% discount** | Setup once | Medium |
-| Use different region (if available) | **5-15%** | Full redeploy | Medium |
-| Consolidate databases on one SQL instance | **$15/app** | Schema changes | High |
-
-### Cost Monitoring
-
-```powershell
-# Check current HSM spend (last 7 days)
-az cost management query create `
-  --scope "/subscriptions/{subscriptionId}" `
-  --time-period from:2026-08-21 to:2026-08-28 `
-  --granularity Daily `
-  --filter "tolower(resourceType) eq 'microsoft.keyvault/managedhsms'" `
-  --metrics ActualCost
-
-# List all resources and their tags (for cost allocation)
-az resource list --output table `
-  --query "[].{Name:name, Type:type, ResourceGroup:resourceGroup, Tags:tags}"
-
-# Set up billing alert (optional)
-az monitor metrics alert create `
-  --name HSMCostAlert `
-  --resource-group {resourceGroup} `
-  --scopes /subscriptions/{subId} `
-  --condition "avg Billing > 500"
-```
-
-**Total Demo Cost:** ~$25/day for 1 app instance | ~$16/day with 3 shared instances | ~$8/day with budget config
+See [Cost Warning and Controls](#cost-warning-and-controls) before deploying. It contains the
+current H100 and Managed HSM retail rates, short-run examples, auto-shutdown guidance, and cleanup
+recommendations. Recalculate the full topology in the Azure pricing calculator because SQL Server,
+Bastion, storage, networking, and monitoring vary with deployment choices and are not included in
+the core-resource subtotal.
 
 ## Next Steps
 

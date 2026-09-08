@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from media_generator import get_gpu_attestation_evidence, verify_confidential_gpu
+from media_generator import MediaGenerator, get_gpu_attestation_evidence, verify_confidential_gpu
 
 
 class ConfidentialGpuVerificationTests(unittest.TestCase):
@@ -98,6 +98,48 @@ class ConfidentialGpuVerificationTests(unittest.TestCase):
         self.assertTrue(evidence['verified'])
         self.assertEqual(evidence['result'], 'GPU Attestation is Successful.')
         self.assertEqual(evidence['report_sha256'], 'abc123')
+
+
+class PortraitPromptTests(unittest.TestCase):
+    def test_prompt_uses_explicit_synthetic_identity_profile(self):
+        pipeline = Mock()
+        pipeline.return_value.images = ['portrait']
+        torch = Mock()
+        torch.Generator.return_value.manual_seed.return_value = Mock()
+        torch.inference_mode.return_value.__enter__ = Mock()
+        torch.inference_mode.return_value.__exit__ = Mock(return_value=False)
+        citizen = {
+            'national_id': 'NLD-00A-0001X',
+            'date_of_birth': '1990-01-01',
+            'sex': 'X',
+            'portrait_profile': 'East African',
+        }
+
+        result = MediaGenerator._generate_portrait(pipeline, torch, citizen)
+
+        prompt = pipeline.call_args.kwargs['prompt']
+        self.assertIn('non-binary adult with an androgynous presentation', prompt)
+        self.assertIn('East African heritage', prompt)
+        self.assertIn('exactly one person and one face', prompt)
+        self.assertIn('multiple people', pipeline.call_args.kwargs['negative_prompt'])
+        self.assertEqual(result, 'portrait')
+
+    def test_fingerprint_changes_with_gender_or_portrait_profile(self):
+        citizen = {
+            'id': 1,
+            'national_id': 'NLD-00A-0001X',
+            'first_name': 'Amani',
+            'last_name': 'Njoroge',
+            'date_of_birth': '1990-01-01',
+            'sex': 'X',
+            'portrait_profile': 'East African',
+            'region': 'Central',
+            'municipality': 'Alderwick',
+        }
+        original = MediaGenerator._fingerprint([citizen])
+
+        changed = dict(citizen, portrait_profile='West African')
+        self.assertNotEqual(original, MediaGenerator._fingerprint([changed]))
 
 
 if __name__ == '__main__':
