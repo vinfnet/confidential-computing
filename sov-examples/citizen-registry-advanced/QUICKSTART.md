@@ -121,11 +121,36 @@ az network bastion tunnel `
   -n $bastionName `
   --target-resource-id $cvmId `
   --resource-port 443 `
-  --port 8443
+  --port 9443
 ```
 
-Open `https://localhost:8443/`. The registry is readable without a client certificate.
-Add, Edit, and Delete require the Norland demo mTLS client certificate.
+Open `https://localhost:9443/citizens`. The registry is readable without a client certificate.
+Add, Edit, and Delete require the Norland demo mTLS client certificate. Open
+`https://localhost:9443/cctv` and select **Start comparison** to view the licensed source beside
+the confidential H100 face-anonymized stream. Model startup and the first completed HLS segment
+can take a short time; the processed pane remains unavailable rather than showing raw fallback
+footage until current-boot GPU attestation and processing are healthy.
+
+Sensitive server-side processing remains in customer-controlled confidential compute: the web app
+and CPU-side video work run in AMD SEV-SNP-protected memory, face detection runs on the attested H100
+in production CC mode, and SQL Server runs on a separate Confidential VM. The authorized browser is
+outside that boundary and receives plaintext only after its TLS stack decrypts the response.
+
+All pages, APIs, source video, and anonymized HLS segments use HTTPS from nginx in the app
+Confidential VM to the browser. nginx permits TLS 1.2 and TLS 1.3; the browser and server negotiate
+an authenticated cipher and ephemeral session keys (normally AES-GCM or ChaCha20-Poly1305 with a
+modern TLS 1.3 browser). The required production profile keeps the CA signing key and nginx server
+signing key non-exportable in the customer's Managed HSM. nginx accesses the server key through the
+Microsoft Managed HSM TLS Offload PKCS#11 library using managed identity, so TLS-handshake signatures
+occur in Managed HSM. The customer controls HSM RBAC, key lifecycle, and CA trust distribution.
+Server-authenticated TLS protects all views; customer-issued mTLS additionally authorizes Add, Edit,
+and Delete. The client private key remains in the customer's browser/OS keystore because it is an
+endpoint credential.
+
+> **Current implementation gap:** Stage 2 still creates file-backed demo CA, server, and client keys
+> inside the app Confidential VM; only the confidential OS-disk CMK is currently in Managed HSM.
+> Complete and verify the [Managed HSM TLS Offload Library](https://learn.microsoft.com/azure/key-vault/managed-hsm/tls-offload-library)
+> integration before representing a deployment as HSM-backed PKI.
 
 ### Step 5: Enable Browser CRUD (Create, Read, Update, and Delete) Access
 

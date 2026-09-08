@@ -357,22 +357,44 @@ if (-not $hsmBootstrapComplete) { throw 'Managed HSM CMK bootstrap did not compl
 
 # Embed the local application source in cloud-init so the app VM is usable after deployment.
 $archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.gz"
-tar --exclude='app-src/__pycache__' --exclude='app-src/test_media_generator.py' -czf $archivePath -C "./app-instance" app-src
+tar --exclude='app-src/__pycache__' --exclude='app-src/test_media_generator.py' --exclude='app-src/test_video_anonymizer.py' -czf $archivePath -C "./app-instance" app-src
 $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
 $appBootstrapScript = @"
 #!/bin/bash
 set -e
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
+mkdir -p /opt/citizen-registry/source-media /opt/citizen-registry/app-src/static/vendor
+CCTV_VIDEO_SOURCE=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm
+CCTV_VIDEO=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO_URL='https://upload.wikimedia.org/wikipedia/commons/d/d9/2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm'
+CCTV_VIDEO_SHA256='9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655'
+curl -fL --retry 5 --retry-delay 5 "`$CCTV_VIDEO_URL" -o "`$CCTV_VIDEO_SOURCE.tmp"
+echo "`$CCTV_VIDEO_SHA256  `$CCTV_VIDEO_SOURCE.tmp" | sha256sum --check
+mv "`$CCTV_VIDEO_SOURCE.tmp" "`$CCTV_VIDEO_SOURCE"
+HLS_JS=/opt/citizen-registry/app-src/static/vendor/hls.min.js
+HLS_LICENSE=/opt/citizen-registry/app-src/static/vendor/HLS-LICENSE.txt
+curl -fL --retry 5 --retry-delay 5 'https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js' -o "`$HLS_JS.tmp"
+echo '7c47cd97d7a6e7b98d9623dd8ed9a6d45af4be4085e0c2001cd7175c2b4cfb07  '"`$HLS_JS.tmp" | sha256sum --check
+mv "`$HLS_JS.tmp" "`$HLS_JS"
+curl -fL --retry 5 --retry-delay 5 'https://raw.githubusercontent.com/video-dev/hls.js/v1.6.13/LICENSE' -o "`$HLS_LICENSE.tmp"
+echo 'ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db  '"`$HLS_LICENSE.tmp" | sha256sum --check
+mv "`$HLS_LICENSE.tmp" "`$HLS_LICENSE"
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y nginx openssl python3-flask python3-requests libodbc2
+DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg nginx openssl python3-flask python3-requests libodbc2
+CCTV_VIDEO_RECIPE='close-faces-v2|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf23-faststart'
+ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 23 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
+mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
+printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
+(cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
 DATA_DEVICE=`$(readlink -f /dev/disk/azure/scsi1/lun0)
 if ! blkid `$DATA_DEVICE >/dev/null 2>&1; then mkfs.ext4 `$DATA_DEVICE; fi
 mkdir -p /var/lib/citizen-registry
 DATA_UUID=`$(blkid -s UUID -o value `$DATA_DEVICE)
 grep -q "UUID=`$DATA_UUID" /etc/fstab || printf 'UUID=%s /var/lib/citizen-registry ext4 defaults,nofail 0 2\n' "`$DATA_UUID" >> /etc/fstab
 mount /var/lib/citizen-registry
-mkdir -p /var/lib/citizen-registry/media
+mkdir -p /var/lib/citizen-registry/media /var/lib/citizen-registry/cctv/hls
+chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
 export ACCEPT_EULA=Y
 curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
@@ -382,7 +404,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
 pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn Pillow diffusers transformers accelerate safetensors
-pip3 install --break-system-packages --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu128
+pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/C=NL/O=Norland IT Department/OU=Registry PKI/CN=Norland Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
 openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
 printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' > /tmp/server-ext.cnf
@@ -393,7 +416,8 @@ openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca
 chmod 600 /etc/citizen-registry/certs/*.key
 chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
+sed -i 's|^CCTV_VIDEO_PATH=.*|CCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4|' /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target var-lib-citizen\x2dregistry.mount
@@ -403,6 +427,22 @@ WorkingDirectory=/opt/citizen-registry/app-src
 EnvironmentFile=/etc/citizen-registry/environment
 ExecStart=/usr/local/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 app:app
 Restart=always
+[Install]
+WantedBy=multi-user.target
+SERVICE
+cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
+[Unit]
+Description=Confidential H100 CCTV face anonymizer
+After=network-online.target citizen-gpu-attestation.service
+Requires=citizen-gpu-attestation.service
+RequiresMountsFor=/var/lib/citizen-registry
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/citizen-registry/app-src
+EnvironmentFile=/etc/citizen-registry/environment
+ExecStart=/usr/bin/python3 /opt/citizen-registry/app-src/video_anonymizer.py
+UMask=0022
 [Install]
 WantedBy=multi-user.target
 SERVICE
@@ -570,6 +610,95 @@ if ($Deploy -or $ResumePostDeploy) {
             }
         }
 
+        Write-Host "Refreshing the application and CCTV source footage..." -ForegroundColor Magenta
+        $appRefreshScript = @"
+#!/bin/bash
+set -euo pipefail
+cloud-init status --wait
+systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
+mkdir -p /opt/citizen-registry/source-media /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls
+echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
+CCTV_VIDEO_SOURCE=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm
+CCTV_VIDEO=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO_URL='https://upload.wikimedia.org/wikipedia/commons/d/d9/2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm'
+CCTV_VIDEO_SHA256='9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655'
+if ! echo "`$CCTV_VIDEO_SHA256  `$CCTV_VIDEO_SOURCE" | sha256sum --check --status; then
+    curl -fL --retry 5 --retry-delay 5 "`$CCTV_VIDEO_URL" -o "`$CCTV_VIDEO_SOURCE.tmp"
+    echo "`$CCTV_VIDEO_SHA256  `$CCTV_VIDEO_SOURCE.tmp" | sha256sum --check
+    mv "`$CCTV_VIDEO_SOURCE.tmp" "`$CCTV_VIDEO_SOURCE"
+fi
+HLS_JS=/opt/citizen-registry/app-src/static/vendor/hls.min.js
+HLS_LICENSE=/opt/citizen-registry/app-src/static/vendor/HLS-LICENSE.txt
+if ! echo '7c47cd97d7a6e7b98d9623dd8ed9a6d45af4be4085e0c2001cd7175c2b4cfb07  '"`$HLS_JS" | sha256sum --check --status; then
+    curl -fL --retry 5 --retry-delay 5 'https://cdn.jsdelivr.net/npm/hls.js@1.6.13/dist/hls.min.js' -o "`$HLS_JS.tmp"
+    echo '7c47cd97d7a6e7b98d9623dd8ed9a6d45af4be4085e0c2001cd7175c2b4cfb07  '"`$HLS_JS.tmp" | sha256sum --check
+    mv "`$HLS_JS.tmp" "`$HLS_JS"
+fi
+if ! echo 'ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db  '"`$HLS_LICENSE" | sha256sum --check --status; then
+    curl -fL --retry 5 --retry-delay 5 'https://raw.githubusercontent.com/video-dev/hls.js/v1.6.13/LICENSE' -o "`$HLS_LICENSE.tmp"
+    echo 'ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db  '"`$HLS_LICENSE.tmp" | sha256sum --check
+    mv "`$HLS_LICENSE.tmp" "`$HLS_LICENSE"
+fi
+if ! command -v ffmpeg >/dev/null; then
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
+fi
+CCTV_VIDEO_RECIPE='close-faces-v2|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf23-faststart'
+if ! test -s "`$CCTV_VIDEO" || ! test "`$(cat "`$CCTV_VIDEO.recipe" 2>/dev/null || true)" = "`$CCTV_VIDEO_RECIPE" || ! (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum --check --status "`$(basename "`$CCTV_VIDEO").sha256"); then
+    ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 23 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
+    mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
+    printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
+    (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
+fi
+if ! python3 -c 'import torchvision, facenet_pytorch' >/dev/null 2>&1; then
+    pip3 install --break-system-packages --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu128
+    pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
+fi
+if grep -q '^CCTV_VIDEO_PATH=' /etc/citizen-registry/environment; then
+    sed -i "s|^CCTV_VIDEO_PATH=.*|CCTV_VIDEO_PATH=`$CCTV_VIDEO|" /etc/citizen-registry/environment
+else
+    echo "CCTV_VIDEO_PATH=`$CCTV_VIDEO" >> /etc/citizen-registry/environment
+fi
+grep -q '^CCTV_PROCESSING_ROOT=' /etc/citizen-registry/environment || echo 'CCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv' >> /etc/citizen-registry/environment
+chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
+cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
+cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
+[Unit]
+Description=Confidential H100 CCTV face anonymizer
+After=network-online.target citizen-gpu-attestation.service
+Requires=citizen-gpu-attestation.service
+RequiresMountsFor=/var/lib/citizen-registry
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/citizen-registry/app-src
+EnvironmentFile=/etc/citizen-registry/environment
+ExecStart=/usr/bin/python3 /opt/citizen-registry/app-src/video_anonymizer.py
+UMask=0022
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+nginx -t
+systemctl restart nginx
+systemctl restart citizen-registry.service
+if systemctl is-active --quiet citizen-gpu-attestation.service; then
+    systemctl enable citizen-cctv-anonymizer.service
+    systemctl restart citizen-cctv-anonymizer.service
+fi
+for attempt in `$(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8000/cctv >/dev/null 2>&1; then break; fi
+    if [ "`$attempt" -eq 30 ]; then exit 1; fi
+    sleep 2
+done
+curl -fsS --range 0-1023 --dump-header /tmp/cctv-video.headers http://127.0.0.1:8000/cctv/video -o /tmp/cctv-video.range
+grep -q '^HTTP/1.[01] 206' /tmp/cctv-video.headers
+test "`$(wc -c < /tmp/cctv-video.range)" -eq 1024
+rm -f /tmp/cctv-video.headers /tmp/cctv-video.range
+echo 'CCTV_APP_REFRESHED=1'
+"@
+    Invoke-GpuRunCommand -Label 'application refresh' -Script $appRefreshScript -SuccessMarker 'CCTV_APP_REFRESHED=1' | Out-Null
+
         $gpuInstallComplete = $false
         if ($ResumePostDeploy) {
             $gpuProbe = az vm run-command invoke `
@@ -688,6 +817,8 @@ systemctl enable citizen-gpu-attestation.service
 systemctl restart citizen-gpu-attestation.service
 systemctl restart citizen-registry.service
 test -s /var/lib/citizen-registry/gpu-attestation.json
+systemctl enable citizen-cctv-anonymizer.service
+systemctl restart citizen-cctv-anonymizer.service
 cat > /usr/local/sbin/attest-confidential-cpu <<'CPUATTEST'
 #!/bin/bash
 set -euo pipefail
@@ -800,6 +931,37 @@ echo 'GPU_ATTEST_EXIT=0'
             }
         }
         Write-Host "Confidential H100 onboarding and attestation succeeded" -ForegroundColor Green
+
+        Write-Host "Verifying the live confidential CCTV pipeline..." -ForegroundColor Magenta
+        $cctvValidationScript = @'
+#!/bin/bash
+set -euo pipefail
+trap 'systemctl status citizen-cctv-anonymizer.service --no-pager || true; journalctl -u citizen-cctv-anonymizer.service -n 80 --no-pager || true' ERR
+systemctl is-active --quiet citizen-cctv-anonymizer.service
+for attempt in $(seq 1 60); do
+    if STATUS=$(curl -fsS http://127.0.0.1:8000/cctv/status 2>/dev/null) && printf '%s' "$STATUS" | python3 -c "import json,sys; assert json.load(sys.stdin)['state'] == 'running'"; then
+        break
+    fi
+    if [ "$attempt" -eq 60 ]; then exit 1; fi
+    sleep 5
+done
+test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/cctv)" = '200'
+curl -fsS --range 0-1023 --dump-header /tmp/cctv-video.headers http://127.0.0.1:8000/cctv/video -o /tmp/cctv-video.range
+grep -q '^HTTP/1.[01] 206' /tmp/cctv-video.headers
+test "$(wc -c < /tmp/cctv-video.range)" -eq 1024
+curl -kfsS --dump-header /tmp/cctv-hls.headers https://127.0.0.1/cctv/processed/index.m3u8 -o /tmp/cctv-index.m3u8
+grep -qi '^content-type: application/vnd.apple.mpegurl' /tmp/cctv-hls.headers
+grep -q '^#EXTM3U' /tmp/cctv-index.m3u8
+SEGMENT=$(grep -E '^segment-[0-9]+\.ts$' /tmp/cctv-index.m3u8 | tail -1)
+test -n "$SEGMENT"
+curl -kfsS "https://127.0.0.1/cctv/processed/$SEGMENT" -o /tmp/cctv-segment.ts
+test -s /tmp/cctv-segment.ts
+test "$(curl -ksS -o /dev/null -w '%{http_code}' https://127.0.0.1/static/vendor/hls.min.js)" = '200'
+rm -f /tmp/cctv-video.headers /tmp/cctv-video.range /tmp/cctv-hls.headers /tmp/cctv-index.m3u8 /tmp/cctv-segment.ts
+echo 'CCTV_APP_READY=1'
+'@
+        Invoke-GpuRunCommand -Label 'CCTV pipeline validation' -Script $cctvValidationScript -SuccessMarker 'CCTV_APP_READY=1' | Out-Null
+        Write-Host "Confidential CCTV face anonymization is live" -ForegroundColor Green
 
         # Managed HSM key metadata is data-plane protected. Crypto Auditor lets
         # the app display this key's attributes and SKR policy, but cannot

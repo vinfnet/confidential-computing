@@ -9,7 +9,7 @@ Deployed on an NCC40ads H100 Confidential GPU VM with:
 - Attested CUDA portrait generation on an NVIDIA H100
 """
 
-from flask import Flask, jsonify, request, render_template, send_file
+from flask import Flask, jsonify, redirect, request, render_template, send_file, url_for
 import base64
 import json
 import os
@@ -20,8 +20,9 @@ import time
 import pyodbc
 import sqlite3
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
 from media_generator import MediaGenerator, get_gpu_attestation_evidence
@@ -75,6 +76,14 @@ CPU_ATTESTATION_PATH = os.environ.get(
     'CPU_ATTESTATION_PATH',
     '/var/lib/citizen-registry/cpu-attestation.json',
 )
+CCTV_VIDEO_PATH = os.environ.get(
+    'CCTV_VIDEO_PATH',
+    '/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4',
+)
+CCTV_PROCESSING_ROOT = Path(os.environ.get(
+    'CCTV_PROCESSING_ROOT', '/var/lib/citizen-registry/cctv'))
+CCTV_STATUS_PATH = CCTV_PROCESSING_ROOT / 'status.json'
+CCTV_PLAYLIST_PATH = CCTV_PROCESSING_ROOT / 'hls' / 'index.m3u8'
 
 _credential = None
 _credential_lock = threading.Lock()
@@ -584,6 +593,14 @@ def db_status():
 
 @app.route('/', methods=['GET'])
 def index():
+    """Redirect the server root to the primary application."""
+    response = redirect(url_for('citizens'))
+    response.autocorrect_location_header = False
+    return response
+
+
+@app.route('/citizens', methods=['GET'])
+def citizens():
     """Main citizen registry page"""
     try:
         citizens = _citizens_for_media()
@@ -593,6 +610,56 @@ def index():
     except Exception as e:
         logger.error(f"Error loading citizen list: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@app.route('/cctv', methods=['GET'])
+def cctv():
+    """Render the confidential CCTV application."""
+    return render_template('cctv.html')
+
+
+@app.route('/cctv/status', methods=['GET'])
+def cctv_status():
+    """Return non-sensitive anonymizer health and confidential GPU evidence."""
+    try:
+        status = json.loads(CCTV_STATUS_PATH.read_text(encoding='utf-8'))
+        updated_at = datetime.fromisoformat(status['updated_at'].replace('Z', '+00:00'))
+        stale = (datetime.now(timezone.utc) - updated_at).total_seconds() > 15
+    except (FileNotFoundError, KeyError, ValueError, json.JSONDecodeError):
+        return jsonify({
+            'state': 'unavailable',
+            'message': 'The anonymized stream is not ready.',
+        }), 503
+
+    completed = status.get('state') == 'completed'
+    if ((stale and not completed) or status.get('state') == 'failed'
+            or not CCTV_PLAYLIST_PATH.is_file()):
+        return jsonify({
+            'state': 'unavailable',
+            'message': 'The anonymized stream is not available.',
+            'updated_at': status.get('updated_at'),
+        }), 503
+
+    public_fields = (
+        'state', 'message', 'updated_at', 'frames_processed', 'current_faces',
+        'faces_detected', 'processing_fps', 'frames_behind', 'lag_scale_frames',
+        'output', 'detector',
+        'confidence_threshold', 'confidential_gpu',
+    )
+    return jsonify({key: status[key] for key in public_fields if key in status})
+
+
+@app.route('/cctv/video', methods=['GET'])
+def cctv_video():
+    """Stream the bundled CCTV source footage with browser range support."""
+    if not os.path.isfile(CCTV_VIDEO_PATH):
+        return jsonify({'error': 'CCTV source video is unavailable'}), 404
+    return send_file(
+        CCTV_VIDEO_PATH,
+        mimetype='video/mp4',
+        conditional=True,
+        max_age=3600,
+    )
 
 
 @app.route('/media/status', methods=['GET'])

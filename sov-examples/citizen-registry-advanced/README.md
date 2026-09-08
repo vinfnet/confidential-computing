@@ -1,35 +1,82 @@
 # Citizen Registry Advanced — Two-Stage Confidential Deployment
 
-**Topology:** App Confidential H100 GPU VM ↔ SQL Server Confidential VM on a private subnet ↔ Managed HSM
+**Topology:** Customer Managed HSM ↔ App Confidential H100 GPU VM ↔ SQL Server Confidential VM
 
-> **Implementation status:** Stage 2 now provisions an RSA-HSM customer-managed key in the shared Managed HSM and a `ConfidentialVmEncryptedWithCustomerKey` Disk Encryption Set. Azure Confidential VM secure key release binds the OS-disk encryption key to each VM's attested vTPM/platform state. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
+> **Implementation status:** Stage 2 now provisions an RSA-HSM customer-managed key in the shared Managed HSM and a `ConfidentialVmEncryptedWithCustomerKey` Disk Encryption Set for the app CVM OS disk. Azure Confidential VM secure key release binds that key to the app VM's attested vTPM/platform state. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
 **GPU configuration updated:** September 3, 2026
 
 ---
 
+### Confidential-Compute and Browser-Protection Boundary
+
+All sensitive server-side application processing runs within customer-controlled confidential
+compute. Flask, FFmpeg decoding/encoding, and CPU-side frame handling run in the app VM's AMD
+SEV-SNP-protected environment; face detection runs on its production-CC-mode, current-boot-attested
+NVIDIA H100; and SQL Server runs on a separate AMD SEV-SNP Confidential VM. The browser, Azure
+Bastion, Azure control plane, networking services, and Azure Attestation are outside those guest
+confidential-compute boundaries. Data is necessarily plaintext in the authorized end user's browser
+after TLS decryption, so the endpoint and screen remain part of the customer's security responsibility.
+
+Every registry page, JSON response, source-video response, and anonymized HLS segment sent to the
+browser is protected in transit by HTTPS terminated by nginx inside the app Confidential VM. nginx
+permits TLS 1.2 and TLS 1.3 and limits TLS 1.2 negotiation to OpenSSL `HIGH:!aNULL:!MD5` cipher
+suites. The browser and nginx negotiate the authenticated symmetric cipher and ephemeral session
+keys during each handshake; modern TLS 1.3 clients normally select AES-GCM or ChaCha20-Poly1305.
+The configuration does not claim that one fixed cipher is selected for every client.
+
+The required production profile keeps the PKI authority and server private signing key in the
+customer's Managed HSM. nginx uses the Microsoft Managed HSM TLS Offload Library through its
+PKCS#11 interface; the library uses the app VM's managed identity and the Managed HSM REST API to
+perform TLS-handshake signatures without exporting the server key. Public X.509 certificates and
+the CA trust chain may be distributed normally because they contain no private key material. The
+customer owns the HSM, controls its local RBAC and key lifecycle, and explicitly distributes the CA
+trust anchor. HTTPS server authentication protects all browser traffic, while protected create,
+update, and delete operations additionally require a customer-issued client certificate (mTLS).
+
+An mTLS client private key is an endpoint credential and must remain available to the authorized
+browser, normally in the customer's OS/browser certificate store or a customer-controlled client
+hardware provider; it cannot remain solely in the server-side Managed HSM. “HSM-backed PKI” in this
+document therefore means that the CA signing key and nginx server signing key are non-exportable
+Managed HSM keys. It does not mean that public certificates or browser endpoint keys are stored in
+Managed HSM.
+
+> **Current implementation gap:** the checked-in Stage 2 bootstrap still generates the demo CA,
+> nginx server key, and client key as files under `/etc/citizen-registry/certs` inside the app
+> Confidential VM. Managed HSM currently holds only the confidential OS-disk CMK. Do not describe
+> the deployed demo as HSM-backed PKI until `ssl_certificate_key` is configured through the
+> [Managed HSM TLS Offload Library](https://learn.microsoft.com/azure/key-vault/managed-hsm/tls-offload-library),
+> the CA signing operation is HSM-backed, and a live TLS handshake is verified against those keys.
+
 ### Deployed Stage 2 Topology
 
-```text
-                  West Europe VNet: 10.0.0.0/16
-                              |
-                    App subnet: 10.0.3.0/24
-                    (private IPs only)
-                  +-----------+-----------+
-                  |                       |
-          App CVM: 10.0.3.4       SQL CVM: 10.0.3.5
-          Flask + H100 CUDA        SQL Server 2022
-                  |                       |
-                  +------ TLS :1433 -----+
+```mermaid
+flowchart LR
+  Browser[Customer browser] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion<br/>App VNet]
 
-  Workstation -- Bastion tunnel --> App CVM
-  App/SQL subnet -- NAT Gateway --> outbound package access only
-  Shared HSM (10.10.1.4) <-- Private Endpoint + peered VNet
+  subgraph AppVNet[App VNet - West Europe<br/>10.appOctet.0.0/16 - default 10.20.0.0/16]
+    Bastion -->|Private 443| App[App Confidential VM<br/>10.appOctet.3.4<br/>SEV-SNP CPU + H100 CC]
+  end
+
+  subgraph SqlVNet[SQL VNet - North Europe<br/>10.sqlOctet.0.0/16 - default 10.21.0.0/16]
+    Sql[SQL Confidential VM<br/>10.sqlOctet.4.5<br/>SEV-SNP + SQL Server 2022]
+  end
+
+  App -->|TLS on private TCP 1433<br/>bidirectional VNet peering| Sql
+
+  subgraph SharedVNet[Shared VNet<br/>10.10.0.0/16]
+    HsmPe[Managed HSM private endpoint<br/>10.10.1.4]
+  end
+
+  App -->|Private Link through peering| HsmPe
+  HsmPe --> Hsm[Customer Managed HSM<br/>public access disabled]
 ```
 
-Stage 2 deploys two Confidential VMs on the same private `app-subnet`: the NCC40ads H100 application CVM
-(`10.0.3.4`) and SQL Server CVM (`10.0.3.5`). SQL Server is initialized with `citizendb`, the
-`registryadmin` login, and 100 fictional demo citizen records. The app connects over private TCP 1433.
+Stage 2 deploys two Confidential VMs on separate, non-overlapping VNets: the NCC40ads H100
+application CVM on `10.{NetworkSecondOctet}.3.4` in West Europe and the SQL Server CVM on
+`10.{SqlNetworkSecondOctet}.4.5` in North Europe. The defaults are `10.20.3.4` and `10.21.4.5`.
+Bidirectional peering carries private TLS traffic on TCP 1433. SQL Server is initialized with
+`citizendb`, the `registryadmin` login, and 100 fictional demo citizen records.
 
 CRUD means **create, read, update, and delete**, the four basic operations used to manage stored
 records. It is relevant here because the sample demonstrates more than a read-only connection:
@@ -127,8 +174,8 @@ The live default CVM policy validated for this deployment is:
 }
 ```
 
-This policy is Azure-compliant-CVM-bound, not VM-ID-bound. Both confidential OS disks use
-the same HSM-backed Disk Encryption Set and policy in this demo.
+This policy is Azure-compliant-CVM-bound, not VM-ID-bound. The app CVM OS disk uses the
+HSM-backed Disk Encryption Set and policy. The SQL CVM does not use this Disk Encryption Set.
 
 #### Live Validation Result
 
@@ -203,6 +250,93 @@ test created a record (`201`), updated its address and tax value (`200`), retrie
 deleted it (`200`), and returned the registry to exactly 100 records. A separate edit survived a
 Gunicorn restart, confirming the seed-version marker does not overwrite subsequent CRUD changes.
 
+### Confidential CCTV Face Anonymization
+
+Open `https://localhost:9443/cctv` through the Bastion tunnel and select **Start comparison**.
+The page displays the licensed source beside a finite anonymized stream produced on the
+confidential H100. Both videos show elapsed and total timestamps and stop at the end of the
+33.5-second clip. Output becomes available after GPU verification, model loading, and completion
+of the confidential processing pass.
+
+The `citizen-cctv-anonymizer` systemd service:
+
+1. requires successful `citizen-gpu-attestation` evidence from the current VM boot;
+2. reads the hash-verified local MP4 once through FFmpeg at 1280x720 and 12 frames per second;
+3. runs detector-only `facenet-pytorch` MTCNN inference on `cuda:0`;
+4. expands and briefly tracks face regions, then applies a strong Gaussian blur; and
+5. publishes a complete, end-marked H.264 HLS playlist through nginx.
+
+```mermaid
+flowchart LR
+  Original6[Hash-pinned public WebM]
+  Excerpt6[33.5-second close-angle MP4<br/>1280x720 at 24 fps]
+
+  subgraph AppCvm6[App Confidential VM]
+    Gate6[Current-boot gate<br/>SEV-SNP attestation + H100 nvtrust]
+    Decode6[FFmpeg decode<br/>RGB24 at 12 fps]
+    Detect6[MTCNN face detection<br/>cuda:0 on H100 CC]
+    Track6[Expand + transient box tracking<br/>SEV-SNP CPU memory]
+    Blur6[Pillow Gaussian blur<br/>SEV-SNP CPU memory]
+    Encode6[FFmpeg H.264 HLS encode<br/>one-second segments]
+    Playlist6[Finite end-marked presentation<br/>index.m3u8 + all numeric .ts files]
+    Status6[Atomic non-sensitive status JSON]
+    Nginx6[nginx HTTPS<br/>TLS 1.2 or 1.3]
+
+    Gate6 --> Decode6 --> Detect6 --> Track6 --> Blur6 --> Encode6 --> Playlist6 --> Nginx6
+    Detect6 --> Status6
+    Encode6 --> Status6
+  end
+
+  Original6 -->|Deployment-time trim, resize,<br/>frame-rate conversion, audio removal| Excerpt6
+  Excerpt6 --> Decode6
+  Browser6[Authorized browser<br/>timestamped one-shot playback<br/>outside confidential boundary] <-->|Encrypted source MP4,<br/>HLS, and status responses| Nginx6
+  Nginx6 -->|TLS decrypts at endpoint| BrowserPlain6[Rendered comparison<br/>plaintext on customer endpoint]
+
+  Failure6[Attestation or processing failure]
+  Failure6 -.->|No raw fallback;<br/>processed playlist withheld| Playlist6
+```
+
+The worker does not instantiate a recognition model, calculate embeddings, match identities,
+infer demographics, retain face crops, or store bounding boxes. Raw decoded frames remain in
+memory only. Detection, decoding, or encoding errors stop publication and remove the processed
+playlist; the processed endpoint never falls back to the source footage. Face detection is
+best-effort and this sample is not a legal guarantee of anonymization.
+
+The web page reads non-sensitive processing metrics from `/cctv/status`. Operational state is
+written atomically to `/var/lib/citizen-registry/cctv/status.json`, and completed playlists and
+segments are stored under `/var/lib/citizen-registry/cctv/hls`. On the app CVM, inspect the
+worker with:
+
+```bash
+sudo systemctl status citizen-cctv-anonymizer.service --no-pager
+sudo journalctl -u citizen-cctv-anonymizer.service -n 100 --no-pager
+curl -fsS http://127.0.0.1:8000/cctv/status | python3 -m json.tool
+```
+
+### Source Media and Licensing
+
+The `source-media/london-marathon-2026-close-faces.mp4` video is a 33.5-second,
+1280x720 close-angle excerpt from `00:01:25` through `00:01:58.5` of:
+
+- **Title:** [2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe](https://commons.wikimedia.org/wiki/File:2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm)
+- **Creator:** Acabashi
+- **Source:** Wikimedia Commons
+- **License:** [Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/)
+
+Suggested attribution: Close-angle excerpt adapted from `2026 London Marathon Upper Thames
+Street from Blackfriars Bridge and Queenhithe` by Acabashi, licensed under CC BY-SA 4.0, via
+Wikimedia Commons. Changes: trimmed to the sustained close-angle sequence, resized to 1280x720,
+converted to 24 fps and browser-compatible H.264 MP4, and audio removed.
+
+CC BY-SA 4.0 permits sharing and adaptation, including commercial use. Reusers must give
+appropriate credit, link to the license, indicate whether changes were made, and distribute
+adapted material under CC BY-SA 4.0 or a compatible license. The license covers copyright; it
+does not grant privacy, publicity, data-protection, or biometric-processing rights for people
+visible in the footage. The close-angle excerpt and face-blurred HLS output are adapted works
+distributed under CC BY-SA 4.0 with the source attribution displayed on the CCTV page. Deployment
+verifies the original Commons SHA-256, records the exact excerpt recipe, and writes a SHA-256
+sidecar for integrity checks of the generated adaptation.
+
 ## ⚠️ IMPORTANT: Managed HSM Requirement & Cost Warning
 
 **This example requires Azure Managed HSM (Hardware Security Module), which has significant costs.**
@@ -267,257 +401,115 @@ Gunicorn restart, confirming the seed-version marker does not overwrite subseque
 
 This advanced deployment splits citizen registry infrastructure into **two stages**:
 - **Stage 1 (Shared Infrastructure):** Managed HSM + private networking backbone
-- **Stage 2 (App Instance):** App Confidential VM + SQL Server Confidential VM on the same private subnet + Bastion access + mTLS
+- **Stage 2 (App Instance):** App Confidential VM + SQL Server Confidential VM on separate peered VNets + Bastion access + mTLS
 
 ### Complete System Topology
 
-```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                          USER MACHINE / WORKSTATION                      │
-└──────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    │ (SSH/RDP via Bastion)
-                                    ▼
-                    ┌───────────────────────────────┐
-                    │   AZURE BASTION HOST          │
-                    │  (Public IP - Entry Point)    │
-                    │  Standard_B2s                 │
-                    └───────────────────────────────┘
-                                    │
-                 ┌──────────────────┼──────────────────┐
-                 │     PRIVATE VNet │                  │
-                 │  10.0.0.0/16     │                  │
-                 │                  ▼                  │
-                 │         ┌─────────────────┐         │
-                 │         │ APP SUBNET      │         │
-                 │         │ 10.0.3.0/24     │         │
-                 │         │                 │         │
-                 │         │  ┌───────────┐  │         │
-                 │         │  │ APP CVM   │  │         │
-                 │         │  │ SEV-SNP   │  │         │
-                 │         │  │ 10.0.3.4  │  │         │
-                 │         │  └─────┬─────┘  │         │
-                 │         │        │ 1433   │         │
-                 │         │  ┌─────▼─────┐  │         │
-                 │         │  │ SQL CVM   │  │         │
-                 │         │  │ SEV-SNP   │  │         │
-                 │         │  │ 10.0.3.5  │  │         │
-                 │         │  └───────────┘  │         │
-                 │         └────────┬────────┘         │
-                 │                  │                  │
-                 │  ┌───────────────┼───────────────┐  │
-                 │  │               │               │  │
-                 │  ▼               ▼               ▼  │
-        ┌─────────────────┐  ┌──────────────┐  ┌────────────┐
-        │ PRIVATE LINK    │  │ DB SUBNET    │  │ BASTION    │
-        │ SUBNET          │  │ 10.0.4.0/24  │  │ SUBNET     │
-        │ 10.0.1.0/24     │  │              │  │ 10.0.2.0   │
-        │                 │  │ ┌──────────┐ │  │            │
-        │ ┌───────────────┐│  │ │SQL       │ │  │ Connected  │
-        │ │Private Link   ││  │ │Server    │ │  │ to Conf.VM │
-        │ │Endpoint       ││  │ │on ACC    │ │  │            │
-        │ │(mHSM.net)     ││  │ │Encrypted│ │  └────────────┘
-        │ │No Public IP   ││  │ │TDE      │ │
-        │ └───────────────┘│  │ └──────────┘ │
-        └─────────────────┘  └──────────────┘
-                 │
-                 │ Private DNS Resolution
-                 │ (privatelink.managedhsm.azure.net → 10.10.1.4)
-                 │
-   ┌─────────────────────────────────────────────┐
-   │       STAGE 1: SHARED INFRASTRUCTURE        │
-   │          {prefix}sharedinfra RG             │
-   │                                             │
-   │  ┌──────────────────────────────────────┐  │
-   │  │   MANAGED HSM (B1 SKU)               │  │
-  │  │   FIPS 140-3 Level 3                 │  │
-   │  │   Private Link Only                  │  │
-   │  │   NO PUBLIC IP                       │  │
-   │  │                                      │  │
-   │  │  ┌─ HSM-backed CMK for OS disks      │  │
-   │  │  ├─ Disk Encryption Set integration  │  │
-   │  │  ├─ Private key operations           │  │
-   │  │  └─ Shared key custody               │  │
-   │  │                                      │  │
-   │  └──────────────────────────────────────┘  │
-   └─────────────────────────────────────────────┘
-                 │
-    ┌────────────────────────────────────────────────────────┐
-    │  AZURE ATTESTATION SERVICE                             │
-    │  - Provides the attestation authority endpoint         │
-    │  - CVM boot attestation gates Azure CMK release        │
-    │  - Flask reports endpoint and configured policy state  │
-    │  - Demo mTLS certificates are CA-signed locally        │
-    └────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  User[Customer workstation<br/>browser and certificate store]
+  Bastion[Azure Bastion<br/>public management entry]
+  User -->|HTTPS or SSH tunnel| Bastion
+
+  subgraph AppRegion[West Europe]
+    subgraph AppVNet2[App VNet - 10.appOctet.0.0/16]
+      BastionSubnet[AzureBastionSubnet<br/>10.appOctet.2.0/24]
+      AppSubnet[App subnet<br/>10.appOctet.3.0/24]
+      AppCvm[App Confidential VM<br/>Flask + nginx + FFmpeg<br/>SEV-SNP + H100 CC]
+      Bastion --> BastionSubnet -->|Private 22 or 443| AppCvm
+      AppCvm --- AppSubnet
+    end
+    Maa[Azure Attestation provider<br/>metadata endpoint + CVM attestation support]
+  end
+
+  subgraph SqlRegion[North Europe]
+    subgraph SqlVNet2[SQL VNet - 10.sqlOctet.0.0/16]
+      DbSubnet[DB subnet<br/>10.sqlOctet.4.0/24]
+      SqlCvm[SQL Confidential VM<br/>SQL Server 2022<br/>SEV-SNP]
+      SqlCvm --- DbSubnet
+    end
+  end
+
+  AppCvm -->|TLS on private TCP 1433<br/>VNet peering| SqlCvm
+  AppCvm -.->|Current-boot attestation| Maa
+
+  subgraph SharedRg[Shared infrastructure resource group]
+    SharedVNet2[Shared VNet<br/>10.10.0.0/16]
+    PrivateEndpoint[Managed HSM private endpoint<br/>10.10.1.4]
+    Hsm[Customer Managed HSM<br/>FIPS 140-3 Level 3<br/>public access disabled]
+    SharedVNet2 --- PrivateEndpoint --> Hsm
+  end
+
+  AppCvm -->|Private Link through peering| PrivateEndpoint
+  SqlCvm -->|Private Link through peering| PrivateEndpoint
 ```
 
 ### Simplified Data Flow Architecture
 
-```
-EXTERNAL USER ACCESS (via Bastion Tunnel)
-    │
-    ├─ Establishes SSH/RDP tunnel through Bastion
-    ├─ Tunnel target: CVM private IP (10.0.3.x)
-    └─ No direct internet access to CVM
-    
-    ▼
-    
-CONFIDENTIAL VM (C-vn2 with SEV-SNP TEE)
-    │
-    ├─ OS Disk: Confidential OS disk encryption (AES-256)
-    │  └─ CMK: RSA-HSM key in shared Managed HSM via DES
-    │  └─ Release: Azure CVM attestation-bound secure key release
-    │
-    ├─ Nginx (Reverse Proxy)
-    │  ├─ TLS 1.3 termination
-    │  ├─ mTLS client verification
-    │  ├─ Certificate chain: User Cert ← Attestation Service
-    │  └─ Forward to: http://localhost:8000
-    │
-    ├─ Flask Application (Gunicorn)
-    │  ├─ CRUD endpoints for citizen registry
-    │  ├─ Database connection pooling
-    │  ├─ Managed Identity for HSM auth
-    │  └─ Attestation token validation
-    │
-    ├─ Disk Encryption Set identity
-    │  ├─ Managed HSM Crypto User on the OS key only
-    │  ├─ Wraps and unwraps the disk encryption key
-    │  └─ No key material in code
-    │
-    └─ Confidential OS Disk
-       ├─ Encryption type: ConfidentialVmEncryptedWithCustomerKey
-       ├─ Key stored in: Managed HSM (not on disk)
-       ├─ DES identity: key-scoped crypto access
-       └─ Hardware TEE: SEV-SNP/vTPM release binding
-    
-    ▼
-    
-DATABASE (SQL Server on ACC)
-    │
-    ├─ Private Subnet: 10.0.4.0/24
-    ├─ No Public IP: Accessible only from App CVM
-    ├─ Encryption: TDE (Transparent Data Encryption)
-    ├─ Connection: TLS 1.2 encrypted (pyodbc)
-    ├─ Port: 1433 (private subnet only)
-    └─ NSG Rule: Allow TCP 1433 from app subnet (10.0.3.0/24) only
-    
-    ▼
-    
-MANAGED HSM (B1 SKU, Shared)
-    │
-    ├─ Private Link Only: No public access
-    ├─ Access: Via private endpoint (10.10.1.4)
-    ├─ Key Management:
-    │  ├─ OS disk encryption keys
-    │  └─ Confidential OS disk CMK and release policy
-    │
-    ├─ Key-scoped permissions:
-    │  ├─ DES: Managed HSM Crypto Service Encryption User
-    │  └─ CVM Orchestrator: Managed HSM Crypto Service Release User
-    │
-    └─ Private DNS Resolution:
-      ├─ Zone: privatelink.managedhsm.azure.net
-       ├─ A Record: Points to private endpoint IP
-       └─ No internet routing
+```mermaid
+flowchart LR
+  Browser[Authorized browser<br/>plaintext only after TLS decryption]
+
+  subgraph AppTee[App Confidential VM trust boundary]
+    Nginx[nginx<br/>TLS 1.2 or 1.3 termination<br/>optional client-certificate verification]
+    Flask[Gunicorn + Flask<br/>registry APIs and status]
+    Worker[Anonymizer service<br/>FFmpeg + MTCNN + blur + HLS]
+    Cpu[AMD SEV-SNP protected CPU memory]
+    Gpu[NVIDIA H100<br/>production CC mode + current-boot attestation]
+    Nginx -->|Guest-local HTTP| Flask
+    Worker --> Cpu
+    Worker -->|Face detection| Gpu
+  end
+
+  Browser <-->|HTTPS<br/>negotiated authenticated encryption| Nginx
+  Flask -->|TLS over private peering| Sql[SQL Confidential VM<br/>SEV-SNP]
+  AppDisk[Confidential OS disk<br/>customer-managed encryption] --> AppTee
+  SqlProtection[SQL guest-state protection<br/>VMGuestStateOnly + encryption at host] --> Sql
+  Hsm[Customer Managed HSM<br/>OS-disk RSA-HSM CMK] -->|Attestation-bound key release| AppDisk
+
+  Target[Target PKI profile<br/>HSM-held CA and nginx signing keys]
+  Target -.->|Managed HSM TLS Offload<br/>not deployed yet| Nginx
 ```
 
 ### Detailed Network Segmentation & Security Boundaries
 
-```
-╔════════════════════════════════════════════════════════════════════╗
-║                     SECURITY BOUNDARY LAYERS                       ║
-╚════════════════════════════════════════════════════════════════════╝
+```mermaid
+flowchart TB
+  Internet[Customer workstation and Azure management plane]
 
-┌─ LAYER 1: INTERNET BOUNDARY ─────────────────────────────────────┐
-│                                                                   │
-│  ✗ NO DIRECT ACCESS to app resources                             │
-│  ✗ NO PUBLIC IPs on CVM, Database, or HSM                        │
-│  ✓ ONLY Bastion Host has public IP (gated by NSG)                │
-│  ✓ Bastion requires authenticated user + MFA (Azure Portal)      │
-│                                                                   │
-│  Bastion NSG Rules:                                              │
-│    • Inbound 443: From Internet (User browsers)                  │
-│    • Inbound 443: From GatewayManager                            │
-│    • Inbound 443: From AzureLoadBalancer                         │
-│    • Outbound: To private subnets via SSH/RDP gateways           │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  subgraph AppNetwork[App VNet - West Europe - default 10.20.0.0/16]
+    BastionNsg[Bastion NSG<br/>in: 443 from Internet, GatewayManager, Azure LB<br/>out: 22/3389 to VirtualNetwork]
+    Bastion3[Azure Bastion subnet<br/>default 10.20.2.0/24]
+    AppNsg[App NSG<br/>in: 22/443 from Bastion subnet<br/>out: 1433 to DB subnet<br/>deny inbound Internet]
+    AppSubnet3[App subnet + NAT gateway<br/>default 10.20.3.0/24]
+    AppVm3[App Confidential VM<br/>private IP only]
+    BastionNsg --> Bastion3 --> AppNsg --> AppSubnet3 --> AppVm3
+  end
 
-┌─ LAYER 2: VNET BOUNDARY ─────────────────────────────────────────┐
-│                                                                   │
-│  VNet: 10.0.0.0/16 (isolated, no internet gateway)               │
-│                                                                   │
-│  Route Table: Default (no routes to internet)                    │
-│    • Routes only to: Local (10.0.0.0/16)                         │
-│    • Routes only to: Private Link endpoints                      │
-│    • NO 0.0.0.0/0 route (no internet egress)                     │
-│                                                                   │
-│  Peering: Cross-RG (Shared Infra ↔ App Instance)                │
-│    • Peering Name: {prefix}-shared-to-app                        │
-│    • Allows: Private Link access to HSM                          │
-│    • Encrypted: All traffic via TLS                              │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  Internet -->|Authenticated Bastion session| BastionNsg
 
-┌─ LAYER 3: APP SUBNET BOUNDARY (10.0.3.0/24) ─────────────────────┐
-│                                                                   │
-│  App NSG (Applied to CVM NIC):                                   │
-│    • Inbound 22 (SSH): From Bastion subnet only                  │
-│    • Inbound 443 (HTTPS): From Bastion subnet only               │
-│    • Inbound 8000: From Bastion subnet (Gunicorn direct)         │
-│    • Outbound 443: To Private Link subnet (HSM)                  │
-│    • Outbound 1433: To DB subnet (SQL)                           │
-│    • Outbound DNS: To Azure DNS (169.254.169.254)                │
-│    • Deny ALL other inbound                                      │
-│                                                                   │
-│  Result: CVM isolated, reachable only via Bastion                │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  subgraph SqlNetwork[SQL VNet - North Europe - default 10.21.0.0/16]
+    DbNsg[DB NSG<br/>in: 1433 from app subnet<br/>in: 22 from Bastion subnet<br/>deny all other inbound]
+    DbSubnet3[DB subnet + NAT gateway<br/>default 10.21.4.0/24]
+    SqlVm3[SQL Confidential VM<br/>private IP only]
+    DbNsg --> DbSubnet3 --> SqlVm3
+  end
 
-┌─ LAYER 4: DATABASE SUBNET BOUNDARY (10.0.4.0/24) ────────────────┐
-│                                                                   │
-│  DB NSG (Applied to Database NIC):                               │
-│    • Inbound 1433 (SQL): From App subnet (10.0.3.0/24) ONLY      │
-│    • Deny ALL other inbound                                      │
-│    • Allow outbound to Azure logging/monitoring                  │
-│                                                                   │
-│  Result: Database only accessible from app CVM                   │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  AppVm3 -->|Private TCP 1433 + TLS<br/>bidirectional VNet peering| DbNsg
+  Bastion3 -->|Private SSH through peering| DbNsg
 
-┌─ LAYER 5: PRIVATE LINK BOUNDARY (10.10.1.0/24) ───────────────────┐
-│                                                                   │
-│  Private Link Endpoint (HSM):                                    │
-│    • Deployment: 10.10.1.4 (managed by Azure)                    │
-│    • DNS: privatelink.managedhsm.azure.net → Private A record    │
-│    • Access: Via VNet peering (App Instance ← Shared Infra)      │
-│    • Protocol: HTTPS (TLS 1.2/1.3)                               │
-│    • No NSG needed (private link endpoint)                       │
-│                                                                   │
-│  Private DNS Zone:                                               │
-│    • Zone: privatelink.managedhsm.azure.net                       │
-│    • A Record: {hsm-name} → private endpoint address             │
-│    • Linked to: Both VNets (shared + app instance)               │
-│    • Result: Seamless hostname resolution on private subnets     │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  subgraph SharedNetwork[Shared VNet - 10.10.0.0/16]
+    PrivateDns[Private DNS<br/>privatelink.managedhsm.azure.net]
+    HsmPe3[Private endpoint subnet<br/>10.10.1.0/24]
+    ManagedHsm3[Managed HSM<br/>public access disabled]
+    PrivateDns --> HsmPe3 --> ManagedHsm3
+  end
 
-┌─ LAYER 6: TEE BOUNDARY (Hardware Isolation) ─────────────────────┐
-│                                                                   │
-│  Confidential VM (C-vn2 with SEV-SNP):                           │
-│    • OS Disk: Encrypted (key never exposed to hypervisor)        │
-│    • Memory: Encrypted (CPU-level isolation)                     │
-│    • Attestation: Hardware proves encryption state               │
-│    • Measurement: VM boot sequence hashed and signed             │
-│                                                                   │
-│  SEV-SNP Security Model:                                         │
-│    • Hypervisor: Cannot access guest VM memory                   │
-│    • Guest OS: Protected at CPU level                            │
-│    • Attestation: Remote party verifies TEE state                │
-│    • Key Release: HSM gates key issuance until attestation OK    │
-│                                                                   │
-└───────────────────────────────────────────────────────────────────┘
+  AppVm3 -->|HTTPS through peering| HsmPe3
+
+  Tee[Hardware trust boundaries<br/>AMD SEV-SNP on both VMs<br/>H100 production CC on app VM]
+  Tee --- AppVm3
+  Tee --- SqlVm3
 ```
 
 ### Stage 1: Shared Infrastructure (`Deploy-SharedInfra.ps1`)
@@ -545,85 +537,59 @@ Creates resource group: **`{prefix}sharedinfra`**
 Creates resource group: **`{prefix}{random5digit}app`** (e.g., `yourprefix18447app`)
 
 **Resources:**
-- **Confidential VM (C-vn2)** — AMD SEV-SNP
-  - Confidential OS disk encryption enabled
-  - Deployed to secure enclave
-  - Connected to shared mHSM over private link
-- **Database on ACC** — SQL Server or PostgreSQL
-  - Transparent Data Encryption (TDE)
-  - Private subnet only
-  - Attestation-backed connectivity
+- **Confidential GPU VM** — `Standard_NCC40ads_H100_v5`
+  - AMD SEV-SNP CPU memory protection and one NVIDIA H100 in production CC mode
+  - Confidential OS disk encryption with customer-managed key release
+  - Connected to shared Managed HSM over Private Link and VNet peering
+- **SQL Server Confidential VM** — `Standard_DC2as_v5`
+  - AMD SEV-SNP CPU memory protection, confidential guest-state protection, and encryption at host
+  - Separate North Europe VNet and private DB subnet
+  - Private TLS connection from the app VM
 - **Bastion Host** — Private access gateway
   - RDP/SSH tunnel to CVM
   - No public IPs on app resources
-- **Azure Attestation Service** — mTLS enablement
-  - Validates CVM confidentiality
+- **Azure Attestation Service** — attestation provider
+  - Supports confidential-compute verification and secure key release
   - Publishes provider metadata for explicit guest-attestation integrations
-  - Attestation policy tied to citizen-registry app
+  - Does not issue the current demo TLS certificates
 
 **Security Model:**
-```
-User → (mTLS over Bastion)
-  ↓
-App CVM (attestation verified)
-  ↓ (TLS)
-DB on ACC ← (confidential OS)
-  ↓ (mTLS)
-Managed HSM (key release)
+```mermaid
+flowchart LR
+    User2[Customer browser] -->|HTTPS through Bastion tunnel<br/>mTLS for protected CRUD| App2[App CVM<br/>SEV-SNP + attested H100]
+    App2 -->|Private TLS 1433| Db2[SQL CVM<br/>SEV-SNP]
+    Hsm2[Managed HSM<br/>app OS-disk CMK] -->|Attestation-bound release| App2
+    Pki2[Target HSM-backed PKI] -.->|TLS Offload not deployed yet| App2
 ```
 
 ## 🛡️ Comprehensive Data Protection Architecture
 
 ### 1. End-to-End Encryption Model
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ENCRYPTION LAYERS                        │
-├─────────────────────────────────────────────────────────────┤
-│ Layer 1: USER → BASTION                                     │
-│   Protocol: HTTPS (TLS 1.2/1.3)                             │
-│   Cipher: AES-256-GCM (Modern)                              │
-│   Authentication: Azure Entra ID + MFA                      │
-│   Key Exchange: ECDHE (Forward secrecy)                     │
-│                                                             │
-│ Layer 2: BASTION → CONFIDENTIAL VM (SSH/RDP Tunnel)        │
-│   Protocol: SSH-2 or RDP-TLS                               │
-│   Cipher: AES-256 with HMAC-SHA2-256                       │
-│   Authentication: Public key or certificate                │
-│   Isolation: Tunnel isolated per session                   │
-│                                                             │
-│ Layer 3: APP CVM → DATABASE (SQL Connection)               │
-│   Protocol: TLS 1.2 (enforced)                             │
-│   Cipher: AES-128-CBC or AES-256-GCM                       │
-│   Authentication: SQL login (encrypted)                    │
-│   Isolation: Private subnet only (no internet)             │
-│                                                             │
-│ Layer 4: CVM → MANAGED HSM (mTLS)                          │
-│   Protocol: HTTPS (TLS 1.2/1.3)                            │
-│   Cipher: AES-256-GCM                                      │
-│   Authentication: mTLS (client cert + HSM cert)            │
-│   Key Exchange: ECDHE (client cert from attestation)       │
-│   Isolation: Private Link endpoint (10.0.1.x)              │
-│                                                             │
-│ Layer 5: OS DISK AT-REST (Confidential OS)                 │
-│   Algorithm: AES-256                                       │
-│   Key Location: Managed HSM (never on-disk)                │
-│   Mode: Confidential VM encryption                         │
-│   Verification: SEV-SNP attestation required               │
-│                                                             │
-│ Layer 6: MEMORY AT-REST (Confidential Computing)           │
-│   Algorithm: AES-256 (CPU-level)                           │
-│   Isolation: SEV-SNP (Hardware TEE)                        │
-│   Verification: VM measurement hash via attestation         │
-│   Hypervisor Access: BLOCKED (hardware enforced)           │
-│                                                             │
-│ Layer 7: DATABASE ENCRYPTION AT-REST (TDE)                 │
-│   Algorithm: AES-256 (SQL Server TDE)                      │
-│   Key Location: Database encryption key                    │
-│   Scope: All tables in citizendb                           │
-│   Transparent: No application code changes needed          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  Browser4[Customer browser<br/>plaintext after authorized decryption]
+  Nginx4[nginx inside app CVM<br/>TLS termination]
+  Flask4[Flask inside SEV-SNP guest memory]
+  Sql4[SQL Server inside SQL SEV-SNP guest memory]
+  Hsm4[Customer Managed HSM<br/>FIPS 140-3 Level 3]
+  AppDisk4[App confidential OS disk]
+  SqlProtection4[SQL VMGuestStateOnly<br/>+ encryption at host]
+
+  Browser4 <-->|HTTPS: TLS 1.2 or 1.3<br/>cipher and ephemeral session keys negotiated| Nginx4
+  Nginx4 -->|Guest-local HTTP on loopback| Flask4
+  Flask4 <-->|TDS with Encrypt=yes<br/>private VNet peering| Sql4
+  Flask4 -->|HTTPS with managed identity<br/>Private Link| Hsm4
+  Hsm4 -->|RSA-HSM CMK<br/>attestation-bound release| AppDisk4
+  AppDisk4 --> Flask4
+  SqlProtection4 --> Sql4
+
+  AppMemory4[AMD SEV-SNP<br/>app CPU memory protection] --- Flask4
+  SqlMemory4[AMD SEV-SNP<br/>SQL CPU memory protection] --- Sql4
+  GpuMemory4[H100 production CC mode<br/>attested GPU processing] --- Flask4
+
+  TargetKeys4[Target: non-exportable CA and nginx keys in Managed HSM]
+  TargetKeys4 -.->|PKCS#11 TLS Offload<br/>not currently deployed| Nginx4
 ```
 
 ### 2. Citizen Data Protection Journey
@@ -639,22 +605,21 @@ DATA STATE: REST (On Disk)
     ├─ last_name: "Smith"
     └─ ... (other PII)
     
-         ▼ (Encrypted by SQL Server TDE)
+            ▼ (Persisted by SQL Server inside the SQL CVM)
     
-    Encrypted Bytes on SQL Data File
-    ├─ Algorithm: AES-256
-    ├─ Key: Database Encryption Key (DEK)
-    ├─ Master Key: Azure Key Vault (HSM-backed)
-    └─ Visible as: Binary garbage (can't be read)
+          SQL Server Data File
+          ├─ Default path: /var/opt/mssql/data/citizendb.mdf
+          ├─ SQL process and data execute inside SEV-SNP-protected guest memory
+          ├─ VM storage uses encryption at host
+          └─ This sample does not configure SQL Server TDE or an HSM-backed SQL DEK
     
-         ▼ (Data file on private ACC)
+            ▼ (SQL VM storage boundary)
     
-    Stored in: Confidential VM private data disk
-    ├─ Path: /var/lib/mssql/data/citizendb.mdf
-    ├─ Disk: Premium SSD (encrypted)
-    ├─ Encryption: AES-256 at hypervisor level
-    ├─ Key: Stored in Managed HSM (not on disk)
-    └─ Protection: Attestation-gated key release
+          Stored in: SQL Confidential VM OS disk
+          ├─ Security encryption type: VMGuestStateOnly
+          ├─ Host setting: encryptionAtHost enabled
+          ├─ Access: private DB subnet only
+          └─ HSM-backed DES: not configured for the SQL VM
 
 ─────────────────────────────────────────────────────────────
 
@@ -665,8 +630,8 @@ DATA STATE: IN TRANSIT (Moving)
     
         GET /api/citizen/1
         ├─ TLS ClientHello
-        ├─ Presents: User certificate (from Attestation Service)
-        ├─ Validates: CVM certificate (from Attestation Service)
+        ├─ Optionally presents: customer-issued client certificate
+        ├─ Validates: app certificate signed by the customer demo CA
         └─ Handshake: Establishes shared session key (ephemeral)
     
              ▼ (HTTPS/TLS encrypted)
@@ -674,33 +639,33 @@ DATA STATE: IN TRANSIT (Moving)
         Over Bastion Tunnel (Private)
         ├─ Entry: User machine SSH/RDP
         ├─ Tunnel: Bastion → CVM (encrypted)
-        ├─ Cipher: AES-256-GCM
-        └─ Protocol: TLS 1.3 (no weak ciphers)
+        ├─ Cipher: negotiated by the browser and nginx
+        └─ Protocol: TLS 1.2 or TLS 1.3
     
              ▼ (Request received at CVM)
     
         Request Decrypted at Nginx
         ├─ Decryption: TLS session key (ephemeral)
-        ├─ Verification: Client cert chain (attestation proof)
-        ├─ Access Control: mTLS cert thumbprint matches policy
-        └─ Forward: To Flask app (via Unix socket)
+        ├─ Verification: customer CA chain for protected CRUD requests
+        ├─ Access Control: nginx reports X.509 verification to Flask
+        └─ Forward: To Flask app over guest-local TCP
     
              ▼ (Local IPC, no network)
     
         Flask App Queries Database
-        ├─ Connection String: Server=10.0.4.5; Encrypt=yes
+        ├─ Connection String: Server=10.{sqlOctet}.4.5;Encrypt=yes
         ├─ Protocol: TDS (SQL Server protocol)
-        ├─ Encryption: TLS 1.2 (enforced)
+        ├─ Encryption: SQL driver TLS negotiation required
         ├─ Auth: SQL user + password (encrypted in connection)
         └─ Query: SELECT * FROM citizen WHERE id = 1
     
              ▼ (TLS encrypted across private subnet)
     
         Database Decrypts on Receipt
-        ├─ TLS Session: Established with client certificate
+        ├─ TLS Session: Established by the SQL client driver
         ├─ Decryption: Session key used to decrypt query
-        ├─ Processing: Query executed in protected enclave
-        └─ Result: Citizen record retrieved (still encrypted)
+        ├─ Processing: Query executes in the SEV-SNP Confidential VM
+        └─ Result: Citizen record returned through the TLS session
     
              ▼ (Database returns encrypted result)
     
@@ -714,14 +679,14 @@ DATA STATE: IN TRANSIT (Moving)
     
         Nginx Encrypts Response
         ├─ TLS Encryption: Session key (established at handshake)
-        ├─ Cipher: AES-256-GCM
-        ├─ Signing: HMAC-SHA2-256 (integrity)
-        └─ Wrapping: TLS record format with MAC
+        ├─ Cipher: negotiated authenticated-encryption suite
+        ├─ Integrity: supplied by the negotiated TLS suite
+        └─ Wrapping: TLS record protection
     
              ▼ (HTTPS encrypted over Bastion tunnel)
     
         Response Transmitted
-        ├─ Path: CVM (10.0.3.x) → Bastion → User
+        ├─ Path: App CVM → Bastion tunnel → customer browser
         ├─ Encryption: End-to-end TLS (no decryption in transit)
         ├─ Network: Private VNet (no internet exposure)
         └─ Integrity: MAC verified at each hop
@@ -755,16 +720,16 @@ DATA STATE: IN MEMORY (Active Processing)
     ├─ Decryption Key: Inside CPU (never exposed)
     ├─ Only CPU can decrypt: For instruction execution
     ├─ Hypervisor can't see plaintext
-    └─ Guest OS can't extract plaintext without attestation
+    └─ Authorized guest processes can access plaintext for processing
     
          ▼ (Proof via attestation)
     
     Attestation Report
-    ├─ VM Launch Measurement: SHA256 hash
-    ├─ App Code Hash: Verified against policy
-    ├─ OS State: Measured (confidential encryption enabled)
-    ├─ Signature: Signed by Azure Attestation Service
-    └─ Verifiable: By relying party (e.g., HSM for key release)
+    ├─ Current-boot CPU evidence: Microsoft Azure Attestation JWT claims
+    ├─ CPU checks: sevsnpvm, secure boot, and vTPM
+    ├─ Current-boot GPU evidence: NVIDIA nvtrust success
+    ├─ App-code measurement: not claimed by this sample
+    └─ OS-key release policy: azure-compliant-cvm claim
 
 ─────────────────────────────────────────────────────────────
 
@@ -772,17 +737,18 @@ THREAT MODEL: What's Protected
 ═════════════════════════════════════════════════════════════
 
     ✅ PROTECTED:
-       • Data at rest on disk (AES-256)
+       • App OS disk with HSM-backed confidential disk encryption
+       • SQL guest state plus encryption at host
        • Data in transit on network (TLS 1.2/1.3)
        • Data in memory (SEV-SNP CPU encryption)
        • Confidential VM OS (confidential OS disk)
-       • Private keys (never leave HSM)
+       • App OS-disk CMK (non-exportable Managed HSM custody)
        • Network traffic from interception
        • Hypervisor from accessing guest memory
-       • Database encryption keys (HSM-stored)
 
     ⚠️  PARTIALLY PROTECTED (User Responsibility):
        • User device (endpoint security)
+       • Current file-backed demo CA/server/client keys
        • Screen/keyboard eavesdropping (physical security)
        • Bastion login credentials (MFA required)
        • Admin access (RBAC + PIM elevation)
@@ -794,221 +760,90 @@ THREAT MODEL: What's Protected
        • USB/physical theft of user device (encryption + lock)
 ```
 
-### 3. Key Management Architecture
+### 3. Key Management Architecture: Deployed and Target States
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│            MANAGED HSM — KEY HIERARCHY                       │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  Root Authority: Managed HSM (B1 SKU)                        │
-│  │                                                           │
-│  ├─→ Certificate Authority Key (HSM-resident)               │
-│  │   ├─ Algorithm: RSA-2048                                 │
-│  │   ├─ Usage: Sign mTLS certificates                       │
-│  │   ├─ Rotation: Quarterly via HSM policy                  │
-│  │   └─ Never Exported: HSM-only operations                 │
-│  │                                                           │
-│  ├─→ OS Disk Encryption Key (HSM-resident)                  │
-│  │   ├─ Algorithm: AES-256                                  │
-│  │   ├─ Usage: Encrypt CVM OS disk                          │
-│  │   ├─ Protected By: SEV-SNP key release gate              │
-│  │   └─ Access: Only attested CVM can use                   │
-│  │                                                           │
-│  ├─→ Database Encryption Key Encryption Key (KEK)           │
-│  │   ├─ Algorithm: AES-256                                  │
-│  │   ├─ Usage: Wrap SQL Server DEK                          │
-│  │   ├─ Location: Managed HSM or Key Vault                  │
-│  │   └─ Azure SQL TDE: Transparent access via managed ID    │
-│  │                                                           │
-│  └─→ Application Session Keys                               │
-│      ├─ Algorithm: ECDHE ephemeral keys                      │
-│      ├─ Generation: During TLS handshake                     │
-│      ├─ Lifetime: Duration of connection only               │
-│      └─ Destruction: Automatically after disconnect         │
-│                                                              │
-│  Access Control: Managed Identity (mTLS auth)               │
-│  ├─ Identity: {prefix}-cvm-identity (on CVM)                │
-│  ├─ Role: Managed HSM Crypto User                           │
-│  ├─ Permissions:                                            │
-│  │  • Get (retrieve key/cert)                               │
-│  │  • Sign (create signatures)                              │
-│  │  • Wrap/Unwrap (protect keys)                            │
-│  │  • GenerateKey (create new keys)                         │
-│  └─ MFA: Attestation-gated (key release requires TEE proof) │
-│                                                              │
-│  Audit Logging: HSM Operation Log                           │
-│  ├─ All key operations logged                               │
-│  ├─ Timestamp: UTC with nanosecond precision                │
-│  ├─ User: Managed Identity principal                        │
-│  ├─ Operation: Get, Sign, Wrap, GenerateKey, etc.           │
-│  └─ Sent to: Azure Monitor / Log Analytics                  │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+  subgraph Current[Deployed state]
+    Hsm5[Customer Managed HSM]
+    OsKey5[App OS-disk RSA-HSM key<br/>3072 bit; wrapKey and unwrapKey<br/>SKR policy: azure-compliant-cvm]
+    Des5[Disk Encryption Set identity<br/>Crypto Service Encryption User]
+    Orchestrator5[Azure CVM Orchestrator<br/>Crypto Service Release User]
+    Auditor5[App managed identity<br/>Crypto Auditor on this key]
+    AppDisk5[App confidential OS disk]
+    LocalPki5[File-backed demo CA + nginx key<br/>inside app CVM]
+
+    Hsm5 --- OsKey5
+    Des5 -->|Wrap and unwrap| OsKey5
+    Orchestrator5 -->|Policy-bound release| OsKey5
+    Auditor5 -->|Read metadata and SKR policy| OsKey5
+    OsKey5 -->|Customer-managed disk encryption| AppDisk5
+    LocalPki5 -.->|Current gap: not HSM-backed| Hsm5
+  end
+
+  subgraph Target[Required HSM-backed PKI target]
+    HsmTarget5[Customer Managed HSM]
+    CaKey5[Non-exportable CA signing key]
+    ServerKey5[Non-exportable nginx TLS signing key]
+    Offload5[Managed HSM TLS Offload Library<br/>PKCS#11 + managed identity]
+    PublicCerts5[Public CA chain and server certificate]
+    Nginx5[nginx in app CVM]
+
+    HsmTarget5 --- CaKey5
+    HsmTarget5 --- ServerKey5
+    CaKey5 -->|Sign certificate requests in HSM| PublicCerts5
+    ServerKey5 -->|Handshake signature in HSM| Offload5 --> Nginx5
+    PublicCerts5 --> Nginx5
+  end
+
+  ClientKey5[Client private key<br/>customer browser or client hardware]
+  SessionKeys5[Ephemeral TLS session keys<br/>browser and nginx memory]
+  ClientKey5 -.->|Endpoint credential: not server-side HSM custody| Target
+  SessionKeys5 -.->|Per-connection: not persistent HSM keys| Target
 ```
 
-### 4. mTLS & Attestation-Based Certificate Flow
+### 4. Target Managed HSM PKI and mTLS Flow
 
-```
-CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
-═════════════════════════════════════════════════════════════
+> This is the required production profile, not the currently deployed file-backed demo PKI.
+> Azure Attestation supplies separate CPU/VM evidence and does not issue these certificates.
 
-    PHASE 1: CVM Certificate Issuance
-    ┌─────────────────────────────────────────┐
-    │ Stage 2 Deployment (CVM Boot)           │
-    │                                         │
-    │ 1. CVM boots with Confidential OS       │
-    │    ├─ OS measured (SHA256)              │
-    │    ├─ App code measured                 │
-    │    └─ Memory encrypted (SEV-SNP)        │
-    │                                         │
-    │ 2. CVM retrieves attestation token      │
-    │    ├─ Source: Attestation Service       │
-    │    ├─ Contains: VM measurements         │
-    │    ├─ Signed: By Azure Attestation      │
-    │    └─ Validation: Proves CVM integrity  │
-    │                                         │
-    │ 3. CVM requests certificate from HSM    │
-    │    ├─ Request: CSR (Certificate Signing │
-    │    ├─ Includes: Attestation token proof │
-    │    ├─ Identity: Managed Identity auth   │
-    │    └─ Protocol: mTLS to HSM             │
-    │                                         │
-    │ 4. Managed HSM validates attestation    │
-    │    ├─ Verification: Token signature     │
-    │    ├─ Check: App measurement against    │
-    │    │         policy (if custom policy)  │
-    │    ├─ Gate: Only issue cert if valid    │
-    │    └─ Log: All certificate issuances    │
-    │                                         │
-    │ 5. HSM creates CVM certificate          │
-    │    ├─ Signed by: HSM CA key             │
-    │    ├─ Algorithm: RSA-2048 or EC         │
-    │    ├─ Validity: 1 year (configurable)   │
-    │    ├─ Subject: CN={prefix}-citizen-cvm  │
-    │    ├─ Extensions: KeyUsage, SAN         │
-    │    └─ Delivery: Returned to CVM app     │
-    │                                         │
-    │ 6. CVM nginx installs certificate       │
-    │    ├─ File: /etc/nginx/certs/cvm.crt    │
-    │    ├─ Key: /etc/nginx/certs/cvm.key     │
-    │    ├─ Config: mTLS listener on 443      │
-    │    └─ Reload: nginx -s reload           │
-    │                                         │
-    └─────────────────────────────────────────┘
-    
-    PHASE 2: User Certificate Issuance
-    ┌─────────────────────────────────────────┐
-    │ User Preparation (Browser / CLI)        │
-    │                                         │
-    │ 1. User authenticates to Azure          │
-    │    ├─ Method: Azure CLI or Portal       │
-    │    ├─ MFA: Required by default          │
-    │    └─ Token: JWT from Entra ID          │
-    │                                         │
-    │ 2. User requests attestation token      │
-    │    ├─ Endpoint: Azure Attestation Srv   │
-    │    ├─ Request: Attest endpoint          │
-    │    ├─ Payload: Minimal (role claim)     │
-    │    └─ Response: Attestation JWT         │
-    │                                         │
-    │ 3. User requests client certificate     │
-    │    ├─ Endpoint: Managed HSM             │
-    │    ├─ Includes: Attestation token       │
-    │    ├─ CSR: Generated locally on device  │
-    │    ├─ Public Key: Never sent to HSM     │
-    │    └─ Auth: Managed Identity or Entra   │
-    │                                         │
-    │ 4. HSM validates user authorization     │
-    │    ├─ Check: RBAC role (reader/writer)  │
-    │    ├─ Check: Not in deny list           │
-    │    ├─ Check: Attestation scope matches  │
-    │    └─ Result: Approve or deny           │
-    │                                         │
-    │ 5. HSM signs user certificate           │
-    │    ├─ CA: Citizen Registry CA           │
-    │    ├─ Subject: CN=user@example.com      │
-    │    ├─ Validity: 24 hours (short-lived)  │
-    │    └─ Extensions: Group claims          │
-    │                                         │
-    │ 6. Certificate delivered to user        │
-    │    ├─ Format: PEM or DER                │
-    │    ├─ Storage: Browser keystore         │
-    │    └─ Security: No private key exposure │
-    │                                         │
-    └─────────────────────────────────────────┘
-    
-    PHASE 3: mTLS Handshake (Connection)
-    ┌─────────────────────────────────────────┐
-    │ User Connects to CVM App                │
-    │                                         │
-    │ 1. User initiates HTTPS/TLS connection  │
-    │    ├─ Endpoint: cvm-ip:443              │
-    │    ├─ SNI: citizen-registry.local       │
-    │    └─ Protocol: TLS 1.2/1.3             │
-    │                                         │
-    │ 2. TLS ClientHello                      │
-    │    ├─ Supported Ciphers: AES-256-GCM    │
-    │    ├─ Curves: P-256, P-384              │
-    │    ├─ Signature Algorithms: ECDSA, RSA  │
-    │    └─ Extensions: SNI, Supported Versions
-    │                                         │
-    │ 3. nginx responds with ServerHello      │
-    │    ├─ Selected Cipher: TLS_AES_256_GCM  │
-    │    ├─ Certificate: CVM cert (HSM-signed)│
-    │    ├─ Extensions: Supported Versions    │
-    │    └─ Signature: CVM cert chain         │
-    │                                         │
-    │ 4. Client verifies CVM certificate      │
-    │    ├─ Issuer: HSM CA (trusted root)     │
-    │    ├─ Validity: Valid dates             │
-    │    ├─ Hostname: Matches certificate CN  │
-    │    └─ Revocation: Checked (CRL/OCSP)    │
-    │                                         │
-    │ 5. Server requests client certificate   │
-    │    ├─ CertificateRequest message        │
-    │    ├─ Supported Types: X.509            │
-    │    ├─ Issuer: Citizen Registry CA       │
-    │    └─ Signature Algorithms: Any         │
-    │                                         │
-    │ 6. Client sends certificate             │
-    │    ├─ Certificate: User cert (HSM-signed)
-    │    ├─ Verification: Against policy      │
-    │    ├─ Revocation: Checked               │
-    │    └─ Thumbprint: Matched against ACL   │
-    │                                         │
-    │ 7. Server verifies user certificate     │
-    │    ├─ Issuer: HSM CA (trusted)          │
-    │    ├─ Validity: Valid dates             │
-    │    ├─ Extensions: Read claims           │
-    │    ├─ ACL Check: Cert in allow list     │
-    │    └─ Role: Extracted from cert claims  │
-    │                                         │
-    │ 8. Key exchange (ECDHE)                 │
-    │    ├─ Ephemeral Diffie-Hellman key      │
-    │    ├─ Forward Secrecy: Enabled          │
-    │    ├─ Shared Secret: Established        │
-    │    └─ Session Keys: Derived from secret │
-    │                                         │
-    │ 9. Certificate Verify (client)          │
-    │    ├─ Signature: Over handshake hash    │
-    │    ├─ Key: Client private key           │
-    │    ├─ Algorithm: ECDSA or RSA           │
-    │    └─ Verification: Confirms ownership  │
-    │                                         │
-    │ 10. Finished messages (both parties)    │
-    │     ├─ MAC over handshake transcript    │
-    │     ├─ Encrypted: With session key      │
-    │     ├─ Verification: Handshake integrity
-    │     └─ Connection: Secure, ready for app
-    │                                         │
-    │ 11. Application data transfer           │
-    │     ├─ All requests/responses encrypted │
-    │     ├─ MAC/AEAD: Integrity verified     │
-    │     ├─ Forward Secrecy: Ephemeral keys  │
-    │     └─ Session: Lasts for connection    │
-    │                                         │
-    └─────────────────────────────────────────┘
+```mermaid
+sequenceDiagram
+  participant Admin as Customer PKI workflow
+  participant HSM as Customer Managed HSM
+  participant Nginx as nginx + TLS Offload in app CVM
+  participant Browser as Customer browser
+  participant App as Flask application
+
+  rect rgb(238, 245, 238)
+    Note over Admin,HSM: Certificate issuance and renewal
+    Admin->>HSM: Create non-exportable CA and server signing keys
+    Admin->>HSM: Submit approved server certificate data for CA signature
+    HSM-->>Admin: CA signature and public certificate chain
+    Admin-->>Nginx: Install public server certificate and CA chain
+    Browser->>Browser: Generate or import client private key in endpoint keystore
+    Browser->>Admin: Submit client certificate request
+    Admin->>HSM: Sign approved client certificate with CA key
+    HSM-->>Admin: Signed public client certificate
+    Admin-->>Browser: Install client certificate; private key stays endpoint-side
+  end
+
+  rect rgb(238, 243, 250)
+    Note over Browser,Nginx: TLS 1.2 or 1.3 connection
+    Browser->>Nginx: ClientHello with supported protocols and cipher suites
+    Nginx->>HSM: PKCS#11 sign via managed identity and Private Link
+    HSM-->>Nginx: TLS handshake signature; server key never exported
+    Nginx-->>Browser: Server certificate and negotiated TLS parameters
+    Browser->>Browser: Validate customer CA chain and endpoint identity
+    opt Protected create, update, or delete
+      Nginx-->>Browser: Request client certificate
+      Browser->>Nginx: Client certificate + proof of private-key possession
+      Nginx->>Nginx: Validate certificate against customer CA
+    end
+    Browser->>Nginx: Encrypted and integrity-protected request
+    Nginx-->>Browser: Encrypted and integrity-protected response
+    Nginx->>App: Guest-local HTTP with client verification result
+  end
 ```
 
 ### 5. Secrets & Credentials — What's Never Stored
@@ -1017,24 +852,23 @@ CITIZEN REGISTRY mTLS CERTIFICATE LIFECYCLE
 ❌ SECRETS NOT STORED ANYWHERE IN CODEBASE:
 ─────────────────────────────────────────
 
-    Private Keys (.key files)
-    ├─ Location: Never committed to git
-    ├─ Reason: Would expose key material
-    ├─ Actual Storage: Managed HSM
-    └─ Rule: Gitignored (*.key pattern)
+    Deployed Demo Private Keys (.key files)
+    ├─ Location: Generated inside the app CVM at deployment
+    ├─ Storage: /etc/citizen-registry/certs with mode 0600
+    ├─ Repository: Never committed to git
+    └─ Production target: CA and server keys non-exportable in Managed HSM
 
-    TLS Certificates (.crt files)
-    ├─ Location: Generated at deployment time
-    ├─ Transport: Via HSM (never unencrypted)
-    ├─ Actual Storage: nginx filesystem (protected by filesystem ACLs)
-    └─ Rule: Not committed (*.crt in gitignore)
+    Public TLS Certificates (.crt files)
+    ├─ Location: Generated inside the app CVM at deployment
+    ├─ Storage: nginx filesystem
+    ├─ Sensitivity: Public certificates, not private key material
+    └─ Repository: Not committed to git
 
     Database Credentials
-    ├─ Username: Built into environment variable
-    ├─ Password: From Azure Key Vault (at runtime)
-    ├─ Storage: Never in config files
-    ├─ Rotation: Via Key Vault secret rotation
-    └─ Rule: Environment vars only (never .env committed)
+    ├─ Values: Randomly generated by the deployment script
+    ├─ Runtime: App CVM systemd environment file
+    ├─ Repository: Never committed to git
+    └─ Production target: External secret store and rotation policy
 
     Azure Service Principal Secrets
     ├─ Actual Mechanism: Managed Identity (no secrets needed)
@@ -1163,11 +997,14 @@ az network bastion tunnel `
   --name <bastion-name> `
   --target-resource-id <app-cvm-resource-id> `
   --resource-port 443 `
-  --port 8443
+  --port 9443
 ```
 
-Open `https://localhost:8443/`. Read-only pages work without a client certificate. Add,
-edit, and delete operations require the Norland demo mTLS client certificate.
+Open `https://localhost:9443/citizens`. Read-only pages work without a client certificate.
+Add, edit, and delete operations require the Norland demo mTLS client certificate. Open
+`https://localhost:9443/cctv` and select **Start comparison** to view the source and confidential
+H100 face-anonymized streams. The processed pane reports unavailable rather than displaying
+unprocessed fallback footage when the worker or attestation evidence is not healthy.
 
 ### Step 4: Install the Demo Client Certificate on Windows
 
@@ -1215,7 +1052,7 @@ ssh -p 2222 -i $sshKey azureuser@127.0.0.1 "rm -f /home/azureuser/norland-client
 ```
 
 Close all browser windows and reopen the browser so it reloads the Windows certificate
-stores. Open `https://localhost:8443/` again and select
+stores. Open `https://localhost:9443/citizens` again and select
 `citizen-registry-demo-client` if prompted. Edit and Delete should then succeed.
 
 Verify the local installation without displaying private key material:
@@ -1302,16 +1139,14 @@ See `.gitignore` for complete exclusion list.
 
 - CVM disk encrypted at rest (AES-256)
 - Key stored in Managed HSM
-- Confidential computing attestation proves disk protection
+- Disk Encryption Set uses a Managed HSM key with a secure key release policy bound to attestation
 
-### ✅ Attestation-Backed mTLS
+### ✅ Attestation Evidence and Demo mTLS
 
-- Azure Attestation Service validates CVM enclave
-- mTLS certificate signed by attestation service
-- End-user connection verified against:
-  - CVM hardware measurements
-  - Confidential OS disk encryption state
-  - Citizen-registry app hash
+- Azure Attestation supplies current-boot SEV-SNP/vTPM evidence; NVIDIA nvtrust supplies GPU evidence
+- nginx enforces TLS and client-certificate validation with deployment-generated, file-backed demo keys
+- Attestation does not issue the TLS certificates or bind browser sessions to application measurements
+- The production target moves the CA and nginx server signing keys into customer Managed HSM
 
 ### ✅ Network Isolation & Segmentation
 
@@ -1535,8 +1370,9 @@ df -h | grep -E "mapper|sda"
 # 3. Verify Managed Identity is working
 curl -s "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2017-12-01&resource=https://management.azure.com/" -H "Metadata:true" | jq '.access_token' | wc -c
 
-# 4. Test database connectivity
-/opt/mssql-tools/bin/sqlcmd -S 10.0.4.5 -U sqladmin -P [password] -Q "SELECT @@VERSION"
+# 4. Test database connectivity using values from the protected service environment
+set -a; source /etc/citizen-registry/environment; set +a
+/opt/mssql-tools18/bin/sqlcmd -S "$DB_HOST" -U "$DB_USER" -P "$DB_PASSWORD" -C -Q "SELECT @@VERSION"
 
 # 5. Check HSM connectivity (use your deployed HSM name)
 getent ahostsv4 yourprefixhsm123.managedhsm.azure.net
@@ -1550,24 +1386,14 @@ curl -v --cert /path/to/client.crt --key /path/to/client.key \
 ### Attestation Verification
 
 ```powershell
-# 1. Get attestation token from CVM
-$AttestationUri = "https://{attestationProvider}.eus.attest.azure.net"
-$AttestationToken = Invoke-WebRequest -Uri "$AttestationUri/attest" `
-  -Method Post -Body '{}' | Select-Object -ExpandProperty Content
+# Query the app's current-boot CPU, GPU, disk-key, and mTLS evidence
+curl -sk --cert /path/to/client.crt --key /path/to/client.key `
+  https://localhost/security/evidence | jq .
 
-# 2. Decode and verify token claims
-$Claims = $AttestationToken | ConvertFrom-Json
-Write-Output $Claims | Select-Object -ExpandProperty claims
-
-# Expected claims:
-# - "is-debuggable": false
-# - "vm-configuration": {...}  # Hardware measurements
-# - "exp": [future timestamp]  # Expiration
-# - "iss": "https://sharedeus.eus.attest.azure.net"  # Issuer
-
-# 3. Verify certificate was issued by attestation service
-openssl x509 -in /etc/nginx/certs/cvm.crt -text -noout | grep -A2 "Issuer:"
-# Expected: Issuer: CN=Citizen Registry Attestation CA
+# Inspect the separately generated demo server certificate
+openssl x509 -in /etc/citizen-registry/certs/citizen-registry.crt `
+  -noout -issuer -subject -dates
+# Expected issuer: Norland Registry Demo CA, not Azure Attestation
 ```
 
 ---
