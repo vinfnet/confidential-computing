@@ -4,126 +4,79 @@
 
 ### Deployed Stage 2 Topology
 
-```text
-               North Europe VNet: 10.0.0.0/16
-                      |
-           +----------------+----------------+
-           |                                 |
-       App subnet: 10.0.3.0/24          Private Link subnet
-          |                         10.10.1.0/24
-     +---------+---------+                       |
-     |                   |                 HSM Private Endpoint
-  App CVM              SQL CVM                       |
-  10.0.3.4             10.0.3.5                Managed HSM
-  Flask/nginx           SQL Server               Stage 1 shared RG
-     |                   |
-     +---- TLS 1433 ----+
+```mermaid
+flowchart LR
+  Browser[Customer browser] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion]
 
-  Bastion provides the workstation tunnel to the App CVM; neither CVM has a public IP.
+  subgraph AppVNet[App VNet - West Europe<br/>default 10.20.0.0/16]
+    Bastion -->|Private 443| App[App Confidential VM<br/>Standard_NCC40ads_H100_v5<br/>default 10.20.3.4]
+  end
+
+  subgraph SqlVNet[SQL VNet - North Europe<br/>default 10.21.0.0/16]
+    Sql[SQL Confidential VM<br/>Standard_DC2as_v5<br/>default 10.21.4.5]
+  end
+
+  subgraph SharedVNet[Shared VNet - West Europe<br/>default 10.10.0.0/16]
+    HsmPe[Managed HSM private endpoint<br/>default 10.10.1.4] --> Hsm[Customer Managed HSM]
+  end
+
+  App -->|Encrypted SQL connection<br/>TCP 1433 over global VNet peering| Sql
+  App -->|Private endpoint access| HsmPe
 ```
 
-The app and SQL Server run on separate Confidential VMs in the same `app-subnet`. The SQL CVM
-uses private IP `10.0.3.5`; the app reaches it over encrypted TCP 1433. A NAT Gateway provides
-outbound-only access for first-boot package installation.
-
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         CITIZEN REGISTRY ADVANCED                       │
-│              Two-Stage Confidential Computing Deployment                 │
-└─────────────────────────────────────────────────────────────────────────┘
-
-Stage 1: SHARED INFRASTRUCTURE RG                Stage 2: APP INSTANCE RG
-┌───────────────────────────────────────┐      ┌──────────────────────────┐
-│  {prefix}sharedinfra                  │      │  {prefix}{5-digit}app    │
-│                                       │      │                          │
-│  ┌─────────────────────────────────┐  │      │  ┌────────────────────┐  │
-│  │   MANAGED HSM (Private Link)    │  │      │  │  CONFIDENTIAL VM   │  │
-│  │   - B1 SKU                      │  │      │  │  (C-vn2 / SEV-SNP) │  │
-│  │   - FIPS 140-3 Level 3          │  │      │  │  - DC2as_v5 (2CPU) │  │
-│  │   - Private endpoint only       │  │      │  │  - OS disk enc.    │  │
-│  │   - No public IP                │  │      │  │  - Managed ID      │  │
-│  │   - Key management              │  │      │  │  - Private IP only │  │
-│  └─────────────────────────────────┘  │      │  └────────────────────┘  │
-│          ▲                             │      │          ▲               │
-│          │                             │      │          │               │
-│  ┌─────────────────────────────────┐  │      │  ┌────────────────────┐  │
-│  │  VIRTUAL NETWORK                │  │      │  │  SQL CONFIDENTIAL  │  │
-│  │  - 10.10.0.0/16                 │  │      │  │  - SQL Server      │  │
-│  │  - Subnets:                     │  │      │  │  - TDE enabled     │  │
-│  │    • Private Link (10.10.1/24)  │  │      │  │  - Private subnet  │  │
-│  │    • Bastion (10.10.2.0/24)     │  │      │  │  - Port 1433 only  │  │
-│  │    • App (10.10.3.0/24)         │  │      │  │                    │  │
-│  │    • DB (10.0.4.0/24)           │  │      │  └────────────────────┘  │
-│  │  - NSGs with strict rules       │  │      │                          │
-│  │  - Private DNS zone             │  │      │  ┌────────────────────┐  │
-│  │    (privatelink.managedhsm...)  │  │      │  │  BASTION HOST      │  │
-│  └─────────────────────────────────┘  │      │  │  - Standard SKU    │  │
-│                                       │      │  │  - Public IP only  │  │
-│                                       │      │  │  - SSH/RDP tunnel  │  │
-│                                       │      │  └────────────────────┘  │
-│  ┌─────────────────────────────────┐  │      │                          │
-│  │  PRIVATE LINK ENDPOINT          │  │      │  ┌────────────────────┐  │
-│  │  - HSM connection               │  │      │  │  ATTESTATION SRVC  │  │
-│  │  - Cross-RG peering ready       │  │      │  │  - mTLS validation │  │
-│  └─────────────────────────────────┘  │      │  │  - Policy engine   │  │
-│                                       │      │  │  - AAD trust model │  │
-└───────────────────────────────────────┘      │  └────────────────────┘  │
-         │                                     └──────────────────────────┘
-         │                                              │
-         └──────────────────┬───────────────────────────┘
-                            │
-                   PRIVATE LINK ENCRYPTED
-                   TLS 1.2/1.3 (mTLS)
-                      VNet Peering
-```
+The app and SQL Server run on separate Confidential VMs and separate regional VNets. Global VNet
+peering carries the private SQL connection; neither VM has a public IP. The app VM combines an
+AMD SEV-SNP confidential CPU boundary with an NVIDIA H100 in production confidential-computing
+mode. Bastion provides workstation access, and the app reaches Managed HSM through its private
+endpoint in the shared VNet.
 
 ## Data Flow & Security
 
 ### 1. User → App Connection (mTLS)
 
-```
+```text
 User Machine
     │
     ├─ SSH via Bastion
     │  └─ Port 2222 → Bastion → Port 22 (CVM)
     │
-    └─ HTTPS via Bastion  
+    └─ HTTPS via Bastion
        └─ Port 8443 (mTLS)
-          └─ Client cert required
-             └─ Azure CVM boot attestation gates CMK release
+          └─ Client certificate required for protected CRUD operations
 
          ↓↓↓ (Mutual TLS Handshake) ↓↓↓
 
-    User Cert (issued by Attestation)
+    Customer-issued User Certificate
          │
-    CVM Certificate (SEV-SNP attested)
+    Customer-issued App Certificate
          │
-    ↓ TLS 1.3 ↓
-    
-Confidential VM (C-vn2)
+    ↓ TLS 1.2/1.3 ↓
+
+Confidential App VM
     ├─ nginx (reverse proxy)
-    │  ├─ mTLS termination
+    │  ├─ TLS and mTLS termination
     │  ├─ Security headers
     │  └─ Request forwarding
     │
     ├─ Flask App (port 8000)
     │  ├─ Database driver
-    │  ├─ Attestation client
-    │  └─ HSM key release
+    │  ├─ Attestation status
+    │  └─ Confidential GPU processing
     │
-    └─ Guestagent (OS)
-       └─ SEV-SNP measurement
+    └─ Azure guest attestation
+       └─ SEV-SNP boot evidence
 ```
 
-### 2. App → Database (Private Link + TLS)
+### 2. App → Database (Global VNet Peering + TLS)
 
-The database is a second Confidential VM on the same private app subnet, using private IP `10.0.3.5`.
+The database is a second Confidential VM in the North Europe SQL VNet. By default, the SQL CVM
+uses private IP `10.21.4.5`; the West Europe app VNet reaches it over global VNet peering.
 
-```
+```text
 Flask App (8000)
     │
     ├─ SQL Connection String
-   │  ├─ Server: 10.0.3.5 (SQL CVM private IP)
+   │  ├─ Server: 10.21.4.5 (default SQL CVM private IP)
     │  ├─ Port: 1433
     │  ├─ Encrypt: yes
     │  ├─ TrustServerCertificate: yes
@@ -132,16 +85,17 @@ Flask App (8000)
     ↓ (pyodbc with ODBC Driver 18)
     
 Private Network
-   ├─ App CVM (10.0.3.4) → SQL CVM (10.0.3.5), same subnet
-    ├─ NSG rule: Allow TCP 1433 from app subnet
+   ├─ App CVM → SQL CVM over global VNet peering
+   ├─ NSG rule: Allow TCP 1433 from the peered app VNet
     ├─ All traffic encrypted (TLS)
     └─ No internet exposure
     
 SQL Server Confidential VM
     ├─ SQL Server
-    ├─ TDE (Transparent Data Encryption)
+   ├─ AMD SEV-SNP confidential compute
+   ├─ Encryption at host
     ├─ citizen_registry table
-    └─ Private subnet only
+   └─ Private SQL subnet only
 ```
 
 ### 3. App → Managed HSM (Private Link + mTLS)
@@ -204,11 +158,12 @@ Managed HSM
 
 | Layer | Type | Keys | Protection |
 |-------|------|------|-----------|
-| **OS Disk** | AES-256 (at-rest) | HSM-managed | Confidential VM requirement |
-| **Data Disk** | AES-256 (at-rest) | HSM-managed | Application database |
-| **Network** | TLS 1.2/1.3 (in-transit) | App-issued | mTLS + Attestation |
-| **Database** | TDE (in-rest) | SQL Server | Standard encryption |
-| **Memory** | SEV-SNP (runtime) | Hardware TEE | CPU-level isolation |
+| **App OS disk** | AES-256 (at rest) | Managed HSM-backed customer-managed key | Disk Encryption Set |
+| **SQL VM storage** | Encryption at host | Platform-managed keys | Encrypts data through the Azure storage path |
+| **Browser network** | TLS 1.2/1.3 (in transit) | Customer-issued server and client certificates | mTLS for protected CRUD operations |
+| **SQL network** | TLS (in transit) | SQL Server certificate | Encrypted private connection over global VNet peering |
+| **CPU memory** | SEV-SNP (runtime) | Hardware TEE | App and SQL CVM isolation |
+| **GPU memory** | H100 confidential-computing mode | Hardware TEE | Attested confidential inference boundary |
 
 ### 3. Network Isolation
 
@@ -382,42 +337,21 @@ citizen-registry-advanced/
 
 ### Single App Instance Resources
 
-```
-Confidential VM (DC2as_v6):
-  • 2 vCPUs: Sufficient for 10-50 concurrent users
-  • 8 GB RAM: Python + nginx + SQL driver
-  • Network: 2 Gbps max throughput
+| Tier | Default resource | Workload |
+|---|---|---|
+| App | `Standard_NCC40ads_H100_v5` | Flask/nginx, SDXL portraits, and MTCNN CCTV anonymization on one H100 |
+| Database | `Standard_DC2as_v5` | SQL Server persistence on an AMD SEV-SNP Confidential VM |
 
-Database (SQL Server on ACC):
-  • 10 GB default size: ~1 million citizens
-  • TPS (transactions/sec): 100-500 typical
-  • Connection pool: 10 concurrent connections
-
-Performance Target:
-  • API response: <500ms (p99)
-  • Database query: <100ms (average)
-  • mTLS handshake: <1s (once per session)
-```
+The sample does not assert production throughput or latency targets. Measure registry traffic,
+portrait generation, video processing, database latency, and cross-region network latency with a
+representative workload before selecting production capacity.
 
 ### Horizontal Scaling
 
-```
-Option 1: Multiple App Instances
-  • Deploy Stage 2 multiple times
-  • Each gets unique RG: {prefix}{random1}app, {prefix}{random2}app
-  • All share same Stage 1 Managed HSM
-  • Load balance with Azure Load Balancer (private LB)
-
-Option 2: Larger VM
-  • Change -CvmSize parameter
-  • Options: DC1as_v6, DC2as_v6, DC4as_v6
-  • Scale up from 1 to 4 vCPUs
-
-Option 3: Database Replication
-  • Deploy secondary SQL Server on ACC
-  • Configure Always On availability group
-  • High availability (active-active)
-```
+The deployment scripts create one app CVM and one SQL CVM. Horizontal app scaling, shared media
+state, load balancing, and SQL high availability are not implemented by this demo. A production
+design must preserve per-instance CPU and GPU attestation gates, private connectivity, certificate
+validation, and database consistency while adding those capabilities.
 
 ## Disaster Recovery
 
@@ -446,44 +380,26 @@ Recovery Point Objective (RPO): 1 hour (database backup)
 
 ## Cost Optimization
 
-### Current Pricing (as of Aug 2026)
+### Current Pricing (verified September 8, 2026)
 
-```
-Managed HSM (B1):
-  • Fixed monthly: $400 USD
-  • Not a good fit for dev/test
-  • Share across multiple app instances
+| Core resource | West Europe USD retail rate | 8-hour run | 730 hours |
+|---|---:|---:|---:|
+| Linux `Standard_NCC40ads_H100_v5` | $8.90/hour | $71.20 | $6,497 |
+| Managed HSM Standard B1 | $3.20/hour | $25.60 | $2,336 |
+| **Core subtotal** | **$12.10/hour** | **$96.80** | **$8,833** |
 
-Confidential VM (DC2as_v6):
-  • $0.298/hour × 730 hours = $217/month
-  • Cheapest v6 option
-  • Include OS disk encryption
-
-Database (SQL Server on ACC):
-  • $0.10/GB/month × 10 GB = $1/month
-  • Plus: Storage ($0.05/GB/month)
-  • Total: ~$30-50/month
-
-Bastion:
-  • $50/month (Standard SKU, 2 scale units)
-  • Can reduce to 1 scale unit if low usage
-
-Azure Attestation:
-  • $0.01 per 1000 requests
-  • Typical app: $5-10/month
-
-Total per Instance: $720/month (HSM + CVM + DB + Bastion + Attest)
-  • HSM is shared, so cost-per-app decreases with scale
-  • 3 app instances: $420/month + $720×3 = $2,580/month
-```
+These are planning estimates, not quotes. The SQL CVM and SQL Server licensing, Bastion, disks,
+Private Link, VNet peering, monitoring, and data transfer are additional. Managed HSM has no
+stopped state and continues hourly billing while provisioned. See the [README cost warning and
+live pricing links](README.md#cost-warning-and-controls) before deployment.
 
 ### Cost-Saving Options
 
-1. **Consolidate HSM** — One shared HSM for 10+ app instances
-2. **Use smaller CVM** — DC1as_v6 (1 vCPU): -50% compute
-3. **Reduce Bastion scale** — 1 scale unit: -50% bastion cost
-4. **Delete on-demand** — Full destroy when not in use
-5. **Reserved instances** — 1-year or 3-year commitment discounts
+1. **Run short demonstrations** — Schedule a bounded window and enable VM auto-shutdown.
+2. **Verify deallocation** — Confirm both VMs show **Stopped (deallocated)** after use.
+3. **Delete app instances** — Remove residual disks and networking between demonstrations.
+4. **Delete shared infrastructure after the final run** — Preserve the Managed HSM security-domain backup and key-recovery plan first.
+5. **Consider Spot only for disposable tests** — The observed H100 Spot meter is cheaper but interruptible and not guaranteed to be available.
 
 ---
 

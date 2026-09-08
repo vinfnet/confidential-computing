@@ -8,6 +8,16 @@
 
 ---
 
+## Guide Map
+
+- [Cost warning and controls](#cost-warning-and-controls)
+- [Security boundary and deployed evidence](#security-boundary-and-deployed-evidence)
+- [Demo experience](#demo-experience)
+- [Architecture overview](#architecture-overview)
+- [Quick start](#quick-start)
+- [Verification and security validation](#verification--security-validation)
+- [Cleanup](#cleanup)
+
 ## Cost Warning and Controls
 
 > [!WARNING]
@@ -59,7 +69,7 @@ Check current prices before every deployment:
 - [Azure pricing calculator](https://azure.microsoft.com/pricing/calculator/)
 - [Microsoft Cost Management budgets](https://learn.microsoft.com/azure/cost-management-billing/costs/tutorial-acm-create-budgets)
 
-### Confidential-Compute and Browser-Protection Boundary
+## Security Boundary and Deployed Evidence
 
 All sensitive server-side application processing runs within customer-controlled confidential
 compute. Flask, FFmpeg decoding/encoding, and CPU-side frame handling run in the app VM's AMD
@@ -266,12 +276,19 @@ Validation also confirmed:
 - the browser CMK foldout displays one indented JSON block with no horizontal overflow;
 - the citizen table displays all 100 fictional records and government-style fields.
 
+## Demo Experience
+
 ### Citizen Registry Data and CRUD UI
 
 The demo generates 100 deterministic, entirely fictional Republic of Norland records. Each
 record includes an alphanumeric national ID, date of birth, street address, town, state,
 socio-economic group, and tax paid in the prior year. Names, locations, identifiers, and
 financial values are synthetic and must not be treated as real personal data.
+
+![Republic of Norland Citizen Registry showing confidential-computing status and fictional citizen records](docs/images/confidential-citizen-registry.png)
+
+*Registry view with current security status, synthetic portraits, `F`, `M`, and `X` gender
+markers, government-style fields, and mTLS-protected Add, Edit, and Delete controls.*
 
 The web table supports:
 
@@ -280,7 +297,7 @@ The web table supports:
 - **Delete** on each row with an explicit confirmation prompt;
 - a sticky Add toolbar during vertical scrolling;
 - a sticky Actions column that keeps Edit/Delete visible during horizontal scrolling;
-- horizontal scrolling for the expanded government-record columns on narrow screens.
+- horizontal scrolling for the expanded government-record columns on narrow screens;
 - startup progress for GPU-generated portraits and click-to-expand fictional credentials.
 
 The deterministic seed contains 100 unique fictional names across 20 explicitly curated synthetic
@@ -398,7 +415,7 @@ distributed under CC BY-SA 4.0 with the source attribution displayed on the CCTV
 verifies the original Commons SHA-256, records the exact excerpt recipe, and writes a SHA-256
 sidecar for integrity checks of the generated adaptation.
 
-## 🔒 Architecture Overview
+## Architecture Overview
 
 This advanced deployment splits citizen registry infrastructure into **two stages**:
 - **Stage 1 (Shared Infrastructure):** Managed HSM + private networking backbone
@@ -758,7 +775,6 @@ THREAT MODEL: What's Protected
        • Application logic bugs (input validation needed)
        • Social engineering attacks (training required)
        • Weak passwords (password policy needed)
-       • USB/physical theft of user device (encryption + lock)
 ```
 
 ### 3. Key Management Architecture: Deployed and Target States
@@ -826,14 +842,14 @@ sequenceDiagram
     Browser->>Admin: Submit client certificate request
     Admin->>HSM: Sign approved client certificate with CA key
     HSM-->>Admin: Signed public client certificate
-    Admin-->>Browser: Install client certificate; private key stays endpoint-side
+    Admin-->>Browser: Install client certificate, private key stays endpoint-side
   end
 
   rect rgb(238, 243, 250)
     Note over Browser,Nginx: TLS 1.2 or 1.3 connection
     Browser->>Nginx: ClientHello with supported protocols and cipher suites
     Nginx->>HSM: PKCS#11 sign via managed identity and Private Link
-    HSM-->>Nginx: TLS handshake signature; server key never exported
+    HSM-->>Nginx: TLS handshake signature, server key never exported
     Nginx-->>Browser: Server certificate and negotiated TLS parameters
     Browser->>Browser: Validate customer CA chain and endpoint identity
     opt Protected create, update, or delete
@@ -1298,7 +1314,7 @@ AzureDiagnostics
 
 ---
 
-## ✅ Verification & Security Validation
+## Verification & Security Validation
 
 ### Pre-Deployment Checklist
 
@@ -1316,15 +1332,15 @@ if ($Prefix.Length -lt 3 -or $Prefix.Length -gt 12) {
     Write-Error "Prefix must be 3-12 characters"
 }
 
-# 4. Check CVM quota availability
-az vm list-usage --location eastus `
-  --query "[?name.value=='Standard_DC2as_v6']" `
-  --output table
+# 4. Check that the deployed VM SKUs are offered in the target regions
+az vm list-skus --location westeurope `
+  --size Standard_NCC40ads_H100_v5 --all --output table
 
-# 5. Verify Managed HSM quota
-az vm list-usage --location eastus `
-  --query "[?name.value=='Standard_B1']" `
-  --output table
+az vm list-skus --location northeurope `
+  --size Standard_DC2as_v5 --all --output table
+
+# 5. Also verify subscription quota for each VM family before deployment
+# Azure portal: Subscriptions > Usage + quotas
 ```
 
 ### Post-Deployment Validation

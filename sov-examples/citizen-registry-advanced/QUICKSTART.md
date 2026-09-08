@@ -1,6 +1,9 @@
 # Quick Start Guide — Citizen Registry Advanced
 
-> **Cost awareness:** This deployment includes Azure Managed HSM, which has a higher cost even for light testing. Review the [cost estimates, optimization guidance, and live pricing links in the README](README.md#-important-managed-hsm-requirement--cost-warning) before proceeding. Azure prices can change and vary by region and configuration.
+> **Cost awareness:** The H100 app CVM and Managed HSM alone are approximately $12.10/hour
+> at the September 2026 West Europe USD retail rates, before SQL Server, Bastion, storage,
+> networking, and monitoring. Review the [cost warning, short-run guidance, and current pricing
+> links](README.md#cost-warning-and-controls) before deploying.
 
 ## 🚀 Getting Started
 
@@ -88,7 +91,7 @@ $SharedInfraRg = "${Prefix}sharedinfra"
 **What this creates:**
 - Resource group: `{prefix}{random5digit}app`
 - App `Standard_NCC40ads_H100_v5` Confidential GPU VM with AMD SEV-SNP and one NVIDIA H100
-- SQL Server `Standard_DC2as_v5` Confidential VM on the same private app subnet
+- SQL Server `Standard_DC2as_v5` Confidential VM on a separate private SQL VNet
 - Private app-to-database connection on TCP 1433
 - SQL Server database `citizendb` seeded with 100 uniquely named fictional citizens spanning 20
   synthetic heritage profiles and `F`, `M`, and `X` gender markers
@@ -128,9 +131,15 @@ az network bastion tunnel `
 Open `https://localhost:9443/citizens`. The registry is readable without a client certificate.
 Add, Edit, and Delete require the Norland demo mTLS client certificate. Open
 `https://localhost:9443/cctv` and select **Start comparison** to view the licensed source beside
-the confidential H100 face-anonymized stream. Model startup and the first completed HLS segment
-can take a short time; the processed pane remains unavailable rather than showing raw fallback
-footage until current-boot GPU attestation and processing are healthy.
+the confidential H100 face-anonymized stream. Select **Pause comparison**, or pause either native
+video control, to pause both feeds. Model startup and the first completed HLS segment can take a
+short time; the processed pane remains unavailable rather than showing raw fallback footage until
+current-boot GPU attestation and processing are healthy.
+
+Expected application views:
+
+- [Citizen Registry with confidential-computing status and fictional records](README.md#citizen-registry-data-and-crud-ui)
+- [Confidential CCTV source and anonymized comparison](README.md#confidential-cctv-face-anonymization)
 
 Sensitive server-side processing remains in customer-controlled confidential compute: the web app
 and CPU-side video work run in AMD SEV-SNP-protected memory, face detection runs on the attested H100
@@ -221,26 +230,30 @@ HSM hostname resolving privately to `10.10.1.x`.
 | Component | Purpose | Security |
 |-----------|---------|----------|
 | **Confidential GPU VM** | App and CUDA inference (`Standard_NCC40ads_H100_v5`) | SEV-SNP/vTPM plus production H100 CC mode and nvtrust attestation |
-| **Database on ACC** | Data persistence | Private subnet, TDE enabled |
+| **SQL Confidential VM** | SQL Server data persistence | Separate private SQL VNet, SEV-SNP, and encryption at host |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
 | **Attestation Service** | Provider metadata and guest-attestation integration | Metadata health is separate from CVM boot attestation |
 
 ## 📊 Cost Estimate
 
-| Component | SKU | Monthly Cost (approx) |
-|-----------|-----|----------------------|
-| **Managed HSM** | B1 | $400 |
-| **App Confidential GPU VM** | NCC40ads H100 v5 (40 vCPU, one H100) | Check current West Europe pricing |
-| **SQL Confidential VM** | DC2as_v5 (2 vCPU) | $220 |
-| **Bastion** | Standard (2 scale units) | $50 |
-| **Attestation** | Per-request | $5-10 |
-| **Storage** | Premium LRS disks | $30 |
-| **Total** | | Use the Azure pricing calculator before deployment |
+| Core resource | September 2026 West Europe USD retail rate | 8-hour run | 730 hours |
+|---|---:|---:|---:|
+| **H100 app CVM, Linux PAYG** | $8.90/hour | $71.20 | $6,497 |
+| **Managed HSM Standard B1** | $3.20/hour | $25.60 | $2,336 |
+| **Core subtotal** | **$12.10/hour** | **$96.80** | **$8,833** |
+
+These are planning estimates, not quotes. SQL Server licensing and compute, Bastion, disks,
+Private Link, VNet peering, logs, and data transfer are additional. Check the
+[README cost guidance and live pricing links](README.md#cost-warning-and-controls) immediately
+before deployment.
 
 **To reduce costs:**
-- Delete the app instance when confidential GPU generation is not being tested
-- Reduce Bastion scale units
-- Delete app instances when not in use (keep shared infrastructure)
+- Schedule short demonstration windows and configure VM auto-shutdown.
+- Confirm both VMs reach **Stopped (deallocated)**; an OS shutdown alone may continue billing.
+- Delete the app instance between demonstrations to remove residual disk and networking costs.
+- Delete shared infrastructure after the final run when the HSM is no longer needed and the
+  security-domain backup and key-recovery plan have been preserved.
+- Remember that Managed HSM has no stopped state and continues hourly billing while provisioned.
 
 ## 🧹 Cleanup
 
