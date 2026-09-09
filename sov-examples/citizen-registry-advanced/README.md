@@ -1,8 +1,8 @@
 # Citizen Registry Advanced — Two-Stage Confidential Deployment
 
-**Topology:** Customer Managed HSM ↔ App Confidential H100 GPU VM ↔ SQL Server Confidential VM
+**Topology:** Customer Managed HSM ↔ private DVR Blob Storage ↔ App Confidential H100 GPU VM ↔ SQL Server Confidential VM
 
-> **Implementation status:** Stage 2 now provisions an RSA-HSM customer-managed key in the shared Managed HSM and a `ConfidentialVmEncryptedWithCustomerKey` Disk Encryption Set for the app CVM OS disk. Azure Confidential VM secure key release binds that key to the app VM's attested vTPM/platform state. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
+> **Implementation status:** Stage 2 provisions separate RSA-HSM customer-managed keys for the app CVM OS disk and private DVR Blob Storage. Azure Confidential VM secure key release binds the OS-disk key to the app VM's attested vTPM/platform state. The DVR account is ZRS, infrastructure-encrypted, private-endpoint-only, and uses separate writer, analyzer reader, and Storage encryption identities. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
 **GPU configuration updated:** September 3, 2026
 
@@ -104,7 +104,8 @@ Managed HSM.
 
 > **Current implementation gap:** the checked-in Stage 2 bootstrap still generates the demo CA,
 > nginx server key, and client key as files under `/etc/citizen-registry/certs` inside the app
-> Confidential VM. Managed HSM currently holds only the confidential OS-disk CMK. Do not describe
+> Confidential VM. Managed HSM holds the confidential OS-disk CMK and DVR Storage CMK, but not the
+> default demo TLS keys. Do not describe
 > the deployed demo as HSM-backed PKI until `ssl_certificate_key` is configured through the
 > [Managed HSM TLS Offload Library](https://learn.microsoft.com/azure/key-vault/managed-hsm/tls-offload-library),
 > the CA signing operation is HSM-backed, and a live TLS handshake is verified against those keys.
@@ -117,7 +118,11 @@ flowchart LR
 
   subgraph AppVNet[App VNet - West Europe<br/>10.appOctet.0.0/16 - default 10.20.0.0/16]
     Bastion -->|Private 443| App[App Confidential VM<br/>10.appOctet.3.4<br/>SEV-SNP CPU + H100 CC]
+    BlobPe[DVR Blob private endpoint<br/>private DNS]
+    App -->|Read-only managed identity + HTTPS| BlobPe
   end
+
+  BlobPe --> Dvr[Private ZRS DVR Storage<br/>public and shared-key access disabled]
 
   subgraph SqlVNet[SQL VNet - North Europe<br/>10.sqlOctet.0.0/16 - default 10.21.0.0/16]
     Sql[SQL Confidential VM<br/>10.sqlOctet.4.5<br/>SEV-SNP + SQL Server 2022]
@@ -131,6 +136,7 @@ flowchart LR
 
   App -->|Private Link through peering| HsmPe
   HsmPe --> Hsm[Customer Managed HSM<br/>public access disabled]
+  Hsm -->|Storage encryption identity<br/>wrap and unwrap| Dvr
 ```
 
 Stage 2 deploys two Confidential VMs on separate, non-overlapping VNets: the NCC40ads H100
@@ -147,8 +153,7 @@ while mTLS protects changes in transit and SQL Server persists them on the confi
 ### GPU Deployment Configuration
 
 Resource names below use the placeholder `yourprefix`; substitute the prefix selected for your deployment.
-The West Europe NCC40 quota and SKU availability were verified, but this new GPU application
-configuration has not yet been deployed end to end.
+The West Europe NCC40 deployment and private DVR workflow have been validated end to end.
 
 | Resource | Validated value |
 |---|---|
@@ -163,6 +168,8 @@ configuration has not yet been deployed end to end.
 | Database | Connected; 100 fictional records with CRUD operations |
 | Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
 | Confidential GPU | H100 production CC mode plus successful nvtrust GPU attestation |
+| DVR Storage | Private ZRS Blob account, Managed HSM CMK, infrastructure encryption, TLS 1.2, default deny |
+| DVR access | Dedicated writer identity; analyzer identity is read-only; no shared-key authentication |
 
 ### Live CMK and Secure Key Release Evidence
 
@@ -333,7 +340,7 @@ of the confidential processing pass. Select **Show video source and decryption k
 inspect non-secret Blob and Managed HSM key identifiers and the enforced access model. The panel
 never returns credentials, SAS tokens, account keys, wrapped data keys, or key material.
 
-![Confidential CCTV page showing synchronized source and H100-anonymized feeds with the Pause comparison control](docs/images/confidential-cctv-pause-comparison.png)
+![Confidential CCTV page showing synchronized source and H100-anonymized feeds with expanded private DVR and Managed HSM encryption details](docs/images/confidential-cctv-pause-comparison.png)
 
 *Completed confidential processing run with current-boot H100 evidence, frame lag, processing
 rate, face count, synchronized source and anonymized video, and a control that pauses both feeds.*
@@ -412,8 +419,8 @@ curl -fsS http://127.0.0.1:8000/cctv/status | python3 -m json.tool
 
 ### Source Media and Licensing
 
-The `source-media/london-marathon-2026-close-faces.mp4` video is a 33.5-second,
-1280x720 close-angle excerpt from `00:01:25` through `00:01:58.5` of:
+The DVR object `cctv-dvr/london-marathon-2026-close-faces.mp4` is a 33.5-second, 1280x720
+close-angle excerpt from `00:01:25` through `00:01:58.5` of:
 
 - **Title:** [2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe](https://commons.wikimedia.org/wiki/File:2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm)
 - **Creator:** Acabashi
@@ -424,6 +431,10 @@ Suggested attribution: Close-angle excerpt adapted from `2026 London Marathon Up
 Street from Blackfriars Bridge and Queenhithe` by Acabashi, licensed under CC BY-SA 4.0, via
 Wikimedia Commons. Changes: trimmed to the sustained close-angle sequence, resized to 1280x720,
 converted to 24 fps and browser-compatible H.264 MP4, and audio removed.
+
+Deployment downloads the hash-pinned original to a temporary ingest path, creates this excerpt,
+uploads it to private Blob Storage with recipe and SHA-256 metadata, downloads a verified analyzer
+cache to the encrypted data disk, and removes the temporary source and prepared files.
 
 CC BY-SA 4.0 permits sharing and adaptation, including commercial use. Reusers must give
 appropriate credit, link to the license, indicate whether changes were made, and distribute
@@ -453,9 +464,13 @@ flowchart TB
       BastionSubnet[AzureBastionSubnet<br/>10.appOctet.2.0/24]
       AppSubnet[App subnet<br/>10.appOctet.3.0/24]
       AppCvm[App Confidential VM<br/>Flask + nginx + FFmpeg<br/>SEV-SNP + H100 CC]
+      BlobPe2[DVR Blob private endpoint<br/>private DNS]
       Bastion --> BastionSubnet -->|Private 22 or 443| AppCvm
       AppCvm --- AppSubnet
+      AppCvm -->|Blob Data Reader| BlobPe2
     end
+    Dvr2[Private ZRS DVR Blob Storage<br/>Managed HSM CMK]
+    BlobPe2 --> Dvr2
     Maa[Azure Attestation provider<br/>metadata endpoint + CVM attestation support]
   end
 
@@ -478,7 +493,7 @@ flowchart TB
   end
 
   AppCvm -->|Private Link through peering| PrivateEndpoint
-  SqlCvm -->|Private Link through peering| PrivateEndpoint
+  Hsm -->|CMK wrap and unwrap| Dvr2
 ```
 
 ### Simplified Data Flow Architecture
@@ -491,15 +506,18 @@ flowchart LR
     Nginx[nginx<br/>TLS 1.2 or 1.3 termination<br/>optional client-certificate verification]
     Flask[Gunicorn + Flask<br/>registry APIs and status]
     Worker[Anonymizer service<br/>FFmpeg + MTCNN + blur + HLS]
+    Cache[SHA-256-verified source cache<br/>encrypted data disk]
     Cpu[AMD SEV-SNP protected CPU memory]
     Gpu[NVIDIA H100<br/>production CC mode + current-boot attestation]
     Nginx -->|Guest-local HTTP| Flask
-    Worker --> Cpu
+    Cache --> Worker --> Cpu
     Worker -->|Face detection| Gpu
   end
 
   Browser <-->|HTTPS<br/>negotiated authenticated encryption| Nginx
   Flask -->|TLS over private peering| Sql[SQL Confidential VM<br/>SEV-SNP]
+  Dvr[Private DVR Blob Storage<br/>durable source of record] -->|Private Link + read-only identity<br/>atomic verified download| Cache
+  DvrKey[Managed HSM DVR CMK] -->|Storage encryption identity| Dvr
   AppDisk[Confidential OS disk<br/>customer-managed encryption] --> AppTee
   SqlProtection[SQL guest-state protection<br/>VMGuestStateOnly + encryption at host] --> Sql
   Hsm[Customer Managed HSM<br/>OS-disk RSA-HSM CMK] -->|Attestation-bound key release| AppDisk
@@ -522,8 +540,14 @@ flowchart TB
     AppNsg[App NSG<br/>in: 22/443 from Bastion subnet<br/>out: 1433 to DB subnet<br/>deny inbound Internet]
     AppSubnet3[App subnet + NAT gateway<br/>default 10.20.3.0/24]
     AppVm3[App Confidential VM<br/>private IP only]
+    BlobDns3[Private DNS<br/>privatelink.blob.core.windows.net]
+    BlobPe3[DVR Blob private endpoint<br/>dynamic private IP]
     BastionNsg --> Bastion3 --> AppNsg --> AppSubnet3 --> AppVm3
+    BlobDns3 --> BlobPe3
+    AppVm3 -->|HTTPS + managed identity| BlobPe3
   end
+
+  BlobPe3 --> Dvr3[Private ZRS DVR Storage<br/>public network disabled]
 
   Internet -->|Authenticated Bastion session| BastionNsg
 
@@ -591,12 +615,19 @@ Creates resource group: **`{prefix}{random5digit}app`** (e.g., `yourprefix18447a
   - Supports confidential-compute verification and secure key release
   - Publishes provider metadata for explicit guest-attestation integrations
   - Does not issue the current demo TLS certificates
+- **Private DVR Blob Storage** — durable CCTV source of record
+  - ZRS, infrastructure encryption, HTTPS/TLS 1.2, and seven-day soft delete
+  - Public network, anonymous Blob, and shared-key access disabled
+  - Blob Private Endpoint and private DNS in the app VNet
+  - Managed HSM CMK through a dedicated Storage encryption identity
+  - Dedicated writer identity and read-only analyzer identity
 
 **Security Model:**
 ```mermaid
 flowchart LR
     User2[Customer browser] -->|HTTPS through Bastion tunnel<br/>mTLS for protected CRUD| App2[App CVM<br/>SEV-SNP + attested H100]
     App2 -->|Private TLS 1433| Db2[SQL CVM<br/>SEV-SNP]
+    Dvr2[Private DVR Blob Storage<br/>HSM CMK] -->|Private Link + read-only identity| App2
     Hsm2[Managed HSM<br/>app OS-disk CMK] -->|Attestation-bound release| App2
     Pki2[Target HSM-backed PKI] -.->|TLS Offload not deployed yet| App2
 ```
@@ -614,6 +645,9 @@ flowchart TB
   Hsm4[Customer Managed HSM<br/>FIPS 140-3 Level 3]
   AppDisk4[App confidential OS disk]
   SqlProtection4[SQL VMGuestStateOnly<br/>+ encryption at host]
+  Dvr4[Private ZRS DVR Blob Storage]
+  DvrKey4[Non-exportable DVR RSA-HSM CMK]
+  Cache4[Verified analyzer cache<br/>encrypted data disk]
 
   Browser4 <-->|HTTPS: TLS 1.2 or 1.3<br/>cipher and ephemeral session keys negotiated| Nginx4
   Nginx4 -->|Guest-local HTTP on loopback| Flask4
@@ -621,6 +655,8 @@ flowchart TB
   Flask4 -->|HTTPS with managed identity<br/>Private Link| Hsm4
   Hsm4 -->|RSA-HSM CMK<br/>attestation-bound release| AppDisk4
   AppDisk4 --> Flask4
+  DvrKey4 -->|Wrap and unwrap via Storage identity| Dvr4
+  Dvr4 -->|Private Link + Blob Data Reader| Cache4 --> Flask4
   SqlProtection4 --> Sql4
 
   AppMemory4[AMD SEV-SNP<br/>app CPU memory protection] --- Flask4
@@ -777,11 +813,14 @@ THREAT MODEL: What's Protected
 
     ✅ PROTECTED:
        • App OS disk with HSM-backed confidential disk encryption
+      • DVR source Blob with HSM-backed encryption and infrastructure encryption
+      • DVR access through Private Link and separate least-privilege identities
        • SQL guest state plus encryption at host
        • Data in transit on network (TLS 1.2/1.3)
        • Data in memory (SEV-SNP CPU encryption)
        • Confidential VM OS (confidential OS disk)
        • App OS-disk CMK (non-exportable Managed HSM custody)
+      • DVR Storage CMK (non-exportable Managed HSM custody)
        • Network traffic from interception
        • Hypervisor from accessing guest memory
 
@@ -820,12 +859,18 @@ flowchart TB
     Auditor5[App managed identity<br/>Crypto Auditor on this key]
     AppDisk5[App confidential OS disk]
     LocalPki5[File-backed demo CA + nginx key<br/>inside app CVM]
+    DvrKey5[DVR Storage RSA-HSM key<br/>3072 bit; wrapKey and unwrapKey]
+    StorageIdentity5[Storage encryption identity<br/>Crypto Service Encryption User]
+    DvrStorage5[Private ZRS DVR Blob Storage]
 
     Hsm5 --- OsKey5
     Des5 -->|Wrap and unwrap| OsKey5
     Orchestrator5 -->|Policy-bound release| OsKey5
     Auditor5 -->|Read metadata and SKR policy| OsKey5
     OsKey5 -->|Customer-managed disk encryption| AppDisk5
+    Hsm5 --- DvrKey5
+    StorageIdentity5 -->|Wrap and unwrap| DvrKey5
+    DvrKey5 -->|Storage service encryption| DvrStorage5
     LocalPki5 -.->|Current gap: not HSM-backed| Hsm5
   end
 
@@ -1030,12 +1075,15 @@ $Location = "northeurope"
 
 **What it does:**
 1. Creates app instance RG
-2. Provisions Confidential VM (C-vn2 TEE)
+2. Provisions the H100 Confidential GPU VM and SQL Confidential VM
 3. Installs citizen-registry app
 4. Configures mTLS with Azure Attestation
 5. Sets up Bastion for secure access
 6. Establishes private link to shared Managed HSM
 7. Seeds database with demo citizen records
+8. Creates private ZRS DVR Storage with a Managed HSM CMK and Private Endpoint
+9. Assigns separate writer and read-only analyzer identities
+10. Uploads the normalized source with integrity metadata, then downloads a verified analyzer cache
 
 ### Step 3: Access the App via Bastion
 
@@ -1125,6 +1173,7 @@ curl -k --cert citizen.crt --key citizen.key https://localhost/health
 # - Norland demo mTLS certificate configuration
 # - Azure Attestation provider metadata reachability
 # - Managed HSM CMK and decoded Secure Key Release policy evidence
+# - Private DVR Blob source and non-secret Storage CMK identifiers
 ```
 
 ### Cleanup
@@ -1142,12 +1191,15 @@ curl -k --cert citizen.crt --key citizen.key https://localhost/health
 ```
 citizen-registry-advanced/
 ├── README.md                          # This file
+├── ARCHITECTURE.md                    # Detailed topology and trust boundaries
+├── QUICKSTART.md                      # Deployment and verification runbook
 ├── Deploy-SharedInfra.ps1            # Stage 1: Shared HSM + VNet
 ├── Deploy-AppInstance.ps1            # Stage 2: CVM + Bastion + App
 ├── .gitignore                         # Excludes certificates, keys, secrets
 ├── bicep/
 │   ├── shared-infra.bicep            # Managed HSM + private link
-│   ├── app-instance.bicep            # Confidential VM + networking
+│   ├── app-instance.bicep            # Stage 2 composition
+│   ├── dvr-storage.bicep             # Private DVR Storage + CMK + RBAC
 │   ├── attestation.bicep             # Azure Attestation Service
 │   ├── bastion.bicep                 # Bastion host
 │   └── parameters/
@@ -1159,8 +1211,10 @@ citizen-registry-advanced/
 ├── app-instance/
 │   ├── app-src/                      # Citizen registry app code
 │   │   ├── app.py
+│   │   ├── dvr_storage.py             # Managed-identity transfer and integrity verification
+│   │   ├── video_anonymizer.py        # Attestation-gated H100 worker
 │   │   ├── nginx.conf                # Reverse proxy config (mTLS)
-│   │   └── templates/index.html      # Security evidence UI
+│   │   └── templates/                # Registry and CCTV UIs
 └── shared-infra/
     ├── certificates/                 # (gitignored) mTLS certs
     └── security-domain/              # (gitignored) HSM domain backup
@@ -1180,15 +1234,25 @@ See `.gitignore` for complete exclusion list.
 ### ✅ Private Link Only
 
 - Managed HSM — **no public IP**
+- DVR Blob Storage — **public network access disabled; Private Endpoint only**
 - App CVM — **no public IP** (Bastion tunnels inbound)
 - Database — **private subnet only**
 - All inter-service TLS encrypted
+- Blob anonymous and shared-key authentication disabled; managed identity only
 
 ### ✅ Confidential OS Disk Encryption
 
 - CVM disk encrypted at rest (AES-256)
 - Key stored in Managed HSM
 - Disk Encryption Set uses a Managed HSM key with a secure key release policy bound to attestation
+
+### ✅ Private DVR Encryption
+
+- ZRS Blob Storage uses Storage service encryption with infrastructure encryption
+- A separate non-exportable Managed HSM key wraps the Storage account encryption key
+- The Storage encryption identity alone receives HSM wrap/unwrap permission
+- The DVR writer and analyzer reader receive separate Storage data-plane roles
+- Downloaded footage is SHA-256 verified before atomic cache replacement
 
 ### ✅ Attestation Evidence and Demo mTLS
 
@@ -1227,6 +1291,7 @@ DEPLOYMENT: North Europe (validated default)
 DATA LOCATION GUARANTEES:
 ├─ App Data: Stored on ACC in deployment region
 ├─ Managed HSM: Deployed in specified region
+├─ DVR footage: ZRS Blob Storage in the app deployment region
 ├─ Database: SQL Server on ACC (same region)
 ├─ Backups: Can be geo-replicated via SQL settings
 └─ Result: All data stays within chosen region

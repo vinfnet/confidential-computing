@@ -10,7 +10,11 @@ flowchart LR
 
   subgraph AppVNet[App VNet - West Europe<br/>default 10.20.0.0/16]
     Bastion -->|Private 443| App[App Confidential VM<br/>Standard_NCC40ads_H100_v5<br/>default 10.20.3.4]
+      BlobPe[DVR Blob private endpoint<br/>dynamic private IP]
+      App -->|Managed identity + HTTPS| BlobPe
   end
+
+   BlobPe --> Dvr[Private ZRS DVR Blob Storage<br/>public and shared-key access disabled]
 
   subgraph SqlVNet[SQL VNet - North Europe<br/>default 10.21.0.0/16]
     Sql[SQL Confidential VM<br/>Standard_DC2as_v5<br/>default 10.21.4.5]
@@ -22,6 +26,7 @@ flowchart LR
 
   App -->|Encrypted SQL connection<br/>TCP 1433 over global VNet peering| Sql
   App -->|Private endpoint access| HsmPe
+   Hsm -->|Wrap and unwrap Storage encryption key| Dvr
 ```
 
 The app and SQL Server run on separate Confidential VMs and separate regional VNets. Global VNet
@@ -29,6 +34,12 @@ peering carries the private SQL connection; neither VM has a public IP. The app 
 AMD SEV-SNP confidential CPU boundary with an NVIDIA H100 in production confidential-computing
 mode. Bastion provides workstation access, and the app reaches Managed HSM through its private
 endpoint in the shared VNet.
+
+The durable CCTV source of record is a ZRS Blob Storage account in the Stage 2 resource group.
+Its Blob endpoint is reachable only through a Private Endpoint in the app VNet. A dedicated DVR
+writer identity uploads prepared footage; the app identity has read-only Blob access and downloads
+an atomic SHA-256-verified processing cache to the encrypted data disk. Storage service encryption
+uses a separate non-exportable RSA-HSM customer-managed key and encryption identity.
 
 ## Data Flow & Security
 
@@ -98,7 +109,26 @@ SQL Server Confidential VM
    └─ Private SQL subnet only
 ```
 
-### 3. App → Managed HSM (Private Link + mTLS)
+### 3. DVR → Analyzer (Private Link + Managed Identity)
+
+```mermaid
+flowchart LR
+   Feed[Simulated CCTV feed<br/>hash-pinned source] -->|Trim, normalize, remove audio| Prepared[Prepared DVR object]
+   Writer[DVR writer identity<br/>Blob Data Contributor] -->|Upload + recipe and SHA-256 metadata| Blob[(Private ZRS Blob Storage)]
+   Prepared --> Writer
+   Hsm[Managed HSM<br/>non-exportable RSA-HSM key] -->|CMK wrap and unwrap<br/>Storage encryption identity only| Blob
+   Blob -->|Private Endpoint + Blob Data Reader| Analyzer[Confidential app VM]
+   Analyzer -->|Atomic download + SHA-256 verification| Cache[Encrypted data-disk cache]
+   Cache --> Worker[Attestation-gated H100 anonymizer]
+```
+
+The application never receives the Storage encryption key or HSM key material. It receives
+plaintext only after Azure Storage decrypts an authorized Blob read, then verifies the object
+against its `source_sha256` metadata before atomically replacing the local cache. Temporary ingest
+files are deleted after upload. The UI technical-details endpoint exposes only resource names,
+network and authentication modes, key identifiers, operations, and exportability.
+
+### 4. App → Managed HSM (Private Link + Managed Identity)
 
 ```
 Flask App
@@ -159,6 +189,8 @@ Managed HSM
 | Layer | Type | Keys | Protection |
 |-------|------|------|-----------|
 | **App OS disk** | AES-256 (at rest) | Managed HSM-backed customer-managed key | Disk Encryption Set |
+| **DVR source Blob** | Storage service encryption + infrastructure encryption | Managed HSM-backed customer-managed key | ZRS Storage; private endpoint only |
+| **Analyzer cache** | Managed disk encryption at rest | App data-disk encryption boundary | Atomic SHA-256-verified local copy |
 | **SQL VM storage** | Encryption at host | Platform-managed keys | Encrypts data through the Azure storage path |
 | **Browser network** | TLS 1.2/1.3 (in transit) | Customer-issued server and client certificates | mTLS for protected CRUD operations |
 | **SQL network** | TLS (in transit) | SQL Server certificate | Encrypted private connection over global VNet peering |
@@ -177,7 +209,8 @@ Internet ━━━━ BLOCKED ━━━━━ (No public access to resources)
             └─→ Private VNet (10.0.0.0/16)
                 │
                 ├─→ App Subnet (10.0.3.0/24)
-                │   └─ CVM (no public IP)
+                │   ├─ CVM (no public IP)
+                │   └─ DVR Blob private endpoint
                 │
                 ├─→ DB Subnet (10.0.4.0/24)
                 │   └─ Database (no public IP)
@@ -190,6 +223,7 @@ NSG Rules (Explicit Allow):
   • App ← Bastion (port 22, 3389)
   • Database ← App (port 1433)
   • HSM ← App (port 443, private link)
+   • DVR Blob ← App (port 443, private endpoint and private DNS)
 ```
 
 ### 4. Managed Identity Permissions
@@ -197,12 +231,13 @@ NSG Rules (Explicit Allow):
 ```
 Confidential VM (Managed Identity: cvm-identity)
     │
-    ├─→ RBAC on Managed HSM
-    │   └─ Role: Managed HSM Crypto User
-    │      ├─ Get keys/secrets
-    │      ├─ Sign operations
-    │      ├─ Wrap/Unwrap keys
-    │      └─ List permissions
+   ├─→ RBAC on Managed HSM
+   │   └─ Managed HSM Crypto Auditor on the OS-disk key
+   │      └─ Read non-secret key metadata and release policy only
+   │
+   ├─→ RBAC on DVR Storage
+   │   └─ Storage Blob Data Reader at Storage account scope
+   │      └─ Download source footage; cannot upload or delete
     │
     ├─→ RBAC on Database
     │   └─ SQL Login: sqladmin
@@ -213,6 +248,14 @@ Confidential VM (Managed Identity: cvm-identity)
     └─→ RBAC on Attestation Service
         └─ Role: Attestation Reader (via policy)
            └─ Read attestation tokens
+
+   DVR writer identity
+      └─→ Storage Blob Data Contributor at Storage account scope
+         └─ Upload the prepared source and integrity metadata
+
+   Storage encryption identity
+      └─→ Managed HSM Crypto Service Encryption User on the DVR key
+         └─ Wrap and unwrap Storage account encryption keys
 ```
 
 ## Deployment Process
@@ -270,21 +313,34 @@ Confidential VM (Managed Identity: cvm-identity)
    │  └─ SSH key-based auth
    ├─ Database (SQL Server on ACC)
    ├─ Bastion host
-   └─ Attestation Service
+   ├─ Attestation Service
+   ├─ Private ZRS DVR Storage account
+   │  ├─ Public network, anonymous Blob, and shared-key access disabled
+   │  ├─ Infrastructure encryption and Managed HSM CMK
+   │  ├─ Seven-day Blob and container soft delete
+   │  └─ Blob Private Endpoint and private DNS
+   └─ DVR writer, analyzer reader, and Storage encryption identities
 
-4. Configure mTLS
+4. Seed Private DVR Source
+   ├─ Normalize the hash-pinned source to the finite MP4
+   ├─ Upload with the DVR writer identity and integrity metadata
+   ├─ Download with the analyzer identity through Private Link
+   └─ Delete temporary ingest files after verified cache replacement
+
+5. Configure mTLS
    └─ Cloud-init creates the Norland demo PKI and installs nginx configuration
 
-5. Setup Bastion
+6. Setup Bastion
    └─ Bicep deploys Standard Bastion with tunneling enabled
 
-6. Seed Database
+7. Seed Database
    └─ App migration creates the expanded schema and 100 fictional records
 
-7. Output App Resources
+8. Output App Resources
    ├─ CVM ID & private IP
    ├─ Bastion endpoint
    ├─ Attestation service URI
+   ├─ DVR Blob URI and identity client ID
    └─ Connection strings
 ```
 
@@ -305,6 +361,8 @@ Confidential VM (Managed Identity: cvm-identity)
 | 2.5 | Database Server | 90s | SQL install |
 | 2.6 | Bastion | 30s | Deploy host |
 | 2.7 | Attestation Service | 15s | Create provider |
+| 2.8 | DVR Storage + Private Link | 30-90s | Policy evaluation, CMK, DNS, and RBAC |
+| 2.9 | DVR ingest and cache | Source dependent | Normalize, upload, download, and verify |
 | **Total Stage 2** | | **~5-7 min** | App ready |
 
 ## File Structure & Purposes
@@ -320,17 +378,21 @@ citizen-registry-advanced/
 │
 ├─ bicep/
 │  ├─ shared-infra.bicep              # Managed HSM + VNet deployment
-│  └─ app-instance.bicep              # CVM + DB + Bastion deployment
+│  ├─ app-instance.bicep              # Stage 2 composition
+│  └─ dvr-storage.bicep               # Private CMK-backed DVR Storage + RBAC
 │
 ├─ scripts/
 │  ├─ initialize-hsm.ps1              # HSM security domain setup
 │  └─ seed-database.ps1               # Database initialization
 │
 └─ app-instance/app-src/
-   ├─ app.py                          # Flask app (450 lines)
+   ├─ app.py                          # Flask app and safe DVR details API
+   ├─ dvr_storage.py                  # Managed-identity Blob transfer + integrity checks
+   ├─ video_anonymizer.py             # Attestation-gated CCTV worker
    ├─ nginx.conf                      # Reverse proxy (mTLS config)
    └─ templates/
-      └─ index.html                   # Web UI
+      ├─ index.html                   # Registry UI
+      └─ cctv.html                    # Synchronized CCTV comparison and details
 ```
 
 ## Performance & Scalability
@@ -368,7 +430,13 @@ validation, and database consistency while adding those capabilities.
    ├─ Geo-redundant: Yes (paired region)
    └─ Point-in-time restore: Supported
 
-3. Application Code
+3. DVR footage
+   ├─ ZRS durability within the deployment region
+   ├─ Seven-day Blob and container soft delete
+   ├─ CMK recovery depends on Managed HSM backup and key retention
+   └─ This sample does not configure cross-region Blob replication
+
+4. Application Code
    ├─ Git repository: GitHub (public)
    ├─ Secrets: Git-ignored (not in repo)
    ├─ Configuration: Key Vault (HSM-backed)
@@ -390,7 +458,8 @@ Recovery Point Objective (RPO): 1 hour (database backup)
 
 These are planning estimates, not quotes. The SQL CVM and SQL Server licensing, Bastion, disks,
 Private Link, VNet peering, monitoring, and data transfer are additional. Managed HSM has no
-stopped state and continues hourly billing while provisioned. See the [README cost warning and
+stopped state and continues hourly billing while provisioned. ZRS Storage capacity, operations,
+Private Endpoint, and private DNS also incur charges. See the [README cost warning and
 live pricing links](README.md#cost-warning-and-controls) before deployment.
 
 ### Cost-Saving Options

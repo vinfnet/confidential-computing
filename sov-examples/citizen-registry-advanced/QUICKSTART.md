@@ -18,6 +18,8 @@ This guide walks you through deploying the citizen registry advanced app with ma
 # - Bicep CLI — az bicep install
 # - Git for version control
 # - 40 available Standard NCCads2023 Family vCPUs in West Europe
+# - Permission to create role assignments, such as Owner or User Access Administrator
+#   activated through PIM while Stage 2 assigns the DVR writer and reader roles
 
 # Verify installations
 az --version
@@ -114,6 +116,7 @@ access to that generated key, and refuses to start nginx with a file-backed serv
 - Private ZRS DVR Blob Storage with a Managed HSM customer-managed key
 - Separate DVR writer and read-only analyzer managed identities
 - Blob Private Endpoint and private DNS; public and shared-key access disabled
+- Infrastructure encryption, seven-day Blob/container soft delete, and OAuth-only data access
 
 The script validates NCC40 availability and 40-vCPU family quota before creating the app
 resource group. It then uses the checksum-pinned Azure CGPU onboarding V4.3.3 release to:
@@ -176,7 +179,8 @@ and Delete. The client private key remains in the customer's browser/OS keystore
 endpoint credential.
 
 > **Current implementation gap:** Stage 2 still creates file-backed demo CA, server, and client keys
-> inside the app Confidential VM; only the confidential OS-disk CMK is currently in Managed HSM.
+> inside the app Confidential VM. Managed HSM protects both the confidential OS-disk CMK and the
+> DVR Storage CMK, but not the default demo TLS keys.
 > Complete and verify the [Managed HSM TLS Offload Library](https://learn.microsoft.com/azure/key-vault/managed-hsm/tls-offload-library)
 > integration before representing a deployment as HSM-backed PKI.
 
@@ -221,17 +225,33 @@ curl -sk https://localhost/health | jq .
 curl -sk https://localhost/db/status | jq .
 curl -sk https://localhost/config | jq '.environment'
 curl -sk https://localhost/security/evidence | jq .
+curl -sk https://localhost/cctv/technical-details | jq .
 
 # From the deployment workstation, verify the confidential Disk Encryption Set.
 az disk-encryption-set show `
   --resource-group <app-resource-group> `
   --name <disk-encryption-set-name> `
   --query '{id:id,encryptionType:encryptionType,identity:identity.principalId}'
+
+# Verify the DVR Storage network and authentication posture.
+az storage account show `
+  --resource-group <app-resource-group> `
+  --name <dvr-storage-account> `
+  --query '{sku:sku.name,publicNetworkAccess:publicNetworkAccess,allowSharedKeyAccess:allowSharedKeyAccess,allowBlobPublicAccess:allowBlobPublicAccess,defaultToOAuthAuthentication:defaultToOAuthAuthentication,minimumTlsVersion:minimumTlsVersion,defaultAction:networkRuleSet.defaultAction,infrastructureEncryption:encryption.requireInfrastructureEncryption,keySource:encryption.keySource}'
+
+# Verify least-privilege data-plane roles at Storage account scope.
+$storageId = az storage account show -g <app-resource-group> -n <dvr-storage-account> --query id -o tsv
+az role assignment list --scope $storageId `
+  --query '[].{role:roleDefinitionName,principalId:principalId}' -o table
 ```
 
 Expected results include health status `healthy`, database record count `100`, CMK evidence
 status `retrieved`, key type `RSA-HSM`, the decoded Secure Key Release policy, and the Managed
-HSM hostname resolving privately to `10.10.1.x`.
+HSM hostname resolving privately to `10.10.1.x`. DVR details should report managed-identity
+authentication, Blob Private Link only, Azure Managed HSM, and `exportable: false`. Storage should
+report `Standard_ZRS`, public/shared-key/anonymous access disabled, default network action `Deny`,
+and infrastructure encryption enabled. The role list should contain one Blob Data Contributor for
+the DVR writer and one Blob Data Reader for the analyzer identity.
 
 ## 🏗️ Architecture Components
 
@@ -251,6 +271,10 @@ HSM hostname resolving privately to `10.10.1.x`.
 | **SQL Confidential VM** | SQL Server data persistence | Separate private SQL VNet, SEV-SNP, and encryption at host |
 | **Bastion Host** | Secure admin access | No public IPs on resources |
 | **Attestation Service** | Provider metadata and guest-attestation integration | Metadata health is separate from CVM boot attestation |
+| **DVR Blob Storage** | Durable CCTV source of record | ZRS, infrastructure encryption, Managed HSM CMK, Private Endpoint only |
+| **DVR writer identity** | Upload normalized footage and integrity metadata | Blob Data Contributor at Storage account scope |
+| **Analyzer identity** | Download source footage into confidential processing cache | Blob Data Reader at Storage account scope |
+| **Storage encryption identity** | Allow Storage to use the DVR CMK | HSM wrap/unwrap on the DVR key only |
 
 ## 📊 Cost Estimate
 
@@ -261,7 +285,7 @@ HSM hostname resolving privately to `10.10.1.x`.
 | **Core subtotal** | **$12.10/hour** | **$96.80** | **$8,833** |
 
 These are planning estimates, not quotes. SQL Server licensing and compute, Bastion, disks,
-Private Link, VNet peering, logs, and data transfer are additional. Check the
+Private Link, VNet peering, ZRS Storage capacity/operations, logs, and data transfer are additional. Check the
 [README cost guidance and live pricing links](README.md#cost-warning-and-controls) immediately
 before deployment.
 
@@ -331,6 +355,29 @@ az network nsg rule list `
 
 Ensure rule allows inbound from Bastion subnet (`10.0.2.0/24`).
 
+### DVR Role Assignment Is Denied
+
+Stage 2 requires permission to create two Storage data-plane assignments. If deployment reports
+`Microsoft.Authorization/roleAssignments/write`, activate an eligible **User Access Administrator**
+or **Owner** PIM role at the app resource-group or subscription scope, refresh Azure CLI credentials
+if required, and rerun with the same `-DeploymentSuffix` and `-ResumePostDeploy`. Do not enable
+shared-key access or public networking as a workaround.
+
+### DVR Blob Download or DNS Fails
+
+From the app CVM, verify that the Blob hostname resolves privately and that the managed identities
+are attached. The address is dynamically assigned and should be private; do not hardcode it.
+
+```bash
+getent ahostsv4 <dvr-storage-account>.blob.core.windows.net
+curl -fsS http://127.0.0.1:8000/cctv/technical-details | python3 -m json.tool
+systemctl status citizen-registry citizen-cctv-anonymizer --no-pager
+```
+
+Check the Private Endpoint connection, private DNS zone group, writer/reader role assignments, and
+Blob metadata. The downloader rejects a SHA-256 mismatch and preserves the previously verified
+cache rather than replacing it with corrupt content.
+
 ### mTLS Certificate Issues
 
 The Norland demo CA, server certificate, and client certificate are generated by the app
@@ -362,6 +409,8 @@ fully restart the browser. See [README Step 4](README.md#step-4-install-the-demo
 - Enable Bastion for all admin access
 - Regularly rotate certificates
 - Monitor attestation logs
+- Keep Blob public access, shared-key access, and public networking disabled
+- Scope DVR writer, analyzer reader, and HSM encryption permissions to their required resources
 
 ❌ **Don't:**
 - Expose HSM public IP (private link only)
@@ -369,6 +418,7 @@ fully restart the browser. See [README Step 4](README.md#step-4-install-the-demo
 - Use default database credentials
 - Disable Confidential OS disk encryption
 - Skip mTLS certificate validation
+- Use account keys or SAS tokens for the DVR pipeline
 
 ---
 
