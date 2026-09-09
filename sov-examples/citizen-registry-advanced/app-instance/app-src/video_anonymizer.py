@@ -86,6 +86,9 @@ class FaceBoxTracker:
         self._tracks = current
         return [box for box, _ in current]
 
+    def current(self):
+        return [box for box, _ in self._tracks]
+
 
 def blur_face_regions(image, boxes):
     from PIL import ImageFilter
@@ -117,11 +120,37 @@ class AnonymizerConfig:
     status_path: Path
     width: int = 1280
     height: int = 720
-    fps: int = 12
+    fps: int = 24
+    detection_fps: int = 12
+    detection_batch_size: int = 4
     confidence_threshold: float = 0.90
     box_margin: float = 0.20
     hold_frames: int = 3
     playlist_size: int = 6
+    h264_preset: str = 'fast'
+    h264_crf: int = 20
+
+    def __post_init__(self):
+        if self.fps <= 0:
+            raise ValueError('CCTV output FPS must be positive')
+        if self.detection_fps <= 0 or self.detection_fps > self.fps:
+            raise ValueError('CCTV face detection FPS must be between 1 and output FPS')
+        if self.detection_batch_size <= 0 or self.detection_batch_size > 16:
+            raise ValueError('CCTV detection batch size must be between 1 and 16')
+        if self.h264_crf < 0 or self.h264_crf > 51:
+            raise ValueError('CCTV H.264 CRF must be between 0 and 51')
+        if self.h264_preset not in {
+                'ultrafast', 'superfast', 'veryfast', 'faster', 'fast',
+                'medium', 'slow', 'slower', 'veryslow'}:
+            raise ValueError('Unsupported CCTV H.264 preset')
+
+    @property
+    def detection_interval(self):
+        return max(1, round(self.fps / self.detection_fps))
+
+    @property
+    def frame_batch_size(self):
+        return self.detection_interval * self.detection_batch_size
 
     @classmethod
     def from_environment(cls):
@@ -136,12 +165,17 @@ class AnonymizerConfig:
             status_path=root / 'status.json',
             width=int(os.environ.get('CCTV_OUTPUT_WIDTH', '1280')),
             height=int(os.environ.get('CCTV_OUTPUT_HEIGHT', '720')),
-            fps=int(os.environ.get('CCTV_OUTPUT_FPS', '12')),
+            fps=int(os.environ.get('CCTV_OUTPUT_FPS', '24')),
+            detection_fps=int(os.environ.get('CCTV_FACE_DETECTION_FPS', '12')),
+            detection_batch_size=int(os.environ.get(
+                'CCTV_FACE_DETECTION_BATCH_SIZE', '4')),
             confidence_threshold=float(os.environ.get(
                 'CCTV_FACE_CONFIDENCE', '0.90')),
             box_margin=float(os.environ.get('CCTV_FACE_MARGIN', '0.20')),
             hold_frames=int(os.environ.get('CCTV_FACE_HOLD_FRAMES', '3')),
             playlist_size=int(os.environ.get('CCTV_HLS_PLAYLIST_SIZE', '6')),
+            h264_preset=os.environ.get('CCTV_H264_PRESET', 'fast'),
+            h264_crf=int(os.environ.get('CCTV_H264_CRF', '20')),
         )
 
 
@@ -159,7 +193,7 @@ class VideoAnonymizer:
             f'pad={self.config.width}:{self.config.height}:(ow-iw)/2:(oh-ih)/2:black'
         )
         return [
-            'ffmpeg', '-hide_banner', '-loglevel', 'error', '-re',
+            'ffmpeg', '-hide_banner', '-loglevel', 'error',
             '-i', str(self.config.source_path), '-an',
             '-vf', video_filter, '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1',
         ]
@@ -171,7 +205,8 @@ class VideoAnonymizer:
             '-f', 'rawvideo', '-pixel_format', 'rgb24',
             '-video_size', f'{self.config.width}x{self.config.height}',
             '-framerate', str(self.config.fps), '-i', 'pipe:0', '-an',
-            '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+            '-c:v', 'libx264', '-preset', self.config.h264_preset,
+            '-crf', str(self.config.h264_crf), '-tune', 'zerolatency',
             '-pix_fmt', 'yuv420p', '-flags', '+cgop',
             '-g', str(self.config.fps), '-keyint_min', str(self.config.fps),
             '-sc_threshold', '0', '-f', 'hls', '-hls_time', '1',
@@ -244,6 +279,7 @@ class VideoAnonymizer:
         last_status_at = started_at
         try:
             confidential_gpu = verify_confidential_gpu(torch)
+            torch.backends.cudnn.benchmark = True
             detector = MTCNN(keep_all=True, device='cuda:0', post_process=False)
             tracker = FaceBoxTracker(self.config.hold_frames)
             decoder = self.process_factory(
@@ -257,8 +293,15 @@ class VideoAnonymizer:
             last_status_at = started_at
 
             while True:
-                frame_bytes = self._read_frame(decoder.stdout, frame_size)
-                if frame_bytes is None:
+                images = []
+                for _ in range(self.config.frame_batch_size):
+                    frame_bytes = self._read_frame(decoder.stdout, frame_size)
+                    if frame_bytes is None:
+                        break
+                    images.append(Image.frombytes(
+                        'RGB', (self.config.width, self.config.height), frame_bytes))
+
+                if not images:
                     encoder.stdin.close()
                     return_code = encoder.wait(timeout=30)
                     if return_code != 0:
@@ -276,44 +319,62 @@ class VideoAnonymizer:
                         frames_behind=0,
                         lag_scale_frames=self.config.fps * self.config.playlist_size,
                         output=f'{self.config.width}x{self.config.height}@{self.config.fps}',
-                        detector='facenet-pytorch MTCNN (detection only)',
+                        detector='facenet-pytorch MTCNN (batched detection only)',
+                        detection_fps=self.config.detection_fps,
+                        detection_batch_size=self.config.detection_batch_size,
                         confidence_threshold=self.config.confidence_threshold,
                         confidential_gpu=confidential_gpu,
                     )
                     break
-                image = Image.frombytes(
-                    'RGB', (self.config.width, self.config.height), frame_bytes)
-                with torch.inference_mode():
-                    boxes, probabilities = detector.detect(image)
-                detected_boxes = prepare_face_boxes(
-                    boxes, probabilities, self.config.width, self.config.height,
-                    self.config.confidence_threshold, self.config.box_margin)
-                tracked_boxes = tracker.update(detected_boxes)
-                anonymized = blur_face_regions(image, tracked_boxes)
-                encoder.stdin.write(anonymized.tobytes())
-                frames_processed += 1
-                faces_detected += len(detected_boxes)
 
-                current_time = time.monotonic()
-                if current_time - last_status_at >= 1:
-                    elapsed = max(current_time - started_at, 0.001)
-                    state = 'processing' if self.playlist_path.is_file() else 'starting'
-                    self.status.write(
-                        state,
-                        message='Confidential face anonymization is active',
-                        frames_processed=frames_processed,
-                        current_faces=len(detected_boxes),
-                        faces_detected=faces_detected,
-                        processing_fps=round(frames_processed / elapsed, 1),
-                        frames_behind=calculate_frames_behind(
-                            frames_processed, elapsed, self.config.fps),
-                        lag_scale_frames=self.config.fps * self.config.playlist_size,
-                        output=f'{self.config.width}x{self.config.height}@{self.config.fps}',
-                        detector='facenet-pytorch MTCNN (detection only)',
-                        confidence_threshold=self.config.confidence_threshold,
-                        confidential_gpu=confidential_gpu,
-                    )
-                    last_status_at = current_time
+                detection_indexes = [
+                    index for index in range(len(images))
+                    if (frames_processed + index) % self.config.detection_interval == 0
+                ]
+                with torch.inference_mode():
+                    batch_boxes, batch_probabilities = detector.detect(
+                        [images[index] for index in detection_indexes])
+                detections = dict(zip(
+                    detection_indexes, zip(batch_boxes, batch_probabilities)))
+
+                for index, image in enumerate(images):
+                    detected_boxes = []
+                    if index in detections:
+                        boxes, probabilities = detections[index]
+                        detected_boxes = prepare_face_boxes(
+                            boxes, probabilities, self.config.width,
+                            self.config.height, self.config.confidence_threshold,
+                            self.config.box_margin)
+                        tracked_boxes = tracker.update(detected_boxes)
+                    else:
+                        tracked_boxes = tracker.current()
+                    anonymized = blur_face_regions(image, tracked_boxes)
+                    encoder.stdin.write(anonymized.tobytes())
+                    frames_processed += 1
+                    faces_detected += len(detected_boxes)
+
+                    current_time = time.monotonic()
+                    if current_time - last_status_at >= 1:
+                        elapsed = max(current_time - started_at, 0.001)
+                        state = 'processing' if self.playlist_path.is_file() else 'starting'
+                        self.status.write(
+                            state,
+                            message='Confidential face anonymization is active',
+                            frames_processed=frames_processed,
+                            current_faces=len(tracked_boxes),
+                            faces_detected=faces_detected,
+                            processing_fps=round(frames_processed / elapsed, 1),
+                            frames_behind=calculate_frames_behind(
+                                frames_processed, elapsed, self.config.fps),
+                            lag_scale_frames=self.config.fps * self.config.playlist_size,
+                            output=f'{self.config.width}x{self.config.height}@{self.config.fps}',
+                            detector='facenet-pytorch MTCNN (batched detection only)',
+                            detection_fps=self.config.detection_fps,
+                            detection_batch_size=self.config.detection_batch_size,
+                            confidence_threshold=self.config.confidence_threshold,
+                            confidential_gpu=confidential_gpu,
+                        )
+                        last_status_at = current_time
         except Exception as error:
             logger.exception('CCTV anonymization failed')
             self._abort_process(encoder)

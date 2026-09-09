@@ -339,10 +339,10 @@ rate, face count, synchronized source and anonymized video, and a control that p
 The `citizen-cctv-anonymizer` systemd service:
 
 1. requires successful `citizen-gpu-attestation` evidence from the current VM boot;
-2. reads the hash-verified local MP4 once through FFmpeg at 1280x720 and 12 frames per second;
-3. runs detector-only `facenet-pytorch` MTCNN inference on `cuda:0`;
-4. expands and briefly tracks face regions, then applies a strong Gaussian blur; and
-5. publishes a complete, end-marked H.264 HLS playlist through nginx.
+2. reads the hash-verified local MP4 once through FFmpeg at 1280x720 and 24 frames per second;
+3. batches four equal-sized frames per `facenet-pytorch` MTCNN call on `cuda:0`, with a 12 fps detection cadence;
+4. reuses tracked regions between detector frames and applies a strong Gaussian blur at 24 frames per second; and
+5. publishes a complete, end-marked H.264 HLS playlist at CRF 20 through nginx.
 
 ```mermaid
 flowchart LR
@@ -351,11 +351,11 @@ flowchart LR
 
   subgraph AppCvm6[App Confidential VM]
     Gate6[Current-boot gate<br/>SEV-SNP attestation + H100 nvtrust]
-    Decode6[FFmpeg decode<br/>RGB24 at 12 fps]
-    Detect6[MTCNN face detection<br/>cuda:0 on H100 CC]
-    Track6[Expand + transient box tracking<br/>SEV-SNP CPU memory]
-    Blur6[Pillow Gaussian blur<br/>SEV-SNP CPU memory]
-    Encode6[FFmpeg H.264 HLS encode<br/>one-second segments]
+    Decode6[FFmpeg CPU decode<br/>RGB24 at 24 fps]
+    Detect6[Batched MTCNN face detection<br/>4 frames per call; cuda:0 at 12 fps]
+    Track6[Reuse + transient box tracking<br/>SEV-SNP CPU memory]
+    Blur6[Pillow Gaussian blur at 24 fps<br/>SEV-SNP CPU memory]
+    Encode6[FFmpeg CPU H.264 encode<br/>CRF 20; one-second segments]
     Playlist6[Finite end-marked presentation<br/>index.m3u8 + all numeric .ts files]
     Status6[Atomic non-sensitive status JSON]
     Nginx6[nginx HTTPS<br/>TLS 1.2 or 1.3]
@@ -373,6 +373,12 @@ flowchart LR
   Failure6[Attestation or processing failure]
   Failure6 -.->|No raw fallback;<br/>processed playlist withheld| Playlist6
 ```
+
+The worker processes the finite clip as fast as the system allows; FFmpeg is not throttled to
+wall-clock playback speed. Fixed-shape cuDNN autotuning and four-frame MTCNN batches improve H100
+utilization. Decode, box tracking, blur, and H.264 encoding remain in SEV-SNP-protected CPU memory.
+Although H100 exposes NVDEC, using it here would require returning decoded frames to CPU memory for
+Pillow and `libx264`; H100 has no NVENC engine to complete this pipeline on the GPU.
 
 The worker does not instantiate a recognition model, calculate embeddings, match identities,
 infer demographics, retain face crops, or store bounding boxes. Raw decoded frames remain in
@@ -485,8 +491,10 @@ flowchart LR
   SqlProtection[SQL guest-state protection<br/>VMGuestStateOnly + encryption at host] --> Sql
   Hsm[Customer Managed HSM<br/>OS-disk RSA-HSM CMK] -->|Attestation-bound key release| AppDisk
 
-  Target[Target PKI profile<br/>HSM-held CA and nginx signing keys]
-  Target -.->|Managed HSM TLS Offload<br/>not deployed yet| Nginx
+  Optional[Optional ManagedHsm mode<br/>HSM-held nginx signing key]
+  Optional -.->|Managed HSM TLS Offload<br/>opt-in deployment| Nginx
+  Target[Target production PKI<br/>HSM-held CA signing key]
+  Target -.->|Issuer workflow<br/>not implemented yet| Optional
 ```
 
 ### Detailed Network Segmentation & Security Boundaries
@@ -779,6 +787,16 @@ THREAT MODEL: What's Protected
 
 ### 3. Key Management Architecture: Deployed and Target States
 
+`Deploy-AppInstance.ps1` defaults to `-PkiMode FileBackedDemo`. The opt-in
+`-PkiMode ManagedHsm` milestone provisions a dedicated TLS managed identity, creates a new
+non-exportable nginx RSA key through Microsoft Managed HSM TLS Offload, and retains only the
+public server certificate on disk. It does not silently fall back to a local server key.
+
+The demo CA and generated browser client key remain file-backed in both modes. Moving CA issuance
+and client enrollment to a separately governed HSM-backed workflow remains the production target
+shown below. Selecting the opt-in mode changes future deployments; it does not retrofit an already
+deployed instance unless the post-deployment flow is resumed with the matching mode.
+
 ```mermaid
 flowchart TB
   subgraph Current[Deployed state]
@@ -821,7 +839,8 @@ flowchart TB
 
 ### 4. Target Managed HSM PKI and mTLS Flow
 
-> This is the required production profile, not the currently deployed file-backed demo PKI.
+> This is the required production profile. The opt-in implementation currently protects the nginx
+> server key only; its CA issuance and browser client-key steps remain demo workflows.
 > Azure Attestation supplies separate CPU/VM evidence and does not issue these certificates.
 
 ```mermaid

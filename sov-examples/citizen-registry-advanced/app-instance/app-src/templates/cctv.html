@@ -120,6 +120,7 @@
         }
         .unavailable[hidden] { display: none; }
         .caption { margin-top: 12px; font-size: 13px; }
+        .caption a { font: inherit; }
         @media (max-width: 820px) {
             .streams { grid-template-columns: 1fr; }
             .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -179,7 +180,7 @@
                     </div>
                 </figure>
             </div>
-            <p class="caption">Close-angle excerpt adapted from “2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe” by Acabashi, CC BY-SA 4.0, via Wikimedia Commons. The blurred stream is a further adaptation distributed under the same license.</p>
+            <p class="caption"><a href="https://commons.wikimedia.org/wiki/File:2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm">“2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe”</a> by <a href="https://commons.wikimedia.org/wiki/User:Acabashi">Acabashi</a>, licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="license">CC BY-SA 4.0</a>. This demo excerpts, crops, resizes, and transcodes the source; the confidential output also blurs detected face regions. Both adapted video streams are distributed under CC BY-SA 4.0.</p>
         </section>
     </main>
     <script src="{{ url_for('static', filename='vendor/hls.min.js') }}"></script>
@@ -224,8 +225,9 @@
         function pauseComparison() {
             comparisonPaused = true;
             pauseButton.disabled = true;
-            if (!sourceVideo.paused) sourceVideo.pause();
-            if (!processedVideo.paused) processedVideo.pause();
+            sourceVideo.pause();
+            processedVideo.pause();
+            if (hls) hls.stopLoad();
         }
 
         function bindComparisonControls(video) {
@@ -233,6 +235,7 @@
             video.addEventListener('play', () => {
                 comparisonPaused = false;
                 pauseButton.disabled = false;
+                if (video === processedVideo && hls) hls.startLoad();
             });
         }
 

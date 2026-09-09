@@ -32,6 +32,10 @@
 .PARAMETER SqlCvmSize
     SQL Server Confidential VM SKU. Defaults to "Standard_DC2as_v5".
 
+.PARAMETER PkiMode
+    TLS private-key mode. FileBackedDemo preserves the current generated demo keys.
+    ManagedHsm provisions a dedicated identity for Managed HSM TLS offload.
+
 .PARAMETER Deploy
     Execute the deployment.
 
@@ -88,6 +92,9 @@ param(
     [ValidateSet("Standard_DC1as_v5", "Standard_DC2as_v5", "Standard_DC1as_v6", "Standard_DC2as_v6", "Standard_DC4as_v6")]
     [string]$SqlCvmSize = "Standard_DC2as_v5",
 
+    [ValidateSet("FileBackedDemo", "ManagedHsm")]
+    [string]$PkiMode = "FileBackedDemo",
+
     [switch]$Deploy,
     [switch]$ResumePostDeploy,
     [switch]$ValidateOnly,
@@ -116,6 +123,7 @@ $BastionName = "$($Prefix)-$($randomSuffix)-bastion"
 $AttestationName = "$($Prefix)attest$(Get-Random -Minimum 100 -Maximum 999)"
 $VnetName = "$($Prefix)-$($randomSuffix)-vnet"
 $SqlVnetName = "$($Prefix)-$($randomSuffix)-sql-vnet"
+$managedHsmTlsEnabled = $PkiMode -eq 'ManagedHsm'
 if ($DeploymentSuffix) {
     $existingAttestationName = az resource list `
         --resource-group $RgName `
@@ -143,6 +151,7 @@ Write-Host "SQL location:        $SqlLocation"
 Write-Host "Shared Infra RG:     $SharedInfraRg"
 Write-Host "App GPU CVM:         $CvmName ($AppCvmSize)"
 Write-Host "SQL CPU CVM:         $sqlVmName ($SqlCvmSize, $SqlLocation)"
+Write-Host "PKI mode:            $PkiMode"
 Write-Host "Bastion:             $BastionName"
 Write-Host "Attestation:         $AttestationName"
 Write-Host ""
@@ -262,7 +271,7 @@ Write-Host "✓ App instance resource group ready" -ForegroundColor Green
 $userUpn = az ad signed-in-user show --query "userPrincipalName" -o tsv
 Write-Host "Current user: $userUpn" -ForegroundColor Yellow
 
-function Ensure-HsmRoleAssignment {
+function Set-HsmRoleAssignment {
     param(
         [Parameter(Mandatory)] [string]$HsmName,
         [Parameter(Mandatory)] [string]$Role,
@@ -342,10 +351,10 @@ try {
         $diskEncryptionSetId = az disk-encryption-set show --resource-group $RgName --name $diskEncryptionSetName --query id -o tsv
     }
     $desPrincipalId = az disk-encryption-set show --resource-group $RgName --name $diskEncryptionSetName --query identity.principalId -o tsv
-    Ensure-HsmRoleAssignment -HsmName $hsmName -Role 'Managed HSM Crypto Service Encryption User' -PrincipalId $desPrincipalId -Scope "/keys/$osDiskKeyName"
+    Set-HsmRoleAssignment -HsmName $hsmName -Role 'Managed HSM Crypto Service Encryption User' -PrincipalId $desPrincipalId -Scope "/keys/$osDiskKeyName"
     $cvmOrchestratorPrincipalId = az ad sp show --id 'bf7b6499-ff71-4aa2-97a4-f372087be7f0' --query id -o tsv
     if (-not $cvmOrchestratorPrincipalId) { throw 'Azure CVM Orchestrator service principal was not found.' }
-    Ensure-HsmRoleAssignment -HsmName $hsmName -Role 'Managed HSM Crypto Service Release User' -PrincipalId $cvmOrchestratorPrincipalId -Scope "/keys/$osDiskKeyName"
+    Set-HsmRoleAssignment -HsmName $hsmName -Role 'Managed HSM Crypto Service Release User' -PrincipalId $cvmOrchestratorPrincipalId -Scope "/keys/$osDiskKeyName"
     $hsmBootstrapComplete = $true
     Write-Host "Managed HSM key and DES ready: $diskEncryptionSetName" -ForegroundColor Green
 } finally {
@@ -382,8 +391,8 @@ echo 'ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db  '"`$HLS_
 mv "`$HLS_LICENSE.tmp" "`$HLS_LICENSE"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg nginx openssl python3-flask python3-requests libodbc2
-CCTV_VIDEO_RECIPE='close-faces-v2|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf23-faststart'
-ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 23 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
+CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
+ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
 mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
 printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
 (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
@@ -407,16 +416,17 @@ pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunico
 pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/C=NL/O=Norland IT Department/OU=Registry PKI/CN=Norland Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
-openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
-printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' > /tmp/server-ext.cnf
-openssl x509 -req -in /tmp/citizen-registry.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen-registry.crt -days 365 -sha256 -extfile /tmp/server-ext.cnf
+if [ '$PkiMode' = 'FileBackedDemo' ]; then
+    openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
+    printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' > /tmp/server-ext.cnf
+    openssl x509 -req -in /tmp/citizen-registry.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen-registry.crt -days 365 -sha256 -extfile /tmp/server-ext.cnf
+fi
 openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen.key -out /tmp/citizen.csr -subj '/C=NL/O=Norland IT Department/OU=Registry Clients/CN=citizen-registry-demo-client'
 printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' 'extendedKeyUsage=clientAuth' > /tmp/client-ext.cnf
 openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256 -extfile /tmp/client-ext.cnf
 chmod 600 /etc/citizen-registry/certs/*.key
-chmod 600 /etc/citizen-registry/certs/citizen-registry.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
 sed -i 's|^CCTV_VIDEO_PATH=.*|CCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4|' /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
@@ -448,15 +458,24 @@ WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
 systemctl enable --now citizen-registry
-systemctl enable nginx
-systemctl restart nginx
+if [ '$PkiMode' = 'FileBackedDemo' ]; then
+    systemctl enable nginx
+    systemctl restart nginx
+else
+    systemctl disable --now nginx || true
+fi
 "@
 $appBootstrapScript = $appBootstrapScript -replace "`r`n", "`n" -replace "`r", ""
-$appBootstrapScriptBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrapScript))
+$appBootstrapScriptIndented = ($appBootstrapScript -split "`n" | ForEach-Object { "      $_" }) -join "`n"
 $appBootstrap = @"
 #cloud-config
+write_files:
+    - path: /tmp/citizen-registry-bootstrap.sh
+        permissions: '0700'
+        content: |
+$appBootstrapScriptIndented
 runcmd:
-    - echo '$appBootstrapScriptBase64' | base64 -d | bash
+    - /tmp/citizen-registry-bootstrap.sh
 "@
 
 $sqlBootstrapScript = @"
@@ -510,6 +529,7 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         sharedInfraRgName = @{ value = $SharedInfraRg }
         sharedVnetName = @{ value = $sharedVnetName }
         diskEncryptionSetId = @{ value = $diskEncryptionSetId }
+        managedHsmTlsEnabled = @{ value = $managedHsmTlsEnabled }
         confidentialOsDisk = @{ value = $true }
         attestationEnabled = @{ value = $true }
         sshPublicKey = @{ value = $sshPublicKey }
@@ -610,6 +630,41 @@ if ($Deploy -or $ResumePostDeploy) {
             }
         }
 
+        function Set-AppHsmNetwork {
+            $script:appVnetId = $deploymentOutputs.vnetId.value
+            $sharedPeeringId = ''
+            try {
+                $sharedPeeringId = az network vnet peering show `
+                    --resource-group $SharedInfraRg `
+                    --vnet-name $sharedVnetName `
+                    --name "shared-to-$VnetName" `
+                    --query id --output tsv 2>$null
+            } catch { $sharedPeeringId = '' }
+            if (-not $sharedPeeringId) {
+                az network vnet peering create --resource-group $SharedInfraRg --vnet-name $sharedVnetName --name "shared-to-$VnetName" --remote-vnet $script:appVnetId --allow-vnet-access | Out-Null
+            }
+            $hsmDnsLinkExists = ''
+            try {
+                $hsmDnsLinkExists = az network private-dns link vnet show --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --query id -o tsv 2>$null
+            } catch { $hsmDnsLinkExists = '' }
+            if (-not $hsmDnsLinkExists) {
+                az network private-dns link vnet create --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --virtual-network $script:appVnetId --registration-enabled false | Out-Null
+            }
+            Write-Host "Bidirectional VNet peering and HSM private DNS link ready" -ForegroundColor Green
+        }
+
+        Set-AppHsmNetwork
+        if ($ResumePostDeploy) {
+            $existingTlsIdentityId = ''
+            try {
+                $existingTlsIdentityId = az identity show --resource-group $RgName --name "$Prefix-tls-identity" --query id --output tsv --only-show-errors 2>$null
+            } catch { $existingTlsIdentityId = '' }
+            if ([bool]$existingTlsIdentityId -ne $managedHsmTlsEnabled) {
+                $requiredMode = if ($existingTlsIdentityId) { 'ManagedHsm' } else { 'FileBackedDemo' }
+                throw "Resume mode does not match the deployed identities. Run again with -PkiMode $requiredMode."
+            }
+        }
+
         Write-Host "Refreshing the application and CCTV source footage..." -ForegroundColor Magenta
         $appRefreshScript = @"
 #!/bin/bash
@@ -643,9 +698,9 @@ if ! command -v ffmpeg >/dev/null; then
     apt-get update
     DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
 fi
-CCTV_VIDEO_RECIPE='close-faces-v2|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf23-faststart'
+CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
 if ! test -s "`$CCTV_VIDEO" || ! test "`$(cat "`$CCTV_VIDEO.recipe" 2>/dev/null || true)" = "`$CCTV_VIDEO_RECIPE" || ! (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum --check --status "`$(basename "`$CCTV_VIDEO").sha256"); then
-    ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 23 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
+    ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
     mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
     printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
     (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
@@ -660,6 +715,8 @@ else
     echo "CCTV_VIDEO_PATH=`$CCTV_VIDEO" >> /etc/citizen-registry/environment
 fi
 grep -q '^CCTV_PROCESSING_ROOT=' /etc/citizen-registry/environment || echo 'CCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv' >> /etc/citizen-registry/environment
+sed -i '/^CCTV_OUTPUT_FPS=/d; /^CCTV_FACE_DETECTION_FPS=/d; /^CCTV_FACE_DETECTION_BATCH_SIZE=/d; /^CCTV_H264_PRESET=/d; /^CCTV_H264_CRF=/d' /etc/citizen-registry/environment
+printf '%s\n' 'CCTV_OUTPUT_FPS=24' 'CCTV_FACE_DETECTION_FPS=12' 'CCTV_FACE_DETECTION_BATCH_SIZE=4' 'CCTV_H264_PRESET=fast' 'CCTV_H264_CRF=20' >> /etc/citizen-registry/environment
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
 cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
@@ -679,12 +736,16 @@ UMask=0022
 WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
-nginx -t
-systemctl restart nginx
+if [ '$PkiMode' = 'FileBackedDemo' ]; then
+    nginx -t
+    systemctl restart nginx
+else
+    systemctl disable --now nginx || true
+fi
 systemctl restart citizen-registry.service
 if systemctl is-active --quiet citizen-gpu-attestation.service; then
     systemctl enable citizen-cctv-anonymizer.service
-    systemctl restart citizen-cctv-anonymizer.service
+    systemctl restart --no-block citizen-cctv-anonymizer.service
 fi
 for attempt in `$(seq 1 30); do
     if curl -fsS http://127.0.0.1:8000/cctv >/dev/null 2>&1; then break; fi
@@ -698,6 +759,65 @@ rm -f /tmp/cctv-video.headers /tmp/cctv-video.range
 echo 'CCTV_APP_REFRESHED=1'
 "@
     Invoke-GpuRunCommand -Label 'application refresh' -Script $appRefreshScript -SuccessMarker 'CCTV_APP_REFRESHED=1' | Out-Null
+
+        if ($managedHsmTlsEnabled) {
+            Write-Host "Configuring non-exportable Managed HSM nginx TLS key..." -ForegroundColor Magenta
+            $tlsIdentity = az identity show `
+                --resource-group $RgName `
+                --name "$Prefix-tls-identity" `
+                --query '{clientId:clientId,principalId:principalId}' `
+                --output json --only-show-errors | ConvertFrom-Json
+            if (-not $tlsIdentity.clientId -or -not $tlsIdentity.principalId) {
+                throw 'The dedicated Managed HSM TLS identity was not found.'
+            }
+            $tlsKeyLabel = "$Prefix-nginx-tls"
+            az resource update --ids $hsmId --set properties.publicNetworkAccess=Enabled properties.networkAcls.defaultAction=Allow properties.networkAcls.bypass=AzureServices | Out-Null
+            try {
+                Set-HsmRoleAssignment `
+                    -HsmName $hsmName `
+                    -Role 'Managed HSM Crypto User' `
+                    -PrincipalId $tlsIdentity.principalId `
+                    -Scope '/keys'
+                try {
+                    $managedHsmTlsScript = @"
+#!/bin/bash
+set -euo pipefail
+sed -i 's/\r$//' /opt/citizen-registry/app-src/setup-managed-hsm-tls.sh
+chmod 750 /opt/citizen-registry/app-src/setup-managed-hsm-tls.sh
+/opt/citizen-registry/app-src/setup-managed-hsm-tls.sh '$hsmName' '$($tlsIdentity.clientId)' '$tlsKeyLabel' '$appPrivateIp'
+"@
+                    $tlsOutput = Invoke-GpuRunCommand -Label 'Managed HSM TLS setup' -Script $managedHsmTlsScript -SuccessMarker 'MANAGED_HSM_TLS_READY=1'
+                    $tlsKeyName = [regex]::Match($tlsOutput, 'MANAGED_HSM_TLS_KEY_NAME=([0-9a-fA-F-]+)').Groups[1].Value
+                    if (-not $tlsKeyName) {
+                        throw 'Managed HSM TLS setup did not return the generated key name.'
+                    }
+                    Set-HsmRoleAssignment `
+                        -HsmName $hsmName `
+                        -Role 'Managed HSM Crypto User' `
+                        -PrincipalId $tlsIdentity.principalId `
+                        -Scope "/keys/$tlsKeyName"
+                } finally {
+                    az keyvault role assignment delete `
+                        --hsm-name $hsmName `
+                        --role 'Managed HSM Crypto User' `
+                        --assignee-object-id $tlsIdentity.principalId `
+                        --scope '/keys' `
+                        --output none
+                }
+            } finally {
+                az resource update --ids $hsmId --set properties.publicNetworkAccess=Disabled properties.networkAcls.defaultAction=Deny properties.networkAcls.bypass=AzureServices --remove properties.networkAcls.ipRules | Out-Null
+            }
+                    $managedHsmTlsValidationScript = @'
+            #!/bin/bash
+            set -euo pipefail
+            test ! -e /etc/citizen-registry/certs/citizen-registry.key
+            systemctl is-active --quiet nginx
+            curl -kfsS --resolve citizen-registry.internal:443:127.0.0.1 https://citizen-registry.internal/health >/dev/null
+            echo 'MANAGED_HSM_SCOPED_TLS_READY=1'
+            '@
+                    Invoke-GpuRunCommand -Label 'key-scoped Managed HSM TLS validation' -Script $managedHsmTlsValidationScript -SuccessMarker 'MANAGED_HSM_SCOPED_TLS_READY=1' | Out-Null
+            Write-Host "nginx TLS signing uses Managed HSM key $tlsKeyName" -ForegroundColor Green
+        }
 
         $gpuInstallComplete = $false
         if ($ResumePostDeploy) {
@@ -939,7 +1059,7 @@ set -euo pipefail
 trap 'systemctl status citizen-cctv-anonymizer.service --no-pager || true; journalctl -u citizen-cctv-anonymizer.service -n 80 --no-pager || true' ERR
 systemctl is-active --quiet citizen-cctv-anonymizer.service
 for attempt in $(seq 1 60); do
-    if STATUS=$(curl -fsS http://127.0.0.1:8000/cctv/status 2>/dev/null) && printf '%s' "$STATUS" | python3 -c "import json,sys; assert json.load(sys.stdin)['state'] == 'running'"; then
+    if STATUS=$(curl -fsS http://127.0.0.1:8000/cctv/status 2>/dev/null) && printf '%s' "$STATUS" | python3 -c "import json,sys; assert json.load(sys.stdin)['state'] in ('processing', 'completed')"; then
         break
     fi
     if [ "$attempt" -eq 60 ]; then exit 1; fi
@@ -969,7 +1089,7 @@ echo 'CCTV_APP_READY=1'
         $appIdentityPrincipalId = az identity show --resource-group $RgName --name "$Prefix-cvm-identity" --query principalId -o tsv
         az resource update --ids $hsmId --set properties.publicNetworkAccess=Enabled properties.networkAcls.defaultAction=Allow properties.networkAcls.bypass=AzureServices | Out-Null
         try {
-            Ensure-HsmRoleAssignment `
+            Set-HsmRoleAssignment `
                 -HsmName $hsmName `
                 -Role 'Managed HSM Crypto Auditor' `
                 -PrincipalId $appIdentityPrincipalId `
@@ -979,15 +1099,6 @@ echo 'CCTV_APP_READY=1'
         }
         Write-Host "App identity can read CMK and SKR policy metadata" -ForegroundColor Green
 
-        # Complete cross-resource-group networking from the shared-infrastructure side.
-        $appVnetId = $deploymentOutputs.vnetId.value
-        az network vnet peering create --resource-group $SharedInfraRg --vnet-name $sharedVnetName --name "shared-to-$VnetName" --remote-vnet $appVnetId --allow-vnet-access | Out-Null
-        $hsmDnsLinkExists = az network private-dns link vnet show --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --query id -o tsv 2>$null
-        if (-not $hsmDnsLinkExists) {
-            az network private-dns link vnet create --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --virtual-network $appVnetId --registration-enabled false | Out-Null
-        }
-        Write-Host "Bidirectional VNet peering and HSM private DNS link ready" -ForegroundColor Green
-        
         # Save outputs to file
         $outputFile = "./app-instance-outputs-$randomSuffix.json"
         $deployment | Out-File -FilePath $outputFile

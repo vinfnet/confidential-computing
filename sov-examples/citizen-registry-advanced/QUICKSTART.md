@@ -81,12 +81,25 @@ $SharedInfraRg = "${Prefix}sharedinfra"
   -SharedInfraRg $SharedInfraRg `
   -Deploy
 
+# Optional: keep the nginx server signing key non-exportable in Managed HSM.
+# The demo CA and browser client key remain file-backed in this mode.
+.\Deploy-AppInstance.ps1 `
+  -Prefix $Prefix `
+  -Location $Location `
+  -SharedInfraRg $SharedInfraRg `
+  -PkiMode ManagedHsm `
+  -Deploy
+
 # Output will show:
 #   ✓ App instance resource group ready
 #   ✓ Deployment completed successfully
 #   ✓ Confidential H100 onboarding and attestation succeeded
 #   Resource Group: ${Prefix}12345app (with random 5-digit suffix)
 ```
+
+`FileBackedDemo` remains the default. `ManagedHsm` creates a dedicated managed identity,
+generates a new 3072-bit RSA key through the pinned Microsoft PKCS#11 library, scopes runtime
+access to that generated key, and refuses to start nginx with a file-backed server key.
 
 **What this creates:**
 - Resource group: `{prefix}{random5digit}app`

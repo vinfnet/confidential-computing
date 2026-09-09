@@ -60,6 +60,15 @@ class FaceBoxTests(unittest.TestCase):
         self.assertEqual(tracker.update([]), [face])
         self.assertEqual(tracker.update([]), [])
 
+    def test_tracker_reuses_current_boxes_without_aging(self):
+        tracker = FaceBoxTracker(hold_frames=2)
+        face = (10, 10, 30, 30)
+
+        tracker.update([face])
+
+        self.assertEqual(tracker.current(), [face])
+        self.assertEqual(tracker.current(), [face])
+
 
 class FrameProcessingTests(unittest.TestCase):
     def test_frame_lag_compares_completed_frames_with_source_clock(self):
@@ -98,6 +107,7 @@ class WorkerConfigurationTests(unittest.TestCase):
             width=320,
             height=180,
             fps=10,
+            detection_fps=5,
         )
         self.worker = VideoAnonymizer(self.config)
 
@@ -109,13 +119,36 @@ class WorkerConfigurationTests(unittest.TestCase):
         encoder = self.worker.encoder_command()
 
         self.assertNotIn('-stream_loop', decoder)
+        self.assertNotIn('-re', decoder)
         self.assertIn('rgb24', decoder)
         self.assertIn('libx264', encoder)
+        self.assertEqual(encoder[encoder.index('-framerate') + 1], '10')
+        self.assertEqual(encoder[encoder.index('-crf') + 1], '20')
+        self.assertEqual(encoder[encoder.index('-preset') + 1], 'fast')
         self.assertIn('event', encoder)
         self.assertIn('independent_segments+temp_file', encoder)
         self.assertNotIn('omit_endlist', encoder)
         self.assertEqual(encoder[encoder.index('-hls_list_size') + 1], '0')
         self.assertNotIn('-c:a', encoder)
+
+    def test_default_profile_outputs_24_fps_with_12_fps_detection(self):
+        config = AnonymizerConfig.from_environment()
+
+        self.assertEqual(config.fps, 24)
+        self.assertEqual(config.detection_fps, 12)
+        self.assertEqual(config.detection_interval, 2)
+        self.assertEqual(config.detection_batch_size, 4)
+        self.assertEqual(config.frame_batch_size, 8)
+
+    def test_rejects_detection_rate_above_output_rate(self):
+        with self.assertRaisesRegex(ValueError, 'detection FPS'):
+            AnonymizerConfig(
+                source_path=self.config.source_path,
+                output_dir=self.config.output_dir,
+                status_path=self.config.status_path,
+                fps=12,
+                detection_fps=24,
+            )
 
     def test_status_write_replaces_document_atomically(self):
         writer = StatusWriter(self.config.status_path)

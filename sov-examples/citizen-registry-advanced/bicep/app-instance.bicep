@@ -72,6 +72,9 @@ param sharedVnetName string
 @description('Managed HSM-backed Disk Encryption Set Resource ID for confidential OS disks')
 param diskEncryptionSetId string
 
+@description('Create and attach a dedicated managed identity for Managed HSM TLS offload')
+param managedHsmTlsEnabled bool = false
+
 @description('Enable Confidential OS Disk Encryption')
 param confidentialOsDisk bool = true
 
@@ -512,6 +515,12 @@ resource cvmIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-3
   tags: commonTags
 }
 
+resource tlsIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (managedHsmTlsEnabled) {
+  name: '${prefix}-tls-identity'
+  location: location
+  tags: commonTags
+}
+
 // Network Interface for CVM
 resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
   name: '${cvmName}-nic'
@@ -543,9 +552,14 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   tags: commonTags
   identity: {
     type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${cvmIdentity.id}': {}
-    }
+    userAssignedIdentities: union(
+      {
+        '${cvmIdentity.id}': {}
+      },
+      managedHsmTlsEnabled ? {
+        '${tlsIdentity!.id}': {}
+      } : {}
+    )
   }
   properties: {
     hardwareProfile: {
@@ -773,3 +787,5 @@ output vnetId string = appVnet.id
 output sqlVnetId string = sqlVnet.id
 output appSubnetId string = '${appVnet.id}/subnets/${appSubnetName}'
 output dbSubnetId string = '${sqlVnet.id}/subnets/${dbSubnetName}'
+output tlsIdentityClientId string = managedHsmTlsEnabled ? tlsIdentity!.properties.clientId : ''
+output tlsIdentityPrincipalId string = managedHsmTlsEnabled ? tlsIdentity!.properties.principalId : ''
