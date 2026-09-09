@@ -80,6 +80,11 @@ CCTV_VIDEO_PATH = os.environ.get(
     'CCTV_VIDEO_PATH',
     '/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4',
 )
+CCTV_VIDEO_BLOB_URI = os.environ.get('CCTV_VIDEO_BLOB_URI', '')
+DVR_STORAGE_ACCOUNT = os.environ.get('DVR_STORAGE_ACCOUNT', '')
+DVR_STORAGE_CONTAINER = os.environ.get('DVR_STORAGE_CONTAINER', '')
+DVR_STORAGE_KEY_NAME = os.environ.get('DVR_STORAGE_KEY_NAME', '')
+DVR_STORAGE_KEY_VERSION = os.environ.get('DVR_STORAGE_KEY_VERSION', '')
 CCTV_PROCESSING_ROOT = Path(os.environ.get(
     'CCTV_PROCESSING_ROOT', '/var/lib/citizen-registry/cctv'))
 CCTV_STATUS_PATH = CCTV_PROCESSING_ROOT / 'status.json'
@@ -736,6 +741,36 @@ def cctv_status():
         'confidence_threshold', 'confidential_gpu',
     )
     return jsonify({key: status[key] for key in public_fields if key in status})
+
+
+@app.route('/cctv/technical-details', methods=['GET'])
+def cctv_technical_details():
+    """Describe the private DVR source and at-rest encryption without secrets."""
+    if not CCTV_VIDEO_BLOB_URI or not DVR_STORAGE_KEY_NAME:
+        return jsonify({'status': 'not_configured'}), 503
+    return jsonify({
+        'status': 'configured',
+        'video_source': {
+            'architecture': 'CCTV camera to private DVR Blob Storage to confidential analyzer',
+            'blob_uri': CCTV_VIDEO_BLOB_URI,
+            'storage_account': DVR_STORAGE_ACCOUNT,
+            'container': DVR_STORAGE_CONTAINER,
+            'authentication': 'Microsoft Entra managed identity',
+            'network_access': 'Blob Private Link only; public network access disabled',
+            'analyzer_cache': CCTV_VIDEO_PATH,
+        },
+        'at_rest_encryption': {
+            'model': 'Azure Storage service encryption with customer-managed key',
+            'key_store': 'Azure Managed HSM',
+            'key_name': DVR_STORAGE_KEY_NAME,
+            'key_version': DVR_STORAGE_KEY_VERSION,
+            'key_uri': f'{HSM_ENDPOINT}/keys/{DVR_STORAGE_KEY_NAME}/{DVR_STORAGE_KEY_VERSION}',
+            'key_type': 'RSA-HSM 3072',
+            'key_operations': ['wrapKey', 'unwrapKey'],
+            'exportable': False,
+            'data_key_note': 'The HSM key wraps the Storage account encryption key; it is not exposed to the app.',
+        },
+    })
 
 
 @app.route('/cctv/video', methods=['GET'])

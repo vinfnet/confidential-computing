@@ -111,6 +111,9 @@ access to that generated key, and refuses to start nginx with a file-backed serv
 - Bastion host (for secure access)
 - Azure Attestation Service
 - Private Link to shared Managed HSM
+- Private ZRS DVR Blob Storage with a Managed HSM customer-managed key
+- Separate DVR writer and read-only analyzer managed identities
+- Blob Private Endpoint and private DNS; public and shared-key access disabled
 
 The script validates NCC40 availability and 40-vCPU family quota before creating the app
 resource group. It then uses the checksum-pinned Azure CGPU onboarding V4.3.3 release to:
@@ -145,7 +148,9 @@ Open `https://localhost:9443/citizens`. The registry is readable without a clien
 Add, Edit, and Delete require the Norland demo mTLS client certificate. Open
 `https://localhost:9443/cctv` and select **Start comparison** to view the licensed source beside
 the confidential H100 face-anonymized stream. Select **Pause comparison**, or pause either native
-video control, to pause both feeds. Model startup and the first completed HLS segment can take a
+video control, to pause both feeds. Select **Show video source and decryption key details** to view
+the private Blob source, managed-identity access model, and non-secret Managed HSM key identifiers.
+Actual key material, credentials, SAS tokens, and account keys are never displayed. Model startup and the first completed HLS segment can take a
 short time; the processed pane remains unavailable rather than showing raw fallback footage until
 current-boot GPU attestation and processing are healthy.
 

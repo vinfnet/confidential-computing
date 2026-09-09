@@ -72,6 +72,20 @@ param sharedVnetName string
 @description('Managed HSM-backed Disk Encryption Set Resource ID for confidential OS disks')
 param diskEncryptionSetId string
 
+@minLength(3)
+@maxLength(24)
+@description('Globally unique Storage account name for DVR footage')
+param dvrStorageAccountName string
+
+@description('Managed HSM URI used for DVR Storage encryption')
+param managedHsmUri string
+
+@description('Managed HSM key name used for DVR Storage encryption')
+param dvrStorageKeyName string
+
+@description('Managed HSM key version used for DVR Storage encryption')
+param dvrStorageKeyVersion string
+
 @description('Create and attach a dedicated managed identity for Managed HSM TLS offload')
 param managedHsmTlsEnabled bool = false
 
@@ -100,6 +114,8 @@ param sqlCustomData string = ''
 var appSubnetName = 'app-subnet'
 var bastionSubnetName = 'AzureBastionSubnet'
 var dbSubnetName = 'db-subnet'
+var dvrContainerName = 'cctv-dvr'
+var dvrBlobName = 'london-marathon-2026-close-faces.mp4'
 var appAddressPrefix = '10.${networkSecondOctet}.0.0/16'
 var sqlAddressPrefix = '10.${sqlNetworkSecondOctet}.0.0/16'
 var appSubnetPrefix = '10.${networkSecondOctet}.3.0/24'
@@ -521,6 +537,38 @@ resource tlsIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-3
   tags: commonTags
 }
 
+// The DVR can write footage, while the analyzer identity remains read-only.
+resource dvrIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${prefix}-dvr-identity'
+  location: location
+  tags: commonTags
+}
+
+resource storageEncryptionIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${prefix}-storage-encryption-identity'
+  location: location
+  tags: commonTags
+}
+
+module dvrStorageModule 'dvr-storage.bicep' = {
+  params: {
+    location: location
+    storageAccountName: dvrStorageAccountName
+    containerName: dvrContainerName
+    blobName: dvrBlobName
+    managedHsmUri: managedHsmUri
+    storageKeyName: dvrStorageKeyName
+    storageKeyVersion: dvrStorageKeyVersion
+    storageEncryptionIdentityId: storageEncryptionIdentity.id
+    dvrIdentityPrincipalId: dvrIdentity.properties.principalId
+    analyzerIdentityPrincipalId: cvmIdentity.properties.principalId
+    privateEndpointSubnetId: '${appVnet.id}/subnets/${appSubnetName}'
+    vnetId: appVnet.id
+    vnetName: vnetName
+    tags: commonTags
+  }
+}
+
 // Network Interface for CVM
 resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
   name: '${cvmName}-nic'
@@ -555,6 +603,7 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     userAssignedIdentities: union(
       {
         '${cvmIdentity.id}': {}
+        '${dvrIdentity.id}': {}
       },
       managedHsmTlsEnabled ? {
         '${tlsIdentity!.id}': {}
@@ -630,6 +679,9 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
       securityType: 'ConfidentialVM'
     }
   }
+  dependsOn: [
+    dvrStorageModule
+  ]
 }
 
 // SQL Server Confidential VM in a globally peered regional VNet.
@@ -789,3 +841,9 @@ output appSubnetId string = '${appVnet.id}/subnets/${appSubnetName}'
 output dbSubnetId string = '${sqlVnet.id}/subnets/${dbSubnetName}'
 output tlsIdentityClientId string = managedHsmTlsEnabled ? tlsIdentity!.properties.clientId : ''
 output tlsIdentityPrincipalId string = managedHsmTlsEnabled ? tlsIdentity!.properties.principalId : ''
+output dvrStorageAccountName string = dvrStorageModule.outputs.storageAccountName
+output dvrContainerName string = dvrStorageModule.outputs.containerName
+output dvrBlobName string = dvrBlobName
+output dvrBlobUri string = dvrStorageModule.outputs.blobUri
+output dvrIdentityClientId string = dvrIdentity.properties.clientId
+output storageEncryptionIdentityPrincipalId string = storageEncryptionIdentity.properties.principalId

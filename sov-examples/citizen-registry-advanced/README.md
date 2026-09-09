@@ -329,7 +329,9 @@ Open `https://localhost:9443/cctv` through the Bastion tunnel and select **Start
 The page displays the licensed source beside a finite anonymized stream produced on the
 confidential H100. Both videos show elapsed and total timestamps and stop at the end of the
 33.5-second clip. Output becomes available after GPU verification, model loading, and completion
-of the confidential processing pass.
+of the confidential processing pass. Select **Show video source and decryption key details** to
+inspect non-secret Blob and Managed HSM key identifiers and the enforced access model. The panel
+never returns credentials, SAS tokens, account keys, wrapped data keys, or key material.
 
 ![Confidential CCTV page showing synchronized source and H100-anonymized feeds with the Pause comparison control](docs/images/confidential-cctv-pause-comparison.png)
 
@@ -339,7 +341,7 @@ rate, face count, synchronized source and anonymized video, and a control that p
 The `citizen-cctv-anonymizer` systemd service:
 
 1. requires successful `citizen-gpu-attestation` evidence from the current VM boot;
-2. reads the hash-verified local MP4 once through FFmpeg at 1280x720 and 24 frames per second;
+2. reads a hash-verified analyzer cache downloaded from the private DVR blob through its read-only managed identity;
 3. batches four equal-sized frames per `facenet-pytorch` MTCNN call on `cuda:0`, with a 12 fps detection cadence;
 4. reuses tracked regions between detector frames and applies a strong Gaussian blur at 24 frames per second; and
 5. publishes a complete, end-marked H.264 HLS playlist at CRF 20 through nginx.
@@ -348,6 +350,7 @@ The `citizen-cctv-anonymizer` systemd service:
 flowchart LR
   Original6[Hash-pinned public WebM]
   Excerpt6[33.5-second close-angle MP4<br/>1280x720 at 24 fps]
+  Dvr6[Private ZRS DVR Blob Storage<br/>Managed HSM CMK + infrastructure encryption]
 
   subgraph AppCvm6[App Confidential VM]
     Gate6[Current-boot gate<br/>SEV-SNP attestation + H100 nvtrust]
@@ -366,7 +369,8 @@ flowchart LR
   end
 
   Original6 -->|Deployment-time trim, resize,<br/>frame-rate conversion, audio removal| Excerpt6
-  Excerpt6 --> Decode6
+  Excerpt6 -->|DVR writer identity| Dvr6
+  Dvr6 -->|Private Link + read-only analyzer identity<br/>atomic SHA-256 verified download| Decode6
   Browser6[Authorized browser<br/>timestamped one-shot playback<br/>outside confidential boundary] <-->|Encrypted source MP4,<br/>HLS, and status responses| Nginx6
   Nginx6 -->|TLS decrypts at endpoint| BrowserPlain6[Rendered comparison<br/>plaintext on customer endpoint]
 
@@ -385,6 +389,15 @@ infer demographics, retain face crops, or store bounding boxes. Raw decoded fram
 memory only. Detection, decoding, or encoding errors stop publication and remove the processed
 playlist; the processed endpoint never falls back to the source footage. Face detection is
 best-effort and this sample is not a legal guarantee of anonymization.
+
+The DVR Storage account is ZRS, HTTPS/TLS 1.2 only, and uses Storage service encryption with a
+non-exportable RSA-HSM customer-managed key. Public network access, anonymous blob access, and
+shared-key authorization are disabled; the network default is deny and Blob traffic uses Private
+Link. The dedicated writer identity has `Storage Blob Data Contributor`, while the analyzer
+identity has only `Storage Blob Data Reader`. Seven-day blob and container soft delete are enabled.
+Storage's dedicated encryption identity alone has HSM wrap/unwrap access. The prepared ingest file
+is deleted after upload, and the confidential VM keeps only the verified processing cache on its
+encrypted data disk.
 
 The web page reads non-sensitive processing metrics from `/cctv/status`. Operational state is
 written atomically to `/var/lib/citizen-registry/cctv/status.json`, and completed playlists and

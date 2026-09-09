@@ -123,6 +123,9 @@ $BastionName = "$($Prefix)-$($randomSuffix)-bastion"
 $AttestationName = "$($Prefix)attest$(Get-Random -Minimum 100 -Maximum 999)"
 $VnetName = "$($Prefix)-$($randomSuffix)-vnet"
 $SqlVnetName = "$($Prefix)-$($randomSuffix)-sql-vnet"
+$dvrStorageAccountName = "$Prefix$($randomSuffix)dvr".ToLowerInvariant()
+$dvrContainerName = 'cctv-dvr'
+$dvrBlobName = 'london-marathon-2026-close-faces.mp4'
 $managedHsmTlsEnabled = $PkiMode -eq 'ManagedHsm'
 if ($DeploymentSuffix) {
     $existingAttestationName = az resource list `
@@ -269,6 +272,8 @@ Write-Host "✓ App instance resource group ready" -ForegroundColor Green
 
 # Get current user info for tagging
 $userUpn = az ad signed-in-user show --query "userPrincipalName" -o tsv
+$subscriptionId = az account show --query id --output tsv --only-show-errors
+if (-not $subscriptionId) { throw 'Unable to determine the active Azure subscription.' }
 Write-Host "Current user: $userUpn" -ForegroundColor Yellow
 
 function Set-HsmRoleAssignment {
@@ -303,6 +308,22 @@ $appIdentity = az identity create `
 if (-not $appIdentity.clientId) { throw 'Failed to provision the app managed identity.' }
 $appIdentityClientId = $appIdentity.clientId
 
+$dvrIdentity = az identity create `
+    --resource-group $RgName `
+    --name "$Prefix-dvr-identity" `
+    --location $Location `
+    --query '{id:id, clientId:clientId, principalId:principalId}' `
+    --output json | ConvertFrom-Json
+$storageEncryptionIdentity = az identity create `
+    --resource-group $RgName `
+    --name "$Prefix-storage-encryption-identity" `
+    --location $Location `
+    --query '{id:id, principalId:principalId}' `
+    --output json | ConvertFrom-Json
+if (-not $dvrIdentity.clientId -or -not $storageEncryptionIdentity.principalId) {
+    throw 'Failed to provision the DVR storage managed identities.'
+}
+
 # Generate a temporary key for the deployment if one is not already available.
 $sshKeyPath = Join-Path $env:TEMP "citizen-registry-$Prefix"
 if (-not (Test-Path "$sshKeyPath.pub")) {
@@ -333,6 +354,8 @@ $sqlPrivateIp = "10.$SqlNetworkSecondOctet.4.5"
 $hsmName = $hsmId.Split('/')[-1]
 $osDiskKeyName = "$Prefix-cvm-os-key"
 $diskEncryptionSetName = "$Prefix-cvm-os-des"
+$dvrStorageKeyName = "$Prefix-dvr-storage-key"
+$managedHsmUri = "https://$hsmName.managedhsm.azure.net"
 
 # Provision the customer-managed key and DES before creating either CVM.
 Write-Host "Provisioning Managed HSM-backed confidential disk encryption..." -ForegroundColor Yellow
@@ -355,8 +378,27 @@ try {
     $cvmOrchestratorPrincipalId = az ad sp show --id 'bf7b6499-ff71-4aa2-97a4-f372087be7f0' --query id -o tsv
     if (-not $cvmOrchestratorPrincipalId) { throw 'Azure CVM Orchestrator service principal was not found.' }
     Set-HsmRoleAssignment -HsmName $hsmName -Role 'Managed HSM Crypto Service Release User' -PrincipalId $cvmOrchestratorPrincipalId -Scope "/keys/$osDiskKeyName"
+    $dvrStorageKeyUrl = ''
+    try { $dvrStorageKeyUrl = az keyvault key show --hsm-name $hsmName --name $dvrStorageKeyName --query key.kid -o tsv 2>$null } catch { $dvrStorageKeyUrl = '' }
+    if (-not $dvrStorageKeyUrl) {
+        $dvrStorageKeyUrl = az keyvault key create `
+            --hsm-name $hsmName `
+            --name $dvrStorageKeyName `
+            --kty RSA-HSM `
+            --size 3072 `
+            --ops wrapKey unwrapKey `
+            --query key.kid `
+            --output tsv
+    }
+    Set-HsmRoleAssignment `
+        -HsmName $hsmName `
+        -Role 'Managed HSM Crypto Service Encryption User' `
+        -PrincipalId $storageEncryptionIdentity.principalId `
+        -Scope "/keys/$dvrStorageKeyName"
+    $dvrStorageKeyVersion = ([Uri]$dvrStorageKeyUrl).Segments[-1].Trim('/')
+    if (-not $dvrStorageKeyVersion) { throw 'Managed HSM did not return a DVR Storage key version.' }
     $hsmBootstrapComplete = $true
-    Write-Host "Managed HSM key and DES ready: $diskEncryptionSetName" -ForegroundColor Green
+    Write-Host "Managed HSM keys and DES ready: $diskEncryptionSetName, $dvrStorageKeyName" -ForegroundColor Green
 } finally {
     # Managed disks use the trusted-services bypass; app traffic uses Private Link.
     az resource update --ids $hsmId --set properties.publicNetworkAccess=Disabled properties.networkAcls.defaultAction=Deny properties.networkAcls.bypass=AzureServices | Out-Null
@@ -366,16 +408,18 @@ if (-not $hsmBootstrapComplete) { throw 'Managed HSM CMK bootstrap did not compl
 
 # Embed the local application source in cloud-init so the app VM is usable after deployment.
 $archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.gz"
-tar --exclude='app-src/__pycache__' --exclude='app-src/test_media_generator.py' --exclude='app-src/test_video_anonymizer.py' -czf $archivePath -C "./app-instance" app-src
+tar --exclude='app-src/__pycache__' --exclude='app-src/test_*.py' -czf $archivePath -C "./app-instance" app-src
 $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
 $appBootstrapScript = @"
 #!/bin/bash
 set -e
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
-mkdir -p /opt/citizen-registry/source-media /opt/citizen-registry/app-src/static/vendor
-CCTV_VIDEO_SOURCE=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm
-CCTV_VIDEO=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4
+mkdir -p /opt/citizen-registry/app-src/static/vendor
+CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
+CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO=/var/lib/citizen-registry/dvr-cache/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO_BLOB_URI='https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName'
 CCTV_VIDEO_URL='https://upload.wikimedia.org/wikipedia/commons/d/d9/2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm'
 CCTV_VIDEO_SHA256='9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655'
 curl -fL --retry 5 --retry-delay 5 "`$CCTV_VIDEO_URL" -o "`$CCTV_VIDEO_SOURCE.tmp"
@@ -392,17 +436,14 @@ mv "`$HLS_LICENSE.tmp" "`$HLS_LICENSE"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg nginx openssl python3-flask python3-requests libodbc2
 CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
-ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
-mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
-printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
-(cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
+ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"
 DATA_DEVICE=`$(readlink -f /dev/disk/azure/scsi1/lun0)
 if ! blkid `$DATA_DEVICE >/dev/null 2>&1; then mkfs.ext4 `$DATA_DEVICE; fi
 mkdir -p /var/lib/citizen-registry
 DATA_UUID=`$(blkid -s UUID -o value `$DATA_DEVICE)
 grep -q "UUID=`$DATA_UUID" /etc/fstab || printf 'UUID=%s /var/lib/citizen-registry ext4 defaults,nofail 0 2\n' "`$DATA_UUID" >> /etc/fstab
 mount /var/lib/citizen-registry
-mkdir -p /var/lib/citizen-registry/media /var/lib/citizen-registry/cctv/hls
+mkdir -p /var/lib/citizen-registry/media /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
 export ACCEPT_EULA=Y
@@ -412,9 +453,16 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
-pip3 install --break-system-packages --no-cache-dir azure-identity pyodbc gunicorn Pillow diffusers transformers accelerate safetensors
+pip3 install --break-system-packages --no-cache-dir azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors
 pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
+for attempt in `$(seq 1 30); do
+    python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE" && break
+    if [ "`$attempt" -eq 30 ]; then exit 1; fi
+    sleep 10
+done
+python3 /opt/citizen-registry/app-src/dvr_storage.py download --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$appIdentityClientId' --path "`$CCTV_VIDEO"
+rm -f "`$CCTV_VIDEO_SOURCE" "`$CCTV_VIDEO_INGEST"
 openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/C=NL/O=Norland IT Department/OU=Registry PKI/CN=Norland Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
     openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
@@ -426,8 +474,7 @@ printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSig
 openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256 -extfile /tmp/client-ext.cnf
 chmod 600 /etc/citizen-registry/certs/*.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
-sed -i 's|^CCTV_VIDEO_PATH=.*|CCTV_VIDEO_PATH=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4|' /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/var/lib/citizen-registry/dvr-cache/$dvrBlobName\nCCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName\nDVR_STORAGE_ACCOUNT=$dvrStorageAccountName\nDVR_STORAGE_CONTAINER=$dvrContainerName\nDVR_STORAGE_KEY_NAME=$dvrStorageKeyName\nDVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target var-lib-citizen\x2dregistry.mount
@@ -529,6 +576,10 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         sharedInfraRgName = @{ value = $SharedInfraRg }
         sharedVnetName = @{ value = $sharedVnetName }
         diskEncryptionSetId = @{ value = $diskEncryptionSetId }
+        dvrStorageAccountName = @{ value = $dvrStorageAccountName }
+        managedHsmUri = @{ value = $managedHsmUri }
+        dvrStorageKeyName = @{ value = $dvrStorageKeyName }
+        dvrStorageKeyVersion = @{ value = $dvrStorageKeyVersion }
         managedHsmTlsEnabled = @{ value = $managedHsmTlsEnabled }
         confidentialOsDisk = @{ value = $true }
         attestationEnabled = @{ value = $true }
@@ -573,9 +624,131 @@ if ($Deploy -or $ResumePostDeploy) {
             if (-not $existingCvmId -or -not $appVnetId) {
                 throw "Cannot resume: app VM or VNet is missing from '$RgName'."
             }
+            $appSubnetId = "$appVnetId/subnets/app-subnet"
+            $dvrParametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix-dvr.parameters.json"
+            @{
+                '$schema' = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+                contentVersion = '1.0.0.0'
+                parameters = @{
+                    location = @{ value = $Location }
+                    storageAccountName = @{ value = $dvrStorageAccountName }
+                    containerName = @{ value = $dvrContainerName }
+                    blobName = @{ value = $dvrBlobName }
+                    managedHsmUri = @{ value = $managedHsmUri }
+                    storageKeyName = @{ value = $dvrStorageKeyName }
+                    storageKeyVersion = @{ value = $dvrStorageKeyVersion }
+                    storageEncryptionIdentityId = @{ value = $storageEncryptionIdentity.id }
+                    dvrIdentityPrincipalId = @{ value = $dvrIdentity.principalId }
+                    analyzerIdentityPrincipalId = @{ value = $appIdentity.principalId }
+                    deployDataPlaneRoleAssignments = @{ value = $false }
+                    privateEndpointSubnetId = @{ value = $appSubnetId }
+                    vnetId = @{ value = $appVnetId }
+                    vnetName = @{ value = $VnetName }
+                    tags = @{ value = @{ environment = 'demo'; application = 'citizen-registry-advanced'; tier = 'app-instance'; owner = $userUpn; deploymentSource = 'bicep' } }
+                }
+            } | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $dvrParametersFile
+            $dvrErrorFile = Join-Path $env:TEMP "citizen-registry-$Prefix-dvr-error.txt"
+            $dvrRequestFile = Join-Path $env:TEMP "citizen-registry-$Prefix-dvr-request.json"
+            try {
+                $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+                $PSNativeCommandUseErrorActionPreference = $false
+                $dvrTemplateJson = (az bicep build `
+                    --file './bicep/dvr-storage.bicep' `
+                    --stdout `
+                    --only-show-errors) -join "`n"
+                if ($LASTEXITCODE -ne 0) {
+                    throw 'DVR Storage Bicep compilation failed.'
+                }
+                $dvrParameters = Get-Content $dvrParametersFile -Raw | ConvertFrom-Json
+                $dvrRequest = @{
+                    properties = @{
+                        mode = 'Incremental'
+                        template = $dvrTemplateJson | ConvertFrom-Json
+                        parameters = $dvrParameters.parameters
+                    }
+                } | ConvertTo-Json -Depth 100 -Compress
+                [IO.File]::WriteAllText($dvrRequestFile, $dvrRequest, [Text.UTF8Encoding]::new($false))
+                $dvrDeploymentUrl = "https://management.azure.com/subscriptions/$subscriptionId/resourceGroups/$RgName/providers/Microsoft.Resources/deployments/dvr-storage?api-version=2022-09-01"
+                az rest `
+                    --method put `
+                    --url $dvrDeploymentUrl `
+                    --body "@$dvrRequestFile" `
+                    --only-show-errors `
+                    --output none 2> $dvrErrorFile
+                if ($LASTEXITCODE -ne 0) {
+                    $dvrError = Get-Content $dvrErrorFile -Raw -ErrorAction SilentlyContinue
+                    throw "DVR Storage deployment submission failed: $dvrError"
+                }
+                az deployment group wait `
+                    --name dvr-storage `
+                    --resource-group $RgName `
+                    --created `
+                    --interval 10 `
+                    --timeout 1200 2> $dvrErrorFile
+                if ($LASTEXITCODE -ne 0) {
+                    $dvrError = az deployment group show `
+                        --name dvr-storage `
+                        --resource-group $RgName `
+                        --query properties.error `
+                        --output json 2>$null
+                    throw "DVR Storage deployment failed: $dvrError"
+                }
+                $dvrDeploymentJson = az deployment group show `
+                    --name dvr-storage `
+                    --resource-group $RgName `
+                    --query properties.outputs `
+                    --output json `
+                    --only-show-errors
+                $dvrDeployment = $dvrDeploymentJson | ConvertFrom-Json
+            } finally {
+                $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+                Remove-Item $dvrParametersFile -Force -ErrorAction SilentlyContinue
+                Remove-Item $dvrErrorFile -Force -ErrorAction SilentlyContinue
+                Remove-Item $dvrRequestFile -Force -ErrorAction SilentlyContinue
+            }
+            $dvrStorageId = "/subscriptions/$subscriptionId/resourceGroups/$RgName/providers/Microsoft.Storage/storageAccounts/$dvrStorageAccountName"
+            foreach ($dataRole in @(
+                @{ PrincipalId = $dvrIdentity.principalId; Name = 'Storage Blob Data Contributor' },
+                @{ PrincipalId = $appIdentity.principalId; Name = 'Storage Blob Data Reader' }
+            )) {
+                $existingDataRole = az role assignment list `
+                    --assignee-object-id $dataRole.PrincipalId `
+                    --scope $dvrStorageId `
+                    --role $dataRole.Name `
+                    --query '[0].id' `
+                    --output tsv `
+                    --only-show-errors
+                if (-not $existingDataRole) {
+                    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+                    $PSNativeCommandUseErrorActionPreference = $false
+                    az role assignment create `
+                        --assignee-object-id $dataRole.PrincipalId `
+                        --assignee-principal-type ServicePrincipal `
+                        --role $dataRole.Name `
+                        --scope $dvrStorageId `
+                        --output none `
+                        --only-show-errors 2> $dvrErrorFile
+                    $roleAssignmentExitCode = $LASTEXITCODE
+                    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+                    Remove-Item $dvrErrorFile -Force -ErrorAction SilentlyContinue
+                    if ($roleAssignmentExitCode -ne 0) {
+                        throw "DVR Storage is deployed fail-closed, but '$($dataRole.Name)' could not be granted. Activate Owner or User Access Administrator at '$RgName' scope and rerun -ResumePostDeploy."
+                    }
+                }
+            }
+            az vm identity assign `
+                --resource-group $RgName `
+                --name $CvmName `
+                --identities $dvrIdentity.id `
+                --output none
             $deploymentOutputs = [pscustomobject]@{
                 cvmId = [pscustomobject]@{ value = $existingCvmId }
                 vnetId = [pscustomobject]@{ value = $appVnetId }
+                dvrStorageAccountName = $dvrDeployment.storageAccountName
+                dvrContainerName = $dvrDeployment.containerName
+                dvrBlobName = [pscustomobject]@{ value = $dvrBlobName }
+                dvrBlobUri = $dvrDeployment.blobUri
+                dvrIdentityClientId = [pscustomobject]@{ value = $dvrIdentity.clientId }
             }
             $deployment = $deploymentOutputs | ConvertTo-Json -Depth 10
             Write-Host "✓ Existing infrastructure found; resuming post-deployment configuration" -ForegroundColor Green
@@ -671,10 +844,12 @@ if ($Deploy -or $ResumePostDeploy) {
 set -euo pipefail
 cloud-init status --wait
 systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
-mkdir -p /opt/citizen-registry/source-media /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls
+mkdir -p /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
-CCTV_VIDEO_SOURCE=/opt/citizen-registry/source-media/london-marathon-2026-upper-thames-street.webm
-CCTV_VIDEO=/opt/citizen-registry/source-media/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
+CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
+CCTV_VIDEO=/var/lib/citizen-registry/dvr-cache/$dvrBlobName
+CCTV_VIDEO_BLOB_URI='https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName'
 CCTV_VIDEO_URL='https://upload.wikimedia.org/wikipedia/commons/d/d9/2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm'
 CCTV_VIDEO_SHA256='9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655'
 if ! echo "`$CCTV_VIDEO_SHA256  `$CCTV_VIDEO_SOURCE" | sha256sum --check --status; then
@@ -699,25 +874,26 @@ if ! command -v ffmpeg >/dev/null; then
     DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg
 fi
 CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
-if ! test -s "`$CCTV_VIDEO" || ! test "`$(cat "`$CCTV_VIDEO.recipe" 2>/dev/null || true)" = "`$CCTV_VIDEO_RECIPE" || ! (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum --check --status "`$(basename "`$CCTV_VIDEO").sha256"); then
-    ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO.tmp"
-    mv "`$CCTV_VIDEO.tmp" "`$CCTV_VIDEO"
-    printf '%s\n' "`$CCTV_VIDEO_RECIPE" > "`$CCTV_VIDEO.recipe"
-    (cd "`$(dirname "`$CCTV_VIDEO")" && sha256sum "`$(basename "`$CCTV_VIDEO")" > "`$(basename "`$CCTV_VIDEO").sha256")
-fi
 if ! python3 -c 'import torchvision, facenet_pytorch' >/dev/null 2>&1; then
     pip3 install --break-system-packages --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu128
     pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 fi
+python3 -c 'import azure.storage.blob' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir azure-storage-blob
+if ! python3 /opt/citizen-registry/app-src/dvr_storage.py matches --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --recipe "`$CCTV_VIDEO_RECIPE"; then
+    ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"
+    python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE"
+fi
+python3 /opt/citizen-registry/app-src/dvr_storage.py download --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$appIdentityClientId' --path "`$CCTV_VIDEO"
+rm -f "`$CCTV_VIDEO_SOURCE" "`$CCTV_VIDEO_INGEST"
 if grep -q '^CCTV_VIDEO_PATH=' /etc/citizen-registry/environment; then
     sed -i "s|^CCTV_VIDEO_PATH=.*|CCTV_VIDEO_PATH=`$CCTV_VIDEO|" /etc/citizen-registry/environment
 else
     echo "CCTV_VIDEO_PATH=`$CCTV_VIDEO" >> /etc/citizen-registry/environment
 fi
 grep -q '^CCTV_PROCESSING_ROOT=' /etc/citizen-registry/environment || echo 'CCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv' >> /etc/citizen-registry/environment
-sed -i '/^CCTV_OUTPUT_FPS=/d; /^CCTV_FACE_DETECTION_FPS=/d; /^CCTV_FACE_DETECTION_BATCH_SIZE=/d; /^CCTV_H264_PRESET=/d; /^CCTV_H264_CRF=/d' /etc/citizen-registry/environment
-printf '%s\n' 'CCTV_OUTPUT_FPS=24' 'CCTV_FACE_DETECTION_FPS=12' 'CCTV_FACE_DETECTION_BATCH_SIZE=4' 'CCTV_H264_PRESET=fast' 'CCTV_H264_CRF=20' >> /etc/citizen-registry/environment
-chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
+sed -i '/^CCTV_VIDEO_BLOB_URI=/d; /^DVR_STORAGE_ACCOUNT=/d; /^DVR_STORAGE_CONTAINER=/d; /^DVR_STORAGE_KEY_NAME=/d; /^DVR_STORAGE_KEY_VERSION=/d; /^CCTV_OUTPUT_FPS=/d; /^CCTV_FACE_DETECTION_FPS=/d; /^CCTV_FACE_DETECTION_BATCH_SIZE=/d; /^CCTV_H264_PRESET=/d; /^CCTV_H264_CRF=/d' /etc/citizen-registry/environment
+printf '%s\n' 'CCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName' 'DVR_STORAGE_ACCOUNT=$dvrStorageAccountName' 'DVR_STORAGE_CONTAINER=$dvrContainerName' 'DVR_STORAGE_KEY_NAME=$dvrStorageKeyName' 'DVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion' 'CCTV_OUTPUT_FPS=24' 'CCTV_FACE_DETECTION_FPS=12' 'CCTV_FACE_DETECTION_BATCH_SIZE=4' 'CCTV_H264_PRESET=fast' 'CCTV_H264_CRF=20' >> /etc/citizen-registry/environment
+chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
 cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
 [Unit]
