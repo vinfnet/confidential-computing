@@ -10,10 +10,11 @@
 # 
 # Clone this repo to a folder (relies on the WindowsAttest.ps1 script being in the same folder as this script)
 #
-# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-NoInternetAccess] [-SkipSkuPreflight]
+# Usage: ./BuildRandomCVM.ps1 -subsID <YOUR SUBSCRIPTION ID> -basename <YOUR BASENAME> -osType <Windows|Windows11|Windows2019|Ubuntu|RHEL> [-resourceGroupName <RESOURCE GROUP NAME>] [-description <OPTIONAL DESCRIPTION>] [-smoketest] [-region <AZURE REGION>] [-policyFilePath <PATH TO POLICY FILE>] [-DisableBastion] [-NoInternetAccess] [-SkipSkuPreflight]
 #
 # Basename is a prefix for all resources created, it's used to create unique names for the resources
 # osType specifies which OS to deploy: Windows (Server 2022), Windows11 (Windows 11 Enterprise), Ubuntu (24.04), or RHEL (9.5)
+# resourceGroupName optionally overrides the resource group name derived from the randomized basename
 # description is an optional parameter that will be added as a tag to the resource group
 # smoketest is an optional switch that automatically removes all resources after completion (useful for testing)
 # region is an optional parameter that specifies the Azure region (defaults to northeurope)
@@ -34,6 +35,7 @@ param (
     [Parameter(Mandatory)]
     [ValidateSet("Windows", "Windows11", "Windows2019", "Ubuntu", "RHEL")]
     $osType,
+    [Parameter(Mandatory=$false)]$resourceGroupName = "",
     [Parameter(Mandatory=$false)]$description = "",
     [Parameter(Mandatory=$false)][switch]$smoketest,
     [Parameter(Mandatory=$false)]$region = "northeurope",
@@ -157,7 +159,7 @@ if (-not $gitRemoteUrl) {
 $basename = $basename + -join ((97..122) | Get-Random -Count 5 | % {[char]$_}) # basename + 5 random lower-case letters
 $vmusername = "azureuser" # you can adjust this if you want
 $vmadminpassword = -join ("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%".ToCharArray() | Get-Random -Count 40) # build a random password - note you can't get it back afterwards
-$resgrp =  $basename # name of the resource group where all resources will be created, copied from $basename
+$resgrp = if ($resourceGroupName) { $resourceGroupName } else { $basename }
 $akvname = $basename + "akv"    #Name of the Azure Key Vault
 $desname = $basename + "des"    #Name of the Disk Encryption Set
 $keyname = $basename + "-cmk-key" #Name of the key in the Key Vault

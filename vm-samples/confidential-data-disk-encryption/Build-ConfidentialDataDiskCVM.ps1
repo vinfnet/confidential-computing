@@ -27,6 +27,18 @@ selected region must support the feature.
     -SubscriptionId '<subscription-id>' `
     -Windows
 
+.EXAMPLE
+./Build-ConfidentialDataDiskCVM.ps1 `
+    -SubscriptionId '<subscription-id>' `
+    -Linux `
+    -V6
+
+.EXAMPLE
+./Build-ConfidentialDataDiskCVM.ps1 `
+    -SubscriptionId '<subscription-id>' `
+    -Linux `
+    -TDX
+
 .NOTES
 References:
 https://learn.microsoft.com/azure/confidential-computing/confidential-vm-overview
@@ -56,11 +68,20 @@ param(
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
-    [string]$Location = 'northeurope',
+    [string]$Location = 'centraluseuap',
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
     [string]$VmSize = 'Standard_DC2ads_v5',
+
+    [Parameter()]
+    [switch]$V5,
+
+    [Parameter()]
+    [switch]$V6,
+
+    [Parameter()]
+    [switch]$TDX,
 
     [Parameter()]
     [ValidateNotNullOrEmpty()]
@@ -69,6 +90,9 @@ param(
     [Parameter(ParameterSetName = 'Linux')]
     [ValidateNotNullOrEmpty()]
     [string]$SshPublicKeyPath = '~/.ssh/id_rsa.pub',
+
+    [Parameter(ParameterSetName = 'Linux')]
+    [switch]$PasswordAuthentication,
 
     [Parameter()]
     [ValidateRange(4, 32767)]
@@ -97,6 +121,28 @@ $deployLinux = $PSCmdlet.ParameterSetName -eq 'Linux'
 $vmImage = if ($deployLinux) { $linuxImage } else { $windowsImage }
 $extensionName = if ($deployLinux) { 'CDELinux' } else { 'CDEWindows' }
 $adminPassword = $null
+
+$selectedProfiles = @($V5, $V6, $TDX).Where({ $_.IsPresent })
+if ($selectedProfiles.Count -gt 1) {
+    throw 'Specify only one CVM profile: -V5, -V6, or -TDX.'
+}
+if ($selectedProfiles.Count -eq 1 -and $PSBoundParameters.ContainsKey('VmSize')) {
+    throw 'Do not combine -VmSize with -V5, -V6, or -TDX.'
+}
+
+if ($V5) {
+    $VmSize = 'Standard_DC2as_v5'
+}
+elseif ($V6) {
+    $VmSize = 'Standard_DC2as_v6'
+}
+elseif ($TDX) {
+    $VmSize = 'Standard_DC2es_v6'
+}
+
+if ($selectedProfiles.Count -eq 1) {
+    Write-Host "Selected CVM profile: $VmSize in $Location" -ForegroundColor Cyan
+}
 
 function Invoke-AzCli {
     [CmdletBinding()]
@@ -343,13 +389,13 @@ if ((Get-Item -LiteralPath $resolvedPolicyPath).Length -eq 0) {
 }
 
 $resolvedSshKeyPath = $null
-if ($deployLinux) {
+if ($deployLinux -and -not $PasswordAuthentication) {
     $resolvedSshKeyPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($SshPublicKeyPath)
     if (-not (Test-Path -LiteralPath $resolvedSshKeyPath -PathType Leaf)) {
         throw "SSH public key not found: $resolvedSshKeyPath"
     }
 }
-else {
+if (-not $deployLinux -or $PasswordAuthentication) {
     $passwordCharacters = @()
     $passwordCharacters += 'ABCDEFGHJKLMNPQRSTUVWXYZ'.ToCharArray() | Get-Random -Count 4
     $passwordCharacters += 'abcdefghijkmnopqrstuvwxyz'.ToCharArray() | Get-Random -Count 4
@@ -464,14 +510,24 @@ Invoke-AzCli -Arguments @(
     '--only-show-errors', '--output', 'none'
 ) | Out-Null
 
-Invoke-AzCli -Arguments @(
-    'keyvault', 'create', '--subscription', $SubscriptionId,
-    '--resource-group', $ResourceGroupName, '--name', $vaultName,
-    '--location', $Location, '--sku', 'premium',
-    '--enable-rbac-authorization', 'true',
-    '--enable-purge-protection', 'true',
-    '--only-show-errors', '--output', 'none'
-) | Out-Null
+$existingVault = Invoke-AzCliJson -Arguments @(
+    'keyvault', 'list', '--subscription', $SubscriptionId,
+    '--resource-group', $ResourceGroupName,
+    '--query', "[?name=='$vaultName'] | [0]"
+)
+if ($existingVault) {
+    Write-Host "Reusing existing Key Vault $vaultName." -ForegroundColor DarkGray
+}
+else {
+    Invoke-AzCli -Arguments @(
+        'keyvault', 'create', '--subscription', $SubscriptionId,
+        '--resource-group', $ResourceGroupName, '--name', $vaultName,
+        '--location', $Location, '--sku', 'premium',
+        '--enable-rbac-authorization', 'true',
+        '--enable-purge-protection', 'true',
+        '--only-show-errors', '--output', 'none'
+    ) | Out-Null
+}
 
 $vaultId = Invoke-AzCli -Arguments @(
     'keyvault', 'show', '--subscription', $SubscriptionId,
@@ -600,7 +656,7 @@ $vmCreateArguments = @(
     '--os-disk-security-encryption-type', 'DiskWithVMGuestState',
     '--only-show-errors', '--output', 'none'
 )
-if ($deployLinux) {
+if ($deployLinux -and -not $PasswordAuthentication) {
     $vmCreateArguments += @('--ssh-key-values', $resolvedSshKeyPath)
 }
 else {
@@ -680,6 +736,7 @@ if ($deployLinux) {
     $guestCommandId = 'RunShellScript'
     $mountScript = @'
 set -eu
+udevadm settle
 target=/dev/disk/azure/scsi1/lun__DATA_DISK_LUN__
 test -b "$target"
 if lsblk -n -o FSTYPE "$target" | grep -q '[^[:space:]]'; then
@@ -690,6 +747,7 @@ mkfs.ext4 -F "$target"
 mkdir -p /cde-data
 mount "$target" /cde-data
 lsblk -f
+echo '__CDDE_DATA_DISK_READY__'
 '@.Replace('__DATA_DISK_LUN__', [string]$DataDiskLun)
 }
 else {
@@ -709,16 +767,28 @@ $rawDisks[0] |
     Initialize-Disk -PartitionStyle GPT -PassThru |
     New-Partition -AssignDriveLetter -UseMaximumSize |
     Format-Volume -FileSystem NTFS -NewFileSystemLabel 'CDEData' -Confirm:$false
+Write-Output '__CDDE_DATA_DISK_READY__'
 '@
 }
-$mountResult = Invoke-AzCliJson -Arguments @(
-    'vm', 'run-command', 'invoke', '--subscription', $SubscriptionId,
-    '--resource-group', $ResourceGroupName, '--name', $vmName,
-    '--command-id', $guestCommandId, '--scripts', $mountScript
-)
-$mountMessage = $mountResult.value[0].message
-if ($mountMessage -notmatch 'Enable succeeded') {
-    throw "Guest data-disk initialization failed:`n$mountMessage"
+$mountScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) "$BaseName-data-disk-init.ps1"
+try {
+    Set-Content -LiteralPath $mountScriptPath -Value $mountScript -Encoding utf8
+    $mountResult = Invoke-AzCliJson -Arguments @(
+        'vm', 'run-command', 'invoke', '--subscription', $SubscriptionId,
+        '--resource-group', $ResourceGroupName, '--name', $vmName,
+        '--command-id', $guestCommandId, '--scripts', "@$mountScriptPath"
+    )
+}
+finally {
+    Remove-Item -LiteralPath $mountScriptPath -Force -ErrorAction SilentlyContinue
+}
+$mountMessages = @($mountResult.value.message | Where-Object { $_ }) -join "`n"
+$mountFailures = @($mountResult.value | Where-Object {
+    $_.code -match '/failed$' -or $_.level -eq 'Error'
+})
+if (-not $mountResult -or -not $mountResult.value -or
+    $mountFailures.Count -gt 0 -or $mountMessages -notmatch '__CDDE_DATA_DISK_READY__') {
+    throw "Guest data-disk initialization failed:`n$mountMessages"
 }
 
 Write-Host 'Installing the Confidential Data Disk Encryption extension...' -ForegroundColor Cyan
@@ -796,11 +866,13 @@ $extension = Invoke-AzCliJson -Arguments @(
     '--resource-group', $ResourceGroupName, '--vm-name', $vmName,
     '--name', $extensionName, '--expand', 'instanceView'
 )
+$portalUrl = "https://portal.azure.com/#@$($account.tenantId)/resource$($vm.id)/overview"
 
 Write-Host ''
 Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host "Resource group:       $ResourceGroupName"
 Write-Host "VM:                   $($vm.name)"
+Write-Host "Azure portal:         $portalUrl"
 Write-Host "OS:                   $(if ($deployLinux) { 'Linux' } else { 'Windows' })"
 Write-Host "Private IP:           $privateIp"
 Write-Host 'VM public IP:         none'
@@ -811,10 +883,16 @@ Write-Host "CDE extension state:  $($extension.provisioningState)"
 Write-Host ''
 Write-Host 'Remote access credentials (save these now):' -ForegroundColor Yellow
 Write-Host "Username:             $AdminUsername"
-if ($deployLinux) {
+if ($deployLinux -and -not $PasswordAuthentication) {
     $sshPrivateKeyPath = $resolvedSshKeyPath -replace '\.pub$', ''
     Write-Host "SSH private key:      $sshPrivateKeyPath"
     Write-Host "Bastion SSH:          az network bastion ssh --subscription $SubscriptionId --name $bastionName --resource-group $ResourceGroupName --target-resource-id $($vm.id) --auth-type ssh-key --username $AdminUsername --ssh-key $sshPrivateKeyPath"
+}
+elseif ($deployLinux) {
+    Write-Host "Password:             $adminPassword"
+    Write-Host "Bastion SSH:          az network bastion ssh --subscription $SubscriptionId --name $bastionName --resource-group $ResourceGroupName --target-resource-id $($vm.id) --auth-type password --username $AdminUsername"
+}
+if ($deployLinux) {
     Write-Host ''
     Write-Host 'CDE runs asynchronously in the guest. Verify LUKS/dm-crypt after the extension finishes:' -ForegroundColor Yellow
     Write-Host "az vm run-command invoke --subscription $SubscriptionId --resource-group $ResourceGroupName --name $vmName --command-id RunShellScript --scripts 'sudo lsblk -f; sudo cat /etc/crypttab; sudo dmsetup ls; findmnt /cde-data'"
