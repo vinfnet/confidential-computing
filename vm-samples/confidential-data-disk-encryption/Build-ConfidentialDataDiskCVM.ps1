@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Creates a Linux or Windows confidential VM with confidential disk encryption.
+Creates an Ubuntu, RHEL, or Windows confidential VM with confidential disk encryption.
 
 .DESCRIPTION
 Creates a private CVM with no public IP address assigned to its NIC. The VM uses
@@ -15,6 +15,10 @@ address is assigned to the VM NIC.
 CDE is a gated preview. The subscription must have
 Microsoft.Compute/ConfidentialVMDataDiskEncryptionPreview registered, and the
 selected region must support the feature.
+
+The -RHEL option is experimental and intended for evaluation only. The RHEL
+image is CVM-compatible, but the Confidential Data Disk Encryption extension
+may not support every RHEL image or release.
 
 .EXAMPLE
 ./Build-ConfidentialDataDiskCVM.ps1 `
@@ -39,6 +43,12 @@ selected region must support the feature.
     -Linux `
     -TDX
 
+.EXAMPLE
+./Build-ConfidentialDataDiskCVM.ps1 `
+    -SubscriptionId '<subscription-id>' `
+    -RHEL `
+    -PasswordAuthentication
+
 .NOTES
 References:
 https://learn.microsoft.com/azure/confidential-computing/confidential-vm-overview
@@ -57,6 +67,9 @@ param(
 
     [Parameter(Mandatory, ParameterSetName = 'Windows')]
     [switch]$Windows,
+
+    [Parameter(Mandatory, ParameterSetName = 'RHEL')]
+    [switch]$RHEL,
 
     [Parameter()]
     [ValidatePattern('^[a-z][a-z0-9]{1,9}$')]
@@ -88,10 +101,12 @@ param(
     [string]$AdminUsername = 'azureuser',
 
     [Parameter(ParameterSetName = 'Linux')]
+    [Parameter(ParameterSetName = 'RHEL')]
     [ValidateNotNullOrEmpty()]
     [string]$SshPublicKeyPath = '~/.ssh/id_rsa.pub',
 
     [Parameter(ParameterSetName = 'Linux')]
+    [Parameter(ParameterSetName = 'RHEL')]
     [switch]$PasswordAuthentication,
 
     [Parameter()]
@@ -116,11 +131,18 @@ $ErrorActionPreference = 'Stop'
 
 $computeApiVersion = '2026-03-01'
 $linuxImage = 'Canonical:0001-com-ubuntu-confidential-vm-jammy:22_04-lts-cvm:latest'
+$rhelImage = 'RedHat:rhel-cvm:10_2_cvm:latest'
 $windowsImage = 'MicrosoftWindowsServer:WindowsServer2022:2022-datacenter-smalldisk-g2:latest'
-$deployLinux = $PSCmdlet.ParameterSetName -eq 'Linux'
-$vmImage = if ($deployLinux) { $linuxImage } else { $windowsImage }
+$deployRhel = $PSCmdlet.ParameterSetName -eq 'RHEL'
+$deployLinux = $PSCmdlet.ParameterSetName -in @('Linux', 'RHEL')
+$vmImage = if ($deployRhel) { $rhelImage } elseif ($deployLinux) { $linuxImage } else { $windowsImage }
 $extensionName = if ($deployLinux) { 'CDELinux' } else { 'CDEWindows' }
 $adminPassword = $null
+
+if ($deployRhel) {
+    Write-Warning 'EXPERIMENTAL USE ONLY: RHEL CDDE support is not validated for production use.'
+    Write-Warning "Using the latest image in the RHEL 10.2 CVM SKU: $rhelImage"
+}
 
 $selectedProfiles = @($V5, $V6, $TDX).Where({ $_.IsPresent })
 if ($selectedProfiles.Count -gt 1) {
@@ -873,7 +895,7 @@ Write-Host 'Deployment complete.' -ForegroundColor Green
 Write-Host "Resource group:       $ResourceGroupName"
 Write-Host "VM:                   $($vm.name)"
 Write-Host "Azure portal:         $portalUrl"
-Write-Host "OS:                   $(if ($deployLinux) { 'Linux' } else { 'Windows' })"
+Write-Host "OS:                   $(if ($deployRhel) { 'RHEL (experimental)' } elseif ($deployLinux) { 'Ubuntu' } else { 'Windows' })"
 Write-Host "Private IP:           $privateIp"
 Write-Host 'VM public IP:         none'
 Write-Host "Bastion:              $bastionName"

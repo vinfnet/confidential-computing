@@ -68,13 +68,14 @@ Pass `-Location` with a profile to use another CDDE-enabled region. Do not combi
 ## Regional test matrix
 
 > [!CAUTION]
-> **Microsoft internal use only.** This table is a point-in-time view from tests run on September 2-10, 2026, in one Microsoft subscription. Regional capacity, quota, SKU restrictions, and CDDE preview availability can vary by subscription and can change without notice. Do not treat these results as a public availability statement or deployment guarantee.
+> **Microsoft internal use only.** This table is a point-in-time view from tests run from September 2 through September 11, 2026, in one Microsoft subscription. Regional capacity, quota, SKU restrictions, and CDDE preview availability can vary by subscription and can change without notice. Do not treat these results as a public availability statement or deployment guarantee.
 
 `Passed end to end` means that VM deployment, confidential data-disk attachment, the guest CDDE extension, and guest encryption verification all succeeded. `CVM passed` confirms only confidential VM deployment and attestation, not CDDE availability.
 
 | Region | OS | SKU and isolation | CVM result | CDDE result |
 |---|---|---|---|---|
 | Central US EUAP (`centraluseuap`) | Ubuntu 22.04 | `Standard_DC2ads_v5`, AMD SEV-SNP v5 | Passed. A later retry failed with transient `InternalDiskManagementError`. | Passed end to end: `CDELinux` succeeded, the data disk used `DataDiskEncryptedWithCustomerKey`, and LUKS2 was verified at `/cde-data`. |
+| Central US EUAP (`centraluseuap`) | RHEL 10.2 (experimental) | `Standard_DC2ads_v5`, AMD SEV-SNP v5 | Passed using `RedHat:rhel-cvm:10_2_cvm:latest`. | Passed end to end: `CDELinux` succeeded, the data disk used `DataDiskEncryptedWithCustomerKey`, and the LUKS2 device-mapper volume was verified at `/cde-data`. |
 | Central US EUAP (`centraluseuap`) | Windows Server 2022 | `Standard_DC2ads_v5`, AMD SEV-SNP v5 | Passed VM and confidential data-disk creation in a clean deployment. | Passed end to end: the data disk used `DataDiskEncryptedWithCustomerKey`, `CDEWindows` succeeded, and the healthy NTFS `F:` volume reported BitLocker protection on, fully encrypted, and 100% encryption. |
 | Central US EUAP (`centraluseuap`) | Ubuntu 22.04 | `Standard_DC2as_v6`, AMD SEV-SNP v6 | Failed before VM creation: `standardDCasv6Family` quota was `0`; at least 2 vCPUs were required. | Not tested because VM deployment was blocked by quota. |
 | North Europe (`northeurope`) | Linux | `Standard_DC2as_v5`, AMD SEV-SNP v5 | Passed deployment and returned `sevsnpvm` / `azure-compliant-cvm` attestation. | Data-disk attachment failed with Azure Compute HTTP 500; CDDE was not validated. |
@@ -130,6 +131,20 @@ For generated username/password authentication instead of an SSH key, pass `-Pas
     -PasswordAuthentication
 ```
 
+## Deploy RHEL (experimental)
+
+> [!CAUTION]
+> ***Experimental use only.*** RHEL support is provided for preview evaluation and is not validated for production. The marketplace image supports confidential VMs, but the `CDELinux` extension may not support every RHEL release.
+
+```powershell
+./Build-ConfidentialDataDiskCVM.ps1 `
+    -SubscriptionId '<subscription-id>' `
+    -RHEL `
+    -PasswordAuthentication
+```
+
+The script uses `RedHat:rhel-cvm:10_2_cvm:latest`, which resolves to the latest image published in the RHEL 10.2 CVM SKU for the selected region. Image availability and extension compatibility can vary by region and subscription.
+
 ## Deploy Windows
 
 ```powershell
@@ -159,6 +174,7 @@ The data disk is initialized as GPT, formatted as NTFS with label `CDEData`, ass
 |---|---|---|
 | `SubscriptionId` | Target Azure subscription ID. | Required |
 | `Linux` | Deploy an Ubuntu 22.04 confidential VM. | Linux parameter set |
+| `RHEL` | Deploy the latest RHEL 10.2 CVM image. Experimental use only. | RHEL parameter set |
 | `Windows` | Deploy a Windows Server 2022 confidential VM. | Windows parameter set |
 | `Prefix` | Prefix used when generating a random base name. | `sgall` |
 | `BaseName` | Stable base name for resources. Must be lowercase alphanumeric and 3–15 characters. | Generated |
@@ -168,8 +184,8 @@ The data disk is initialized as GPT, formatted as NTFS with label `CDEData`, ass
 | `V6` | Select AMD SEV-SNP v6 (`Standard_DC2as_v6`). | Off |
 | `TDX` | Select Intel TDX v6 (`Standard_DC2es_v6`). | Off |
 | `AdminUsername` | Guest administrator username. | `azureuser` |
-| `SshPublicKeyPath` | Linux SSH public key path. | `~/.ssh/id_rsa.pub` |
-| `PasswordAuthentication` | Use a generated password instead of an SSH key for Linux. | Off |
+| `SshPublicKeyPath` | Ubuntu or RHEL SSH public key path. | `~/.ssh/id_rsa.pub` |
+| `PasswordAuthentication` | Use a generated password instead of an SSH key for Ubuntu or RHEL. | Off |
 | `DataDiskSizeGB` | Data disk capacity in GiB. | `32` |
 | `DataDiskLun` | Data disk LUN. | `0` |
 | `PolicyPath` | Local CDDE Secure Key Release policy path. | `cdde-preview/DataDiskSKRPolicy.json` |
