@@ -4,13 +4,45 @@
 Complete deployment and validation of Citizen Registry Advanced
 #>
 
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[a-z0-9]{3,12}$')]
+    [string]$Prefix,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[0-9a-fA-F-]{36}$')]
+    [string]$SubscriptionId,
+
+    [ValidateSet("westeurope")]
+    [string]$Location = "westeurope",
+
+    [string]$SqlLocation = "northeurope",
+
+    [ValidatePattern('^[a-z0-9-]{3,24}$')]
+    [string]$HsmName,
+
+    [ValidatePattern('^\d{5}$')]
+    [string]$DeploymentSuffix,
+
+    [ValidateSet("FileBackedDemo", "ManagedHsm")]
+    [string]$PkiMode = "FileBackedDemo"
+)
+
 $ErrorActionPreference = "Stop"
 $WarningPreference = "Continue"
 
-# Configuration
-$Prefix = "yourprefix"
-$Location = "northeurope"
 $SharedInfraRg = "$($Prefix)sharedinfra"
+
+az account set --subscription $SubscriptionId --only-show-errors
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to select Azure subscription '$SubscriptionId'."
+}
+
+$activeSubscriptionId = az account show --query id --output tsv --only-show-errors
+if ($LASTEXITCODE -ne 0 -or $activeSubscriptionId -ne $SubscriptionId) {
+    throw "Azure CLI subscription validation failed. Expected '$SubscriptionId', got '$activeSubscriptionId'."
+}
 
 Write-Host "╔══════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║  CITIZEN REGISTRY ADVANCED - DEPLOYMENT & VALIDATION PIPELINE    ║" -ForegroundColor Cyan
@@ -29,11 +61,13 @@ try {
     Write-Host "Executing: .\Deploy-SharedInfra.ps1 -Prefix '$Prefix' -Deploy" -ForegroundColor Yellow
     Write-Host ""
     
-    & ".\Deploy-SharedInfra.ps1" -Prefix $Prefix -Location $Location -Deploy
-    
-    if ($LASTEXITCODE -ne 0) {
-        throw "Stage 1 deployment failed with exit code: $LASTEXITCODE"
+    $sharedInfraParameters = @{
+        Prefix = $Prefix
+        Location = $Location
+        Deploy = $true
     }
+    if ($HsmName) { $sharedInfraParameters.HsmName = $HsmName }
+    & ".\Deploy-SharedInfra.ps1" @sharedInfraParameters
     
     Write-Host ""
     Write-Host "✓ Stage 1 completed successfully" -ForegroundColor Green
@@ -44,7 +78,6 @@ try {
 }
 
 Write-Host ""
-Start-Sleep -Seconds 5
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # STAGE 2: APP INSTANCE
@@ -59,11 +92,16 @@ try {
     Write-Host "Executing: .\Deploy-AppInstance.ps1 -Prefix '$Prefix' -SharedInfraRg '$SharedInfraRg' -Deploy" -ForegroundColor Yellow
     Write-Host ""
     
-    & ".\Deploy-AppInstance.ps1" -Prefix $Prefix -Location $Location -SharedInfraRg $SharedInfraRg -Deploy
-    
-    if ($LASTEXITCODE -ne 0) {
-        throw "Stage 2 deployment failed with exit code: $LASTEXITCODE"
+    $appInstanceParameters = @{
+        Prefix = $Prefix
+        Location = $Location
+        SqlLocation = $SqlLocation
+        SharedInfraRg = $SharedInfraRg
+        PkiMode = $PkiMode
+        Deploy = $true
     }
+    if ($DeploymentSuffix) { $appInstanceParameters.DeploymentSuffix = $DeploymentSuffix }
+    & ".\Deploy-AppInstance.ps1" @appInstanceParameters
     
     Write-Host ""
     Write-Host "✓ Stage 2 completed successfully" -ForegroundColor Green

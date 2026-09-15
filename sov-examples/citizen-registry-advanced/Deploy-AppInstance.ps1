@@ -128,12 +128,15 @@ $dvrContainerName = 'cctv-dvr'
 $dvrBlobName = 'london-marathon-2026-close-faces.mp4'
 $managedHsmTlsEnabled = $PkiMode -eq 'ManagedHsm'
 if ($DeploymentSuffix) {
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
     $existingAttestationName = az resource list `
         --resource-group $RgName `
         --resource-type Microsoft.Attestation/attestationProviders `
         --query '[0].name' `
         --output tsv `
         --only-show-errors 2>$null
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
     if ($LASTEXITCODE -eq 0 -and $existingAttestationName) {
         $AttestationName = $existingAttestationName
     }
@@ -213,6 +216,19 @@ if (-not $sharedVnetName) {
     Write-Host "✗ Shared virtual network not found in shared infrastructure RG" -ForegroundColor Red
     exit 1
 }
+
+# Deleting an app instance leaves its shared-side peering behind in a
+# 'Disconnected' state. Because every app instance reuses the same address
+# space, that orphan blocks the new app VNet from peering. Prune it first.
+$stalePeerings = az network vnet peering list `
+    --resource-group $SharedInfraRg `
+    --vnet-name $sharedVnetName `
+    --query "[?peeringState=='Disconnected'].name" `
+    --output tsv --only-show-errors 2>$null
+foreach ($stalePeering in @($stalePeerings -split "`n" | Where-Object { $_ })) {
+    Write-Host "Removing stale shared VNet peering: $stalePeering" -ForegroundColor Yellow
+    az network vnet peering delete --resource-group $SharedInfraRg --vnet-name $sharedVnetName --name $stalePeering --only-show-errors | Out-Null
+}
 Write-Host "✓ Shared virtual network: $sharedVnetName" -ForegroundColor Green
 
 # Fail before creating billable resources if either VM SKU is restricted or lacks quota.
@@ -244,12 +260,15 @@ function Test-VmSkuCapacity {
     }
     $availableVcpus = [int]$quota.limit - [int]$quota.current
     if ($ExistingVmName) {
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
         $existingVmSize = az vm show `
             --resource-group $RgName `
             --name $ExistingVmName `
             --query hardwareProfile.vmSize `
             --output tsv `
             --only-show-errors 2>$null
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
         if ($LASTEXITCODE -eq 0 -and $existingVmSize -eq $VmSize) {
             Write-Host "✓ $VmSize already provisioned in $VmLocation; quota is committed to this deployment" -ForegroundColor Green
             return
@@ -332,12 +351,15 @@ if (-not (Test-Path "$sshKeyPath.pub")) {
 $sshPublicKey = (Get-Content "$sshKeyPath.pub" -Raw).Trim()
 $sqlSaPassword = "Cvm$(Get-Random -Minimum 100000 -Maximum 999999)!A"
 $sqlAppPassword = "App$(Get-Random -Minimum 100000 -Maximum 999999)!A"
+$previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+$PSNativeCommandUseErrorActionPreference = $false
 $existingSqlCustomData = az deployment group show `
     --resource-group $RgName `
     --name app-instance `
     --query properties.parameters.sqlCustomData.value `
     --output tsv `
     --only-show-errors 2>$null
+$PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
 if ($LASTEXITCODE -eq 0 -and $existingSqlCustomData) {
     $existingSqlCloudConfig = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($existingSqlCustomData))
     $innerSqlBase64 = [regex]::Match($existingSqlCloudConfig, "echo '([^']+)' \| base64").Groups[1].Value
@@ -413,6 +435,17 @@ $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath)
 $appBootstrapScript = @"
 #!/bin/bash
 set -e
+# First boot: cloud-init/unattended-upgrades can hold the apt/dpkg lock. Make apt
+# wait for it instead of failing, and block until background package work settles.
+mkdir -p /etc/apt/apt.conf.d
+echo 'DPkg::Lock::Timeout "900";' > /etc/apt/apt.conf.d/99lock-timeout
+for _ in `$(seq 1 120); do
+    if pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgr >/dev/null 2>&1; then
+        sleep 10
+    else
+        break
+    fi
+done
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
 mkdir -p /opt/citizen-registry/app-src/static/vendor
@@ -448,7 +481,7 @@ chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
 export ACCEPT_EULA=Y
 curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
-dpkg -i /tmp/packages-microsoft-prod.deb
+DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/packages-microsoft-prod.deb
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
@@ -513,25 +546,36 @@ else
 fi
 "@
 $appBootstrapScript = $appBootstrapScript -replace "`r`n", "`n" -replace "`r", ""
+# Indent every script line by 6 spaces so it sits inside the YAML block scalar
+# below (must be deeper than the 4-space 'content:' key or cloud-init drops it).
 $appBootstrapScriptIndented = ($appBootstrapScript -split "`n" | ForEach-Object { "      $_" }) -join "`n"
 $appBootstrap = @"
 #cloud-config
 write_files:
-    - path: /tmp/citizen-registry-bootstrap.sh
-        permissions: '0700'
-        content: |
+  - path: /tmp/citizen-registry-bootstrap.sh
+    permissions: '0755'
+    content: |
 $appBootstrapScriptIndented
 runcmd:
-    - /tmp/citizen-registry-bootstrap.sh
+  - bash /tmp/citizen-registry-bootstrap.sh
 "@
 
 $sqlBootstrapScript = @"
 #!/bin/bash
 set -e
+mkdir -p /etc/apt/apt.conf.d
+echo 'DPkg::Lock::Timeout "900";' > /etc/apt/apt.conf.d/99lock-timeout
+for _ in `$(seq 1 120); do
+    if pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgr >/dev/null 2>&1; then
+        sleep 10
+    else
+        break
+    fi
+done
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates gnupg
 curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
-dpkg -i /tmp/packages-microsoft-prod.deb
+DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/packages-microsoft-prod.deb
 curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/mssql-server-2022.list -o /etc/apt/sources.list.d/mssql-server-2022.list
 apt-get update
 ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y mssql-server mssql-tools18 unixodbc-dev
@@ -581,6 +625,10 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         dvrStorageKeyName = @{ value = $dvrStorageKeyName }
         dvrStorageKeyVersion = @{ value = $dvrStorageKeyVersion }
         managedHsmTlsEnabled = @{ value = $managedHsmTlsEnabled }
+        # DVR Blob data-plane roles are created by ARM in the one-shot deploy.
+        # Requires the caller to hold Owner or User Access Administrator
+        # (roleAssignments/write); activate via PIM before running.
+        deployDvrDataPlaneRoleAssignments = @{ value = $true }
         confidentialOsDisk = @{ value = $true }
         attestationEnabled = @{ value = $true }
         sshPublicKey = @{ value = $sshPublicKey }
@@ -995,20 +1043,38 @@ chmod 750 /opt/citizen-registry/app-src/setup-managed-hsm-tls.sh
             Write-Host "nginx TLS signing uses Managed HSM key $tlsKeyName" -ForegroundColor Green
         }
 
-        $gpuInstallComplete = $false
-        if ($ResumePostDeploy) {
-            $gpuProbe = az vm run-command invoke `
+        # Decide whether the Azure CGPU onboarding (kernel + driver) needs to
+        # run by probing the VM for a working NVIDIA driver. On a clean deploy
+        # the driver is absent, so steps 1-4 install it; on a resume where the
+        # driver is already present we skip the reinstall. Step 5 (attestation)
+        # always runs afterwards. This probe reads live VM state at deploy time
+        # so it stays correct regardless of any stale in-memory script state.
+        $gpuDriverProbeScript = @'
+#!/bin/bash
+set +e
+if nvidia-smi --query-gpu=driver_version --format=csv,noheader >/dev/null 2>&1; then
+    echo 'GPU_DRIVER_PRESENT=1'
+else
+    echo 'GPU_DRIVER_PRESENT=0'
+fi
+'@
+        $gpuProbePath = Join-Path $env:TEMP "citizen-registry-$Prefix-gpu-driver-probe.sh"
+        [IO.File]::WriteAllText($gpuProbePath, $gpuDriverProbeScript, [Text.UTF8Encoding]::new($false))
+        try {
+            $gpuProbeOutput = az vm run-command invoke `
                 --resource-group $RgName `
                 --name $CvmName `
                 --command-id RunShellScript `
-                --scripts "nvidia-smi >/dev/null 2>&1 && test -f /opt/cgpu-onboarding/cgpu-onboarding-package/step-2-attestation.sh && echo GPU_INSTALL_COMPLETE=1" `
+                --scripts "@$gpuProbePath" `
                 --query "value[].message" `
                 --output tsv `
-                --only-show-errors 2>&1
-            $gpuInstallComplete = $LASTEXITCODE -eq 0 -and $gpuProbe -match 'GPU_INSTALL_COMPLETE=1'
+                --only-show-errors 2>&1 | Out-String
+        } finally {
+            Remove-Item $gpuProbePath -Force -ErrorAction SilentlyContinue
         }
+        $gpuDriverPresent = $gpuProbeOutput -match 'GPU_DRIVER_PRESENT=1'
 
-        if (-not $gpuInstallComplete) {
+        if (-not $gpuDriverPresent) {
             Write-Host "GPU step 1/5: preparing the Azure CGPU V4.3.3 kernel..." -ForegroundColor Magenta
         $gpuKernelScript = @'
 #!/bin/bash
@@ -1296,7 +1362,7 @@ echo 'CCTV_APP_READY=1'
         
     } catch {
         Write-Host "✗ Deployment failed: $_" -ForegroundColor Red
-        exit 1
+        throw
     }
     
     exit 0

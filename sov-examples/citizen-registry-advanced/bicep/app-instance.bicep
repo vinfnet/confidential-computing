@@ -89,6 +89,9 @@ param dvrStorageKeyVersion string
 @description('Create and attach a dedicated managed identity for Managed HSM TLS offload')
 param managedHsmTlsEnabled bool = false
 
+@description('Deploy DVR Blob data-plane role assignments with the storage module')
+param deployDvrDataPlaneRoleAssignments bool = true
+
 @description('Enable Confidential OS Disk Encryption')
 param confidentialOsDisk bool = true
 
@@ -562,6 +565,7 @@ module dvrStorageModule 'dvr-storage.bicep' = {
     storageEncryptionIdentityId: storageEncryptionIdentity.id
     dvrIdentityPrincipalId: dvrIdentity.properties.principalId
     analyzerIdentityPrincipalId: cvmIdentity.properties.principalId
+    deployDataPlaneRoleAssignments: deployDvrDataPlaneRoleAssignments
     privateEndpointSubnetId: '${appVnet.id}/subnets/${appSubnetName}'
     vnetId: appVnet.id
     vnetName: vnetName

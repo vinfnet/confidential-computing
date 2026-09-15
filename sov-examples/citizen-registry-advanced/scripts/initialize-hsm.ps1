@@ -69,21 +69,31 @@ $hsmStatus = az keyvault show --hsm-name $HsmName --query "properties.provisioni
 
 Write-Host "  Provisioning State: $hsmStatus" -ForegroundColor Yellow
 
+function Set-HsmRoleAssignment {
+    param([Parameter(Mandatory)] [string]$Role)
+
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $false
+    try {
+        $roleOutput = az keyvault role assignment create `
+            --hsm-name $HsmName `
+            --role $Role `
+            --assignee-object-id $AdminPrincipal `
+            --scope /keys `
+            --output none 2>&1
+        if ($LASTEXITCODE -ne 0 -and ($roleOutput -join "`n") -notmatch 'MatchingRoleAssignmentExists') {
+            throw "Failed to ensure HSM role '$Role': $roleOutput"
+        }
+    } finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
+}
+
 # A successful local role assignment and key list prove the HSM is active.
 $isActive = $false
 try {
-    az keyvault role assignment create `
-        --hsm-name $HsmName `
-        --role 'Managed HSM Crypto Officer' `
-        --assignee-object-id $AdminPrincipal `
-        --scope /keys `
-        --output none
-    az keyvault role assignment create `
-        --hsm-name $HsmName `
-        --role 'Managed HSM Crypto User' `
-        --assignee-object-id $AdminPrincipal `
-        --scope /keys `
-        --output none
+    Set-HsmRoleAssignment -Role 'Managed HSM Crypto Officer'
+    Set-HsmRoleAssignment -Role 'Managed HSM Crypto User'
     az keyvault key list --hsm-name $HsmName --maxresults 1 -o none 2>$null
     $isActive = $LASTEXITCODE -eq 0
 } catch { $isActive = $false }
@@ -155,20 +165,8 @@ try {
         --output none
     if ($LASTEXITCODE -ne 0) { throw "Security-domain download failed" }
 
-    az keyvault role assignment create `
-        --hsm-name $HsmName `
-        --role 'Managed HSM Crypto Officer' `
-        --assignee-object-id $AdminPrincipal `
-        --scope /keys `
-        --output none
-    if ($LASTEXITCODE -ne 0) { throw "Crypto Officer role assignment failed" }
-    az keyvault role assignment create `
-        --hsm-name $HsmName `
-        --role 'Managed HSM Crypto User' `
-        --assignee-object-id $AdminPrincipal `
-        --scope /keys `
-        --output none
-    if ($LASTEXITCODE -ne 0) { throw "Crypto User role assignment failed" }
+    Set-HsmRoleAssignment -Role 'Managed HSM Crypto Officer'
+    Set-HsmRoleAssignment -Role 'Managed HSM Crypto User'
 
     Write-Host "✓ Managed HSM activated" -ForegroundColor Green
     Write-Host "  Security-domain backup: $securityDomainFile" -ForegroundColor Yellow
@@ -176,5 +174,5 @@ try {
     Write-Warning "Protect the security-domain file and private recovery keys; they are required for disaster recovery."
 } catch {
     Write-Host "✗ Security domain initialization failed: $_" -ForegroundColor Red
-    exit 1
+    throw
 }
