@@ -4,7 +4,11 @@
 
 > **Implementation status:** Stage 2 provisions separate RSA-HSM customer-managed keys for the app CVM OS disk and private DVR Blob Storage. Azure Confidential VM secure key release binds the OS-disk key to the app VM's attested vTPM/platform state. The DVR account is ZRS, infrastructure-encrypted, private-endpoint-only, and uses separate writer, analyzer reader, and Storage encryption identities. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
-**GPU configuration updated:** September 3, 2026
+**Deployment validated end to end:** September 15, 2026
+
+> **Validated live state:** the citizen registry and CCTV applications are working in the
+> `FileBackedDemo` profile. The app CVM reports `CC status: ON`, `CC Environment: PRODUCTION`,
+> successful NVIDIA GPU attestation, successful CPU SEV-SNP/vTPM attestation, and `CCTV_APP_READY=1`.
 
 ---
 
@@ -86,7 +90,13 @@ suites. The browser and nginx negotiate the authenticated symmetric cipher and e
 keys during each handshake; modern TLS 1.3 clients normally select AES-GCM or ChaCha20-Poly1305.
 The configuration does not claim that one fixed cipher is selected for every client.
 
-The required production profile keeps the PKI authority and server private signing key in the
+The validated `FileBackedDemo` profile generates the demo CA, nginx server key, and client key as
+files inside the app Confidential VM. The Managed HSM still protects the app OS-disk CMK and DVR
+Storage CMK, while CPU and GPU attestation gates the deployed services. HTTPS server authentication
+protects all browser traffic, while protected create, update, and delete operations additionally
+require the deployment-generated client certificate (mTLS).
+
+The optional production profile keeps the PKI authority and server private signing key in the
 customer's Managed HSM. nginx uses the Microsoft Managed HSM TLS Offload Library through its
 PKCS#11 interface; the library uses the app VM's managed identity and the Managed HSM REST API to
 perform TLS-handshake signatures without exporting the server key. Public X.509 certificates and
@@ -114,12 +124,19 @@ Managed HSM.
 
 ```mermaid
 flowchart LR
-  Browser[Customer browser] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion<br/>App VNet]
+  Browser[Customer browser<br/>local port 9443] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion<br/>public management entry]
 
   subgraph AppVNet[App VNet - West Europe<br/>10.appOctet.0.0/16 - default 10.20.0.0/16]
     Bastion -->|Private 443| App[App Confidential VM<br/>10.appOctet.3.4<br/>SEV-SNP CPU + H100 CC]
+    CpuGate[CPU attestation service<br/>current-boot SEV-SNP/vTPM]
+    GpuGate[GPU attestation service<br/>H100 nvtrust, CC production]
+    Cctv[Confidential CCTV anonymizer<br/>MTCNN + blur + finite HLS]
     BlobPe[DVR Blob private endpoint<br/>private DNS]
     App -->|Read-only managed identity + HTTPS| BlobPe
+    CpuGate --> App
+    GpuGate --> App
+    GpuGate --> Cctv
+    Cctv --> App
   end
 
   BlobPe --> Dvr[Private ZRS DVR Storage<br/>public and shared-key access disabled]
@@ -166,8 +183,10 @@ The West Europe NCC40 deployment and private DVR workflow have been validated en
 | Secure key release | Azure CVM Orchestrator has release-only access to `yourprefix-cvm-os-key` |
 | Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
 | Database | Connected; 100 fictional records with CRUD operations |
-| Attestation endpoint | Provider metadata reachable; not a guest quote-verification claim |
+| CPU attestation | Current-boot SEV-SNP/vTPM verification succeeded |
+| Attestation endpoint | Provider metadata reachable; separate from local CPU/GPU evidence |
 | Confidential GPU | H100 production CC mode plus successful nvtrust GPU attestation |
+| CCTV readiness | `CCTV_APP_READY=1`; no raw fallback when attestation or processing is unhealthy |
 | DVR Storage | Private ZRS Blob account, Managed HSM CMK, infrastructure encryption, TLS 1.2, default deny |
 | DVR access | Dedicated writer identity; analyzer identity is read-only; no shared-key authentication |
 
@@ -629,7 +648,7 @@ flowchart LR
     App2 -->|Private TLS 1433| Db2[SQL CVM<br/>SEV-SNP]
     Dvr2[Private DVR Blob Storage<br/>HSM CMK] -->|Private Link + read-only identity| App2
     Hsm2[Managed HSM<br/>app OS-disk CMK] -->|Attestation-bound release| App2
-    Pki2[Target HSM-backed PKI] -.->|TLS Offload not deployed yet| App2
+    Pki2[Future HSM-backed PKI target] -.->|TLS Offload not deployed in FileBackedDemo| App2
 ```
 
 ## 🛡️ Comprehensive Data Protection Architecture
@@ -1062,7 +1081,7 @@ $Location = "northeurope"
   -Deploy
 
 # Output: resource group "${Prefix}12345app" (random 5-digit suffix)
-#         Bastion accessible, CVM running citizen-registry
+#         Bastion accessible, CVM running citizen-registry and CCTV anonymizer
 ```
 
 **Parameters:**
@@ -1077,7 +1096,7 @@ $Location = "northeurope"
 1. Creates app instance RG
 2. Provisions the H100 Confidential GPU VM and SQL Confidential VM
 3. Installs citizen-registry app
-4. Configures mTLS with Azure Attestation
+4. Configures file-backed demo mTLS; Azure Attestation supplies separate CPU/VM evidence
 5. Sets up Bastion for secure access
 6. Establishes private link to shared Managed HSM
 7. Seeds database with demo citizen records

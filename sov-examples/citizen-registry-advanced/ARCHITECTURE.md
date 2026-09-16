@@ -6,10 +6,10 @@
 
 ```mermaid
 flowchart LR
-  Browser[Customer browser] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion]
+   Browser[Customer browser<br/>local port 9443] -->|HTTPS through Bastion tunnel| Bastion[Azure Bastion]
 
   subgraph AppVNet[App VNet - West Europe<br/>default 10.20.0.0/16]
-    Bastion -->|Private 443| App[App Confidential VM<br/>Standard_NCC40ads_H100_v5<br/>default 10.20.3.4]
+      Bastion -->|Bastion tunnel → private 443<br/>mTLS for protected CRUD| App[App Confidential VM<br/>Standard_NCC40ads_H100_v5<br/>default 10.20.3.4]
       BlobPe[DVR Blob private endpoint<br/>dynamic private IP]
       App -->|Managed identity + HTTPS| BlobPe
   end
@@ -27,6 +27,9 @@ flowchart LR
   App -->|Encrypted SQL connection<br/>TCP 1433 over global VNet peering| Sql
   App -->|Private endpoint access| HsmPe
    Hsm -->|Wrap and unwrap Storage encryption key| Dvr
+   Cpu2[CPU attestation service<br/>SEV-SNP/vTPM current boot] --> App
+   Gpu2[GPU attestation service<br/>H100 nvtrust current boot] --> App
+   Cctv2[CCTV anonymizer<br/>private DVR → finite HLS] --> App
 ```
 
 The app and SQL Server run on separate Confidential VMs and separate regional VNets. Global VNet
@@ -51,9 +54,9 @@ User Machine
     ├─ SSH via Bastion
     │  └─ Port 2222 → Bastion → Port 22 (CVM)
     │
-    └─ HTTPS via Bastion
-       └─ Port 8443 (mTLS)
-          └─ Client certificate required for protected CRUD operations
+    ├─ HTTPS via Bastion
+       ├─ Local port 9443 → Bastion → private port 443 (nginx)
+       └─ Client certificate required for protected CRUD operations
 
          ↓↓↓ (Mutual TLS Handshake) ↓↓↓
 
@@ -206,16 +209,16 @@ Internet ━━━━ BLOCKED ━━━━━ (No public access to resources)
         │
         └─→ SSH/RDP tunnel
             │
-            └─→ Private VNet (10.0.0.0/16)
+            └─→ Private VNets (shared 10.10.0.0/16, app 10.20.0.0/16, SQL 10.21.0.0/16)
                 │
-                ├─→ App Subnet (10.0.3.0/24)
+                ├─→ App Subnet (10.20.3.0/24)
                 │   ├─ CVM (no public IP)
                 │   └─ DVR Blob private endpoint
                 │
-                ├─→ DB Subnet (10.0.4.0/24)
+                ├─→ DB Subnet (10.21.4.0/24)
                 │   └─ Database (no public IP)
                 │
-                └─→ Private Link Subnet (10.0.1.0/24)
+                └─→ Private Link Subnet (10.10.1.0/24 in shared VNet)
                     └─ HSM endpoint (no public IP)
 
 NSG Rules (Explicit Allow):
@@ -265,14 +268,14 @@ Confidential VM (Managed Identity: cvm-identity)
 ```
 1. Parse Parameters
    ├─ Prefix: yourprefix
-   ├─ Location: northeurope
+   ├─ Location: westeurope (app) and northeurope (SQL)
    └─ Validate naming conventions
 
 2. Create Resource Group
    └─ {Prefix}sharedinfra (e.g., yourprefixsharedinfra)
 
 3. Deploy Bicep Template (shared-infra.bicep)
-   ├─ Virtual Network (10.0.0.0/16)
+   ├─ Shared VNet (10.10.0.0/16)
    ├─ Private subnets
    ├─ Network Security Groups
    ├─ Managed HSM (B1 SKU)
@@ -296,7 +299,8 @@ Confidential VM (Managed Identity: cvm-identity)
 1. Parse Parameters
    ├─ Prefix: yourprefix
    ├─ SharedInfraRg: yourprefixsharedinfra
-   ├─ Location: northeurope
+   ├─ App location: westeurope
+   ├─ SQL location: northeurope
    ├─ CvmSize: Standard_DC2as_v5
    └─ Validate and link to shared infra
 
@@ -304,7 +308,7 @@ Confidential VM (Managed Identity: cvm-identity)
    └─ {Prefix}{random5digit}app (e.g., yourprefix12345app)
 
 3. Deploy Bicep Template (app-instance.bicep)
-   ├─ Virtual Network (10.0.0.0/16, different VNet)
+   ├─ App VNet (10.20.0.0/16) and SQL VNet (10.21.0.0/16)
    ├─ NSGs (app, db, bastion)
    ├─ Confidential VM
    │  ├─ Image: Ubuntu 24.04 LTS Gen2
@@ -327,8 +331,10 @@ Confidential VM (Managed Identity: cvm-identity)
    ├─ Download with the analyzer identity through Private Link
    └─ Delete temporary ingest files after verified cache replacement
 
-5. Configure mTLS
-   └─ Cloud-init creates the Norland demo PKI and installs nginx configuration
+5. Configure mTLS and attestation services
+   ├─ Cloud-init creates the file-backed Norland demo PKI and installs nginx configuration
+   ├─ citizen-cpu-attestation verifies current-boot SEV-SNP/vTPM evidence
+   └─ citizen-gpu-attestation verifies H100 production CC mode and nvtrust evidence
 
 6. Setup Bastion
    └─ Bicep deploys Standard Bastion with tunneling enabled
