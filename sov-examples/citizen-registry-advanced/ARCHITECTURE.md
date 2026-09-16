@@ -58,6 +58,10 @@ User Machine
        ├─ Local port 9443 → Bastion → private port 443 (nginx)
        └─ Client certificate required for protected CRUD operations
 
+    └─ Citizen Help
+       └─ /citizenhelp → /api/citizenhelp → localhost:8010
+          └─ Qwen2.5-7B-Instruct on the attested H100 only
+
          ↓↓↓ (Mutual TLS Handshake) ↓↓↓
 
     Customer-issued User Certificate
@@ -131,7 +135,27 @@ against its `source_sha256` metadata before atomically replacing the local cache
 files are deleted after upload. The UI technical-details endpoint exposes only resource names,
 network and authentication modes, key identifiers, operations, and exportability.
 
-### 4. App → Managed HSM (Private Link + Managed Identity)
+### 4. Citizen Help LLM (H100-only, bounded retrieval)
+
+```mermaid
+flowchart LR
+   Browser[Authorized browser<br/>Bastion HTTPS tunnel] -->|mTLS-protected POST| Flask[Flask policy boundary]
+   Flask -->|Parameterized lookup<br/>max five synthetic records| Sql[SQL Confidential VM]
+   Flask -->|Question + bounded context<br/>localhost only| Help[Citizen Help service<br/>127.0.0.1:8010]
+   Gate[Current-boot GPU attestation<br/>H100 CC status ON] --> Help
+   Help -->|Qwen2.5-7B-Instruct<br/>7.61B, Apache-2.0, bfloat16| H100[NVIDIA H100<br/>cuda:0 only]
+   Help -->|No tools, shell, network, or fallback| Refusal[Fail-closed policy and output checks]
+   Help -->|Answer grounded only in supplied records| Flask
+```
+
+The service is a single systemd process so the model is loaded once on the H100 rather than once
+per Gunicorn worker. The model snapshot is pinned to revision
+`a09a35458c702b33eeacc393d103063234e8bc28` and downloaded from the public Qwen repository.
+The Flask process performs input policy checks and retrieval; the model process repeats the input
+checks and validates the bounded context. No user text is treated as an instruction to access a
+tool or change the system policy.
+
+### 5. App → Managed HSM (Private Link + Managed Identity)
 
 ```
 Flask App

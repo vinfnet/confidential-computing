@@ -13,6 +13,7 @@ from flask import Flask, jsonify, redirect, request, render_template, send_file,
 import base64
 import json
 import os
+import re
 import secrets
 import ssl
 import threading
@@ -26,6 +27,7 @@ from pathlib import Path
 from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
 from media_generator import MediaGenerator, get_gpu_attestation_evidence
+from citizen_help import MAX_RECORDS, model_metadata, validate_question
 
 # Configure logging
 logging.basicConfig(
@@ -636,6 +638,59 @@ def _get_cmk_evidence():
 # Flask Routes
 # ============================================================================
 
+def _citizen_help_records(question):
+    """Return a bounded, parameterized context slice for the local LLM."""
+    stop_words = {
+        'which', 'what', 'where', 'when', 'who', 'how', 'is', 'are', 'the',
+        'a', 'an', 'in', 'on', 'for', 'of', 'to', 'and', 'registered',
+        'citizen', 'citizens', 'region', 'state', 'town', 'address',
+    }
+    terms = [
+        term for term in re.findall(r'[A-Za-z0-9-]{2,}', question.lower())
+        if term not in stop_words
+    ][:6]
+    if not terms:
+        return []
+    clauses = []
+    values = []
+    for term in terms:
+        like = f'%{term}%'
+        clauses.append(
+            '(LOWER(first_name) LIKE ? OR LOWER(last_name) LIKE ? '
+            'OR LOWER(national_id) LIKE ? OR LOWER(region) LIKE ? '
+            'OR LOWER(municipality) LIKE ?)'
+        )
+        values.extend([like, like, like, like, like])
+    conn = _get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute(f"""
+        SELECT id, national_id, first_name, last_name, date_of_birth, sex,
+               region, municipality, address_line, postal_code,
+               socioeconomic_group, tax_paid_last_year
+        FROM citizen_registry
+        WHERE {' AND '.join(clauses)}
+        ORDER BY last_name, first_name
+    """, values)
+    rows = cursor.fetchall()[:MAX_RECORDS]
+    conn.close()
+    return [
+        {
+            'id': row[0],
+            'national_id': row[1],
+            'first_name': row[2],
+            'last_name': row[3],
+            'date_of_birth': str(row[4]),
+            'sex': row[5],
+            'region': row[6],
+            'municipality': row[7],
+            'address_line': row[8],
+            'postal_code': row[9],
+            'socioeconomic_group': row[10],
+            'tax_paid_last_year': float(row[11] or 0),
+        }
+        for row in rows
+    ]
+
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
@@ -710,6 +765,48 @@ def citizens():
 def cctv():
     """Render the confidential CCTV application."""
     return render_template('cctv.html')
+
+
+@app.route('/citizenhelp', methods=['GET'])
+def citizen_help():
+    """Render the GPU-only Norland Citizen Help experience."""
+    return render_template('citizenhelp.html')
+
+
+@app.route('/api/citizenhelp/model', methods=['GET'])
+def citizen_help_model():
+    """Return non-secret metadata for the active local open model."""
+    return jsonify(model_metadata('cuda:0'))
+
+
+@app.route('/api/citizenhelp', methods=['POST'])
+def citizen_help_chat():
+    """Retrieve bounded synthetic citizen context and call the localhost GPU service."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        question = validate_question(payload.get('question'))
+        records = _citizen_help_records(question)
+        response = requests.post(
+            'http://127.0.0.1:8010/generate',
+            json={'question': question, 'records': records},
+            timeout=90,
+        )
+        response.raise_for_status()
+        result = response.json()
+        result['matches'] = [
+            {'id': record['id'], 'name': f"{record['first_name']} {record['last_name']}"}
+            for record in records
+        ]
+        return jsonify(result)
+    except PermissionError as error:
+        return jsonify({'answer': str(error), 'blocked': True}), 200
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    except requests.RequestException:
+        return jsonify({'error': 'Citizen Help GPU service is not ready.'}), 503
+    except Exception as error:
+        logger.error('Citizen Help request failed: %s', type(error).__name__)
+        return jsonify({'error': 'Citizen Help could not complete the request.'}), 503
 
 
 @app.route('/cctv/status', methods=['GET'])

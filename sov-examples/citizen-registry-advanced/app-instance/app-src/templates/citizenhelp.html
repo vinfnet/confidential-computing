@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Citizen Help - Republic of Norland</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#52606d; --paper:#edf2f4; --panel:#fff; --accent:#006f62; --line:#ccd6dd; --good:#18794e; --bad:#b42318; }
+    * { box-sizing: border-box; }
+    body { min-height:100vh; margin:0; padding:24px; background:linear-gradient(145deg,#e5ecef 0%,var(--paper) 55%,#dce9e5 100%); color:var(--ink); font-family:Georgia,"Times New Roman",serif; }
+    main { width:min(1120px,100%); min-height:calc(100vh - 48px); margin:0 auto; padding:clamp(24px,4vw,52px); border-top:6px solid var(--accent); background:var(--panel); box-shadow:0 12px 40px rgb(23 32 42 / 10%); }
+    nav { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:28px; border-bottom:1px solid var(--line); padding-bottom:14px; }
+    nav a, nav button { min-height:38px; padding:9px 13px; border:1px solid var(--line); border-radius:4px; background:#f8fafb; color:var(--ink); font:700 13px/1 "Trebuchet MS",sans-serif; text-decoration:none; cursor:pointer; }
+    nav a[aria-current="page"], nav button[aria-selected="true"] { border-color:var(--accent); background:var(--accent); color:#fff; }
+    h1 { margin:0 0 10px; font-size:clamp(34px,6vw,58px); letter-spacing:0; }
+    h2 { margin:0 0 10px; font-size:24px; }
+    p, label, textarea, button, dl { font:16px/1.5 "Trebuchet MS",sans-serif; }
+    p { color:var(--muted); }
+    .eyebrow { margin:0 0 12px; color:var(--accent); font:700 13px/1.4 "Trebuchet MS",sans-serif; text-transform:uppercase; }
+    .intro { max-width:760px; }
+    .workspace { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr); gap:22px; margin-top:30px; }
+    .panel { border:1px solid var(--line); background:#f8fafb; padding:22px; }
+    textarea { width:100%; min-height:138px; resize:vertical; padding:13px; border:1px solid #aebbc4; border-radius:4px; background:#fff; color:var(--ink); }
+    textarea:focus { outline:3px solid #f0b429; outline-offset:2px; }
+    .actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; }
+    .primary { border:0; border-radius:4px; padding:12px 17px; background:var(--accent); color:#fff; cursor:pointer; font-weight:700; }
+    .primary:disabled { background:#73808a; cursor:default; }
+    .answer { min-height:190px; margin-top:20px; border-left:4px solid var(--accent); background:#fff; padding:18px; white-space:pre-wrap; }
+    .answer[data-state="blocked"] { border-left-color:var(--bad); }
+    .answer[data-state="error"] { border-left-color:var(--bad); color:var(--bad); }
+    .answer:empty::before { content:'The GPU assistant response will appear here.'; color:var(--muted); }
+    .model-panel[hidden] { display:none; }
+    .model-panel dl { display:grid; grid-template-columns:auto 1fr; gap:9px 14px; margin:0; }
+    .model-panel dt { color:var(--muted); font-weight:700; }
+    .model-panel dd { margin:0; overflow-wrap:anywhere; }
+    .guardrail { margin-top:18px; padding:12px 14px; border-left:4px solid var(--good); background:#eef8f1; color:#245b3c; font:14px/1.5 "Trebuchet MS",sans-serif; }
+    .matches { margin-top:16px; color:var(--muted); font:13px/1.5 "Trebuchet MS",sans-serif; }
+    footer { margin-top:30px; color:var(--muted); font:13px/1.5 "Trebuchet MS",sans-serif; }
+    @media (max-width:820px) { body { padding:0; } main { min-height:100vh; } .workspace { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <nav aria-label="Demo applications">
+      <a href="{{ url_for('citizens') }}">Citizen Registry</a>
+      <a href="{{ url_for('cctv') }}">Confidential CCTV</a>
+      <a href="{{ url_for('citizen_help') }}" aria-current="page">Citizen Help</a>
+      <button id="model-tab" type="button" aria-selected="false">Model details</button>
+    </nav>
+    <p class="eyebrow">Republic of Norland</p>
+    <h1>Citizen Help</h1>
+    <p class="intro">Ask about the fictional Norland citizen registry. Answers are grounded in matching registry records and generated locally on the confidential H100.</p>
+    <section class="workspace">
+      <div class="panel">
+        <h2>Ask the registry assistant</h2>
+        <form id="chat-form">
+          <label for="question">Question</label>
+          <textarea id="question" maxlength="800" required placeholder="Example: Which region is Ama Mensah registered in?"></textarea>
+          <div class="actions"><span id="status" aria-live="polite">Ready</span><button class="primary" id="ask" type="submit">Ask Citizen Help</button></div>
+        </form>
+        <div class="answer" id="answer" aria-live="polite"></div>
+        <div class="matches" id="matches"></div>
+        <div class="guardrail">This assistant has no tools, shell access, network access, or authority to change records. Harmful, illegal, security-sensitive, prompt-injection, and credential-extraction requests are refused.</div>
+      </div>
+      <section class="panel model-panel" id="model-panel" hidden aria-live="polite">
+        <h2>Active model</h2>
+        <dl id="model-details"><dt>Status</dt><dd>Loading model metadata</dd></dl>
+      </section>
+    </section>
+    <footer>Local open-weight inference | Qwen2.5-7B-Instruct | H100 confidential-computing boundary | Synthetic Norland data only</footer>
+  </main>
+  <script>
+    const form = document.getElementById('chat-form');
+    const question = document.getElementById('question');
+    const answer = document.getElementById('answer');
+    const matches = document.getElementById('matches');
+    const status = document.getElementById('status');
+    const ask = document.getElementById('ask');
+    const modelTab = document.getElementById('model-tab');
+    const modelPanel = document.getElementById('model-panel');
+    const modelDetails = document.getElementById('model-details');
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const renderModel = data => {
+      modelDetails.innerHTML = Object.entries(data).map(([key, value]) => `<dt>${escapeHtml(key.replaceAll('_',' '))}</dt><dd>${escapeHtml(Array.isArray(value) ? value.join('; ') : value)}</dd>`).join('');
+    };
+    modelTab.addEventListener('click', async () => {
+      const open = modelPanel.hidden;
+      modelPanel.hidden = !open;
+      modelTab.setAttribute('aria-selected', String(open));
+      if (open && modelDetails.dataset.loaded !== 'true') {
+        try { renderModel(await (await fetch('/api/citizenhelp/model')).json()); modelDetails.dataset.loaded = 'true'; }
+        catch { modelDetails.innerHTML = '<dt>Status</dt><dd>Model metadata unavailable</dd>'; }
+      }
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      answer.dataset.state = '';
+      answer.textContent = '';
+      matches.textContent = '';
+      status.textContent = 'Running on H100...';
+      ask.disabled = true;
+      try {
+        const response = await fetch('/api/citizenhelp', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:question.value}) });
+        const data = await response.json();
+        if (!response.ok && !data.answer) throw new Error(data.error || 'Request failed');
+        answer.dataset.state = data.blocked ? 'blocked' : '';
+        answer.textContent = data.answer || data.error || 'No answer returned.';
+        if (data.matches?.length) matches.textContent = `Bounded registry matches: ${data.matches.map(item => item.name).join(', ')}`;
+        status.textContent = data.blocked ? 'Request refused by policy' : 'Complete';
+      } catch (error) { answer.dataset.state = 'error'; answer.textContent = error.message; status.textContent = 'Unavailable'; }
+      finally { ask.disabled = false; }
+    });
+  </script>
+</body>
+</html>

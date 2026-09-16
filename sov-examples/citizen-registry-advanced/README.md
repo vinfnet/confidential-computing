@@ -17,6 +17,7 @@
 - [Cost warning and controls](#cost-warning-and-controls)
 - [Security boundary and deployed evidence](#security-boundary-and-deployed-evidence)
 - [Demo experience](#demo-experience)
+- [Citizen Help LLM](#citizen-help-llm)
 - [Architecture overview](#architecture-overview)
 - [Quick start](#quick-start)
 - [Verification and security validation](#verification--security-validation)
@@ -407,6 +408,36 @@ flowchart LR
 The worker processes the finite clip as fast as the system allows; FFmpeg is not throttled to
 wall-clock playback speed. Fixed-shape cuDNN autotuning and four-frame MTCNN batches improve H100
 utilization. Decode, box tracking, blur, and H.264 encoding remain in SEV-SNP-protected CPU memory.
+
+### Citizen Help LLM
+
+Open `https://localhost:9443/citizenhelp` through the Bastion tunnel. This third demo is a
+narrowly scoped chatbot for the fictional Republic of Norland citizen registry. It retrieves a
+bounded set of matching synthetic records in Flask and sends only that context to a localhost-only
+GPU service; the model has no database connection, tools, shell, network, or record-mutation path.
+
+The deployed default model is **Qwen2.5-7B-Instruct** from the public
+[Qwen model repository](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct):
+
+| Model detail | Value |
+|---|---|
+| License | Apache-2.0 |
+| Parameters | 7.61B |
+| Revision | `a09a35458c702b33eeacc393d103063234e8bc28` |
+| Runtime | Hugging Face Transformers, `bfloat16` |
+| Device | `cuda:0`, NVIDIA H100 only |
+| Fallback | Disabled; no CPU inference |
+
+The model-details tab in the interface reads the same non-secret metadata exposed by the local
+service. Startup fails closed unless CUDA is available and the device name contains `H100`, and
+the systemd unit requires successful current-boot GPU attestation before loading the model.
+
+Citizen Help applies defense in depth: bounded input length, parameterized retrieval, a strict
+registry-only system policy, refusal of prompt injection and jailbreak instructions, refusal of
+harmful/illegal/security-breach/credential-extraction requests, no tool or code execution, output
+leakage checks, and fail-closed service errors. These controls reduce risk but do not turn a small
+open model into a general-purpose safety classifier; the assistant must remain limited to the
+synthetic Norland dataset and supervised demo use.
 Although H100 exposes NVDEC, using it here would require returning decoded frames to CPU memory for
 Pillow and `libx264`; H100 has no NVENC engine to complete this pipeline on the GPU.
 

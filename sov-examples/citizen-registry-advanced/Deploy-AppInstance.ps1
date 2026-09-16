@@ -239,6 +239,23 @@ function Test-VmSkuCapacity {
         [string]$ExistingVmName
     )
 
+    if ($ExistingVmName) {
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+        $existingVmSize = az vm show `
+            --resource-group $RgName `
+            --name $ExistingVmName `
+            --query hardwareProfile.vmSize `
+            --output tsv `
+            --only-show-errors 2>$null
+        $existingVmExitCode = $LASTEXITCODE
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        if ($existingVmExitCode -eq 0 -and $existingVmSize -eq $VmSize) {
+            Write-Host "✓ $VmSize already provisioned in $VmLocation; quota is committed to this deployment" -ForegroundColor Green
+            return
+        }
+    }
+
     $skuInfo = az vm list-skus `
         --location $VmLocation `
         --size $VmSize `
@@ -259,21 +276,6 @@ function Test-VmSkuCapacity {
         throw "Could not find quota for VM family '$($skuInfo.family)' in '$VmLocation'."
     }
     $availableVcpus = [int]$quota.limit - [int]$quota.current
-    if ($ExistingVmName) {
-        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
-        $PSNativeCommandUseErrorActionPreference = $false
-        $existingVmSize = az vm show `
-            --resource-group $RgName `
-            --name $ExistingVmName `
-            --query hardwareProfile.vmSize `
-            --output tsv `
-            --only-show-errors 2>$null
-        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
-        if ($LASTEXITCODE -eq 0 -and $existingVmSize -eq $VmSize) {
-            Write-Host "✓ $VmSize already provisioned in $VmLocation; quota is committed to this deployment" -ForegroundColor Green
-            return
-        }
-    }
     if ($availableVcpus -lt $requiredVcpus) {
         throw "Insufficient '$($skuInfo.family)' quota in '$VmLocation': $availableVcpus vCPUs available, $requiredVcpus required."
     }
@@ -379,11 +381,33 @@ $diskEncryptionSetName = "$Prefix-cvm-os-des"
 $dvrStorageKeyName = "$Prefix-dvr-storage-key"
 $managedHsmUri = "https://$hsmName.managedhsm.azure.net"
 
+function Set-HsmNetworkAccess {
+    param(
+        [Parameter(Mandatory)] [ValidateSet('Enabled', 'Disabled')] [string]$Access,
+        [Parameter(Mandatory)] [string]$DefaultAction
+    )
+    $arguments = @(
+        'resource', 'update', '--ids', $hsmId,
+        '--set', "properties.publicNetworkAccess=$Access", "properties.networkAcls.defaultAction=$DefaultAction", 'properties.networkAcls.bypass=AzureServices',
+        '--only-show-errors'
+    )
+    $process = Start-Process -FilePath 'az.cmd' -ArgumentList $arguments -PassThru -WindowStyle Hidden
+    for ($attempt = 1; $attempt -le 60; $attempt++) {
+        $state = az resource show --ids $hsmId --query 'properties.provisioningState' -o tsv --only-show-errors
+        $currentAccess = az resource show --ids $hsmId --query 'properties.publicNetworkAccess' -o tsv --only-show-errors
+        $currentDefaultAction = az resource show --ids $hsmId --query 'properties.networkAcls.defaultAction' -o tsv --only-show-errors
+        $aclSatisfied = if ($Access -eq 'Disabled') { $currentAccess -eq 'Disabled' } else { $currentDefaultAction -eq $DefaultAction }
+        if ($state -eq 'Succeeded' -and $currentAccess -eq $Access -and $aclSatisfied) { return }
+        if ($attempt -eq 60) { throw "Managed HSM network update timed out: state=$state access=$currentAccess defaultAction=$currentDefaultAction" }
+        Start-Sleep -Seconds 10
+    }
+}
+
 # Provision the customer-managed key and DES before creating either CVM.
 Write-Host "Provisioning Managed HSM-backed confidential disk encryption..." -ForegroundColor Yellow
 $hsmBootstrapComplete = $false
 try {
-    az resource update --ids $hsmId --set properties.publicNetworkAccess=Enabled properties.networkAcls.defaultAction=Allow properties.networkAcls.bypass=AzureServices | Out-Null
+    Set-HsmNetworkAccess -Access Enabled -DefaultAction Allow
     $keyUrl = ''
     try { $keyUrl = az keyvault key show --hsm-name $hsmName --name $osDiskKeyName --query key.kid -o tsv 2>$null } catch { $keyUrl = '' }
     if (-not $keyUrl) {
@@ -423,7 +447,7 @@ try {
     Write-Host "Managed HSM keys and DES ready: $diskEncryptionSetName, $dvrStorageKeyName" -ForegroundColor Green
 } finally {
     # Managed disks use the trusted-services bypass; app traffic uses Private Link.
-    az resource update --ids $hsmId --set properties.publicNetworkAccess=Disabled properties.networkAcls.defaultAction=Deny properties.networkAcls.bypass=AzureServices | Out-Null
+    Set-HsmNetworkAccess -Access Disabled -DefaultAction Deny
     Write-Host "Managed HSM locked to Private Link and trusted Azure services" -ForegroundColor Green
 }
 if (-not $hsmBootstrapComplete) { throw 'Managed HSM CMK bootstrap did not complete; no CVM was deployed.' }
@@ -486,9 +510,16 @@ apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
-pip3 install --break-system-packages --no-cache-dir azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors
+pip3 install --break-system-packages --no-cache-dir azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors huggingface_hub 'jinja2>=3.1.0'
 pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
+MODEL_ID='Qwen/Qwen2.5-7B-Instruct'
+MODEL_REVISION='a09a35458c702b33eeacc393d103063234e8bc28'
+MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct
+mkdir -p "$MODEL_PATH"
+if [ ! -f "$MODEL_PATH/config.json" ]; then
+    MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+fi
 for attempt in `$(seq 1 30); do
     python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE" && break
     if [ "`$attempt" -eq 30 ]; then exit 1; fi
@@ -507,7 +538,7 @@ printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSig
 openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256 -extfile /tmp/client-ext.cnf
 chmod 600 /etc/citizen-registry/certs/*.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCCTV_VIDEO_PATH=/var/lib/citizen-registry/dvr-cache/$dvrBlobName\nCCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName\nDVR_STORAGE_ACCOUNT=$dvrStorageAccountName\nDVR_STORAGE_CONTAINER=$dvrContainerName\nDVR_STORAGE_KEY_NAME=$dvrStorageKeyName\nDVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCITIZENHELP_MODEL_ID=Qwen/Qwen2.5-7B-Instruct\nCITIZENHELP_MODEL_REVISION=a09a35458c702b33eeacc393d103063234e8bc28\nCITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct\nCITIZENHELP_PORT=8010\nCCTV_VIDEO_PATH=/var/lib/citizen-registry/dvr-cache/$dvrBlobName\nCCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName\nDVR_STORAGE_ACCOUNT=$dvrStorageAccountName\nDVR_STORAGE_CONTAINER=$dvrContainerName\nDVR_STORAGE_KEY_NAME=$dvrStorageKeyName\nDVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target var-lib-citizen\x2dregistry.mount
@@ -538,6 +569,30 @@ WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
 systemctl enable --now citizen-registry
+cat > /etc/systemd/system/citizenhelp-llm.service <<'SERVICE'
+[Unit]
+Description=Norland Citizen Help local H100 LLM
+After=network-online.target citizen-gpu-attestation.service
+Requires=citizen-gpu-attestation.service
+RequiresMountsFor=/var/lib/citizen-registry
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/citizen-registry/app-src
+EnvironmentFile=/etc/citizen-registry/environment
+ExecStart=/usr/bin/python3 /opt/citizen-registry/app-src/citizen_help_server.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+systemctl enable --now citizenhelp-llm
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
     systemctl enable nginx
     systemctl restart nginx
@@ -860,14 +915,20 @@ if ($Deploy -or $ResumePostDeploy) {
                     --vnet-name $sharedVnetName `
                     --name "shared-to-$VnetName" `
                     --query id --output tsv 2>$null
-            } catch { $sharedPeeringId = '' }
+            }
+            catch {
+                $sharedPeeringId = ''
+            }
             if (-not $sharedPeeringId) {
                 az network vnet peering create --resource-group $SharedInfraRg --vnet-name $sharedVnetName --name "shared-to-$VnetName" --remote-vnet $script:appVnetId --allow-vnet-access | Out-Null
             }
             $hsmDnsLinkExists = ''
             try {
                 $hsmDnsLinkExists = az network private-dns link vnet show --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --query id -o tsv 2>$null
-            } catch { $hsmDnsLinkExists = '' }
+            }
+            catch {
+                $hsmDnsLinkExists = ''
+            }
             if (-not $hsmDnsLinkExists) {
                 az network private-dns link vnet create --resource-group $SharedInfraRg --zone-name privatelink.managedhsm.azure.net --name "$VnetName-link" --virtual-network $script:appVnetId --registration-enabled false | Out-Null
             }
@@ -879,7 +940,10 @@ if ($Deploy -or $ResumePostDeploy) {
             $existingTlsIdentityId = ''
             try {
                 $existingTlsIdentityId = az identity show --resource-group $RgName --name "$Prefix-tls-identity" --query id --output tsv --only-show-errors 2>$null
-            } catch { $existingTlsIdentityId = '' }
+            }
+            catch {
+                $existingTlsIdentityId = ''
+            }
             if ([bool]$existingTlsIdentityId -ne $managedHsmTlsEnabled) {
                 $requiredMode = if ($existingTlsIdentityId) { 'ManagedHsm' } else { 'FileBackedDemo' }
                 throw "Resume mode does not match the deployed identities. Run again with -PkiMode $requiredMode."
@@ -892,6 +956,7 @@ if ($Deploy -or $ResumePostDeploy) {
 set -euo pipefail
 cloud-init status --wait
 systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
+systemctl stop citizenhelp-llm.service 2>/dev/null || true
 mkdir -p /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
@@ -927,6 +992,14 @@ if ! python3 -c 'import torchvision, facenet_pytorch' >/dev/null 2>&1; then
     pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 fi
 python3 -c 'import azure.storage.blob' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir azure-storage-blob
+python3 -c 'import huggingface_hub, transformers, jinja2; assert tuple(map(int, jinja2.__version__.split(".")[:2])) >= (3, 1)' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir huggingface_hub transformers accelerate safetensors 'jinja2>=3.1.0'
+MODEL_ID='Qwen/Qwen2.5-7B-Instruct'
+MODEL_REVISION='a09a35458c702b33eeacc393d103063234e8bc28'
+MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct
+mkdir -p "$MODEL_PATH"
+if [ ! -f "$MODEL_PATH/config.json" ]; then
+    MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+fi
 if ! python3 /opt/citizen-registry/app-src/dvr_storage.py matches --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --recipe "`$CCTV_VIDEO_RECIPE"; then
     ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"
     python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE"
@@ -941,6 +1014,8 @@ fi
 grep -q '^CCTV_PROCESSING_ROOT=' /etc/citizen-registry/environment || echo 'CCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv' >> /etc/citizen-registry/environment
 sed -i '/^CCTV_VIDEO_BLOB_URI=/d; /^DVR_STORAGE_ACCOUNT=/d; /^DVR_STORAGE_CONTAINER=/d; /^DVR_STORAGE_KEY_NAME=/d; /^DVR_STORAGE_KEY_VERSION=/d; /^CCTV_OUTPUT_FPS=/d; /^CCTV_FACE_DETECTION_FPS=/d; /^CCTV_FACE_DETECTION_BATCH_SIZE=/d; /^CCTV_H264_PRESET=/d; /^CCTV_H264_CRF=/d' /etc/citizen-registry/environment
 printf '%s\n' 'CCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName' 'DVR_STORAGE_ACCOUNT=$dvrStorageAccountName' 'DVR_STORAGE_CONTAINER=$dvrContainerName' 'DVR_STORAGE_KEY_NAME=$dvrStorageKeyName' 'DVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion' 'CCTV_OUTPUT_FPS=24' 'CCTV_FACE_DETECTION_FPS=12' 'CCTV_FACE_DETECTION_BATCH_SIZE=4' 'CCTV_H264_PRESET=fast' 'CCTV_H264_CRF=20' >> /etc/citizen-registry/environment
+sed -i '/^CITIZENHELP_MODEL_ID=/d; /^CITIZENHELP_MODEL_REVISION=/d; /^CITIZENHELP_MODEL_PATH=/d; /^CITIZENHELP_PORT=/d' /etc/citizen-registry/environment
+printf '%s\n' 'CITIZENHELP_MODEL_ID=Qwen/Qwen2.5-7B-Instruct' 'CITIZENHELP_MODEL_REVISION=a09a35458c702b33eeacc393d103063234e8bc28' 'CITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct' 'CITIZENHELP_PORT=8010' >> /etc/citizen-registry/environment
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
 cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
@@ -960,6 +1035,28 @@ UMask=0022
 WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
+cat > /etc/systemd/system/citizenhelp-llm.service <<'SERVICE'
+[Unit]
+Description=Norland Citizen Help local H100 LLM
+After=network-online.target citizen-gpu-attestation.service
+Requires=citizen-gpu-attestation.service
+RequiresMountsFor=/var/lib/citizen-registry
+[Service]
+Type=simple
+WorkingDirectory=/opt/citizen-registry/app-src
+EnvironmentFile=/etc/citizen-registry/environment
+ExecStart=/usr/bin/python3 /opt/citizen-registry/app-src/citizen_help_server.py
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+systemctl enable --now citizenhelp-llm.service
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
     nginx -t
     systemctl restart nginx
@@ -1038,7 +1135,7 @@ chmod 750 /opt/citizen-registry/app-src/setup-managed-hsm-tls.sh
             systemctl is-active --quiet nginx
             curl -kfsS --resolve citizen-registry.internal:443:127.0.0.1 https://citizen-registry.internal/health >/dev/null
             echo 'MANAGED_HSM_SCOPED_TLS_READY=1'
-            '@
+'@
                     Invoke-GpuRunCommand -Label 'key-scoped Managed HSM TLS validation' -Script $managedHsmTlsValidationScript -SuccessMarker 'MANAGED_HSM_SCOPED_TLS_READY=1' | Out-Null
             Write-Host "nginx TLS signing uses Managed HSM key $tlsKeyName" -ForegroundColor Green
         }
