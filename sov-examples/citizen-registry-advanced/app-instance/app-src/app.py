@@ -1051,12 +1051,19 @@ def _citizen_help_context(question):
     cursor = conn.cursor()
     query_result = execute_query_plan(cursor, question)
     cursor.execute("""
-        SELECT municipality, region, tax_paid_last_year
+        SELECT municipality, region, tax_paid_last_year, date_of_birth
         FROM citizen_registry
     """)
     summary_rows = cursor.fetchall()
     total_tax = sum((Decimal(row[2] or 0) for row in summary_rows), Decimal('0'))
     total_count = len(summary_rows)
+    today = datetime.now(timezone.utc).date()
+    ages = []
+    for row in summary_rows:
+        birth_date = row[3]
+        if isinstance(birth_date, str):
+            birth_date = datetime.fromisoformat(birth_date).date()
+        ages.append(today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day)))
     average_tax = total_tax / total_count if total_count else Decimal('0')
     town_counts = Counter(row[0] for row in summary_rows)
     region_counts = Counter(row[1] for row in summary_rows)
@@ -1118,6 +1125,8 @@ def _citizen_help_context(question):
         'query_schema': DATASET_SCHEMA,
         'retrieval_boundary': 'SQL executes inside the confidential application/database boundary; the H100 receives serialized results only.',
         'total_citizens': int(total_count),
+        'average_age_years': round(sum(ages) / len(ages), 2) if ages else 0,
+        'age_reference_date': today.isoformat(),
         'total_tax_revenue_n£': round(float(total_tax), 2),
         'average_tax_paid_n£': round(float(average_tax), 2),
         'historical_tax_years': [
@@ -1215,6 +1224,11 @@ def _citizen_help_context(question):
         analytics['answer_hint'] = (
             f"The average fictional gross salary in 2025 was "
             f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
+        )
+    elif 'age' in question_lower and any(word in question_lower for word in ('average', 'mean', 'calculate')):
+        analytics['answer_hint'] = (
+            f"The average age is {analytics['average_age_years']:.2f} years, calculated from "
+            f"all {total_count} stored dates of birth as of {analytics['age_reference_date']}."
         )
     elif 'tax' in question_lower and 'gender' in question_lower and any(word in question_lower for word in ('lifetime', 'total', 'average')):
         analytics['answer_hint'] = (

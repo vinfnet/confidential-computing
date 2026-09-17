@@ -446,19 +446,21 @@ narrowly scoped chatbot for the fictional Republic of Norland citizen registry. 
 bounded set of matching synthetic records in Flask and sends only that context to a localhost-only
 GPU service; the model has no database connection, tools, shell, network, or record-mutation path.
 
-The deployed default model is **Qwen2.5-7B-Instruct** from the public
-[Qwen model repository](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct):
+The deployed default model is **Qwen2.5-32B-Instruct** from the public
+[Qwen model repository](https://huggingface.co/Qwen/Qwen2.5-32B-Instruct). The larger model is
+used because schema reasoning, joins, historical comparisons, and policy-plus-citizen questions
+are more important here than minimum latency:
 
 | Model detail | Value |
 |---|---|
 | License | Apache-2.0 |
-| Parameters | 7.61B |
-| Revision | `a09a35458c702b33eeacc393d103063234e8bc28` |
+| Parameters | 32.5B |
+| Revision | `5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd` |
 | Runtime | Hugging Face Transformers, `bfloat16` |
 | Device | `cuda:0`, NVIDIA H100 only |
 | Fallback | Disabled; no CPU inference |
 
-The model-details tab in the interface reads the same non-secret metadata exposed by the local
+Qwen2.5-32B-Instruct runs in `bfloat16` on the attested H100 NVL. The model-details tab in the interface reads the same non-secret metadata exposed by the local
 service. Startup fails closed unless CUDA is available and the device name contains `H100`, and
 the systemd unit requires successful current-boot GPU attestation before loading the model.
 

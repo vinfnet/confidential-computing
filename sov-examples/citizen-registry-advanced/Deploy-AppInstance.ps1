@@ -513,9 +513,9 @@ python3 /tmp/get-pip.py --break-system-packages
 pip3 install --break-system-packages --no-cache-dir azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors huggingface_hub 'jinja2>=3.1.0'
 pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
-MODEL_ID='Qwen/Qwen2.5-7B-Instruct'
-MODEL_REVISION='a09a35458c702b33eeacc393d103063234e8bc28'
-MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct
+MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
+MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
+MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
 mkdir -p "$MODEL_PATH"
 if [ ! -f "$MODEL_PATH/config.json" ]; then
     MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
@@ -993,9 +993,9 @@ if ! python3 -c 'import torchvision, facenet_pytorch' >/dev/null 2>&1; then
 fi
 python3 -c 'import azure.storage.blob' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir azure-storage-blob
 python3 -c 'import huggingface_hub, transformers, jinja2; assert tuple(map(int, jinja2.__version__.split(".")[:2])) >= (3, 1)' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir huggingface_hub transformers accelerate safetensors 'jinja2>=3.1.0'
-MODEL_ID='Qwen/Qwen2.5-7B-Instruct'
-MODEL_REVISION='a09a35458c702b33eeacc393d103063234e8bc28'
-MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct
+MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
+MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
+MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
 mkdir -p "$MODEL_PATH"
 if [ ! -f "$MODEL_PATH/config.json" ]; then
     MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
@@ -1015,7 +1015,7 @@ grep -q '^CCTV_PROCESSING_ROOT=' /etc/citizen-registry/environment || echo 'CCTV
 sed -i '/^CCTV_VIDEO_BLOB_URI=/d; /^DVR_STORAGE_ACCOUNT=/d; /^DVR_STORAGE_CONTAINER=/d; /^DVR_STORAGE_KEY_NAME=/d; /^DVR_STORAGE_KEY_VERSION=/d; /^CCTV_OUTPUT_FPS=/d; /^CCTV_FACE_DETECTION_FPS=/d; /^CCTV_FACE_DETECTION_BATCH_SIZE=/d; /^CCTV_H264_PRESET=/d; /^CCTV_H264_CRF=/d' /etc/citizen-registry/environment
 printf '%s\n' 'CCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName' 'DVR_STORAGE_ACCOUNT=$dvrStorageAccountName' 'DVR_STORAGE_CONTAINER=$dvrContainerName' 'DVR_STORAGE_KEY_NAME=$dvrStorageKeyName' 'DVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion' 'CCTV_OUTPUT_FPS=24' 'CCTV_FACE_DETECTION_FPS=12' 'CCTV_FACE_DETECTION_BATCH_SIZE=4' 'CCTV_H264_PRESET=fast' 'CCTV_H264_CRF=20' >> /etc/citizen-registry/environment
 sed -i '/^CITIZENHELP_MODEL_ID=/d; /^CITIZENHELP_MODEL_REVISION=/d; /^CITIZENHELP_MODEL_PATH=/d; /^CITIZENHELP_PORT=/d' /etc/citizen-registry/environment
-printf '%s\n' 'CITIZENHELP_MODEL_ID=Qwen/Qwen2.5-7B-Instruct' 'CITIZENHELP_MODEL_REVISION=a09a35458c702b33eeacc393d103063234e8bc28' 'CITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct' 'CITIZENHELP_PORT=8010' >> /etc/citizen-registry/environment
+printf '%s\n' 'CITIZENHELP_MODEL_ID=Qwen/Qwen2.5-32B-Instruct' 'CITIZENHELP_MODEL_REVISION=5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd' 'CITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct' 'CITIZENHELP_PORT=8010' >> /etc/citizen-registry/environment
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
 cat > /etc/systemd/system/citizen-cctv-anonymizer.service <<'SERVICE'
