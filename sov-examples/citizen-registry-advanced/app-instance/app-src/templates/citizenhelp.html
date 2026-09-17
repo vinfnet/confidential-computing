@@ -19,7 +19,7 @@
     p { color:var(--muted); }
     .eyebrow { margin:0 0 12px; color:var(--accent); font:700 13px/1.4 "Trebuchet MS",sans-serif; text-transform:uppercase; }
     .intro { max-width:760px; }
-    .workspace { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr); gap:22px; margin-top:30px; }
+    .workspace { display:grid; grid-template-columns:minmax(0,1.85fr) minmax(230px,.72fr); gap:22px; margin-top:30px; }
     .panel { border:1px solid var(--line); background:var(--panel-soft); padding:22px; }
     textarea { width:100%; min-height:138px; resize:vertical; padding:13px; border:1px solid var(--line); border-radius:4px; background:var(--panel); color:var(--ink); }
     textarea:focus { outline:3px solid #f0b429; outline-offset:2px; }
@@ -28,7 +28,7 @@
     .primary:disabled { background:#73808a; cursor:default; }
     .chat-log { display:flex; flex-direction:column; gap:12px; min-height:230px; max-height:520px; overflow-y:auto; margin-top:20px; padding:4px; }
     .chat-empty { margin:auto; color:var(--muted); text-align:center; }
-    .message { max-width:88%; padding:12px 15px; white-space:pre-wrap; border:1px solid var(--line); border-radius:4px; font:15px/1.5 "Trebuchet MS",sans-serif; }
+    .message { max-width:94%; padding:12px 15px; white-space:pre-wrap; border:1px solid var(--line); border-radius:4px; font:15px/1.5 "Trebuchet MS",sans-serif; }
     .message.user { align-self:flex-end; background:var(--accent); color:#fff; border-color:var(--accent); }
     .message.assistant { align-self:flex-start; background:var(--panel); border-left:4px solid var(--accent); color:var(--ink); }
     .message[data-state="blocked"], .message[data-state="error"] { border-left-color:var(--bad); }
