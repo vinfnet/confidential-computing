@@ -1098,6 +1098,29 @@ def _citizen_help_context(question):
         ],
     }
     question_lower = question.lower()
+    year_match = re.search(r'\b(20\d{2})\b', question_lower)
+    if 'tax' in question_lower and any(word in question_lower for word in ('increase', 'increased', 'change', 'difference')) and year_match:
+        requested_year = int(year_match.group(1))
+        yearly = {int(row[0]): row for row in salary_rows}
+        current = yearly.get(requested_year)
+        previous = yearly.get(requested_year - 1)
+        if current and previous:
+            analytics['tax_year_comparison'] = {
+                'year': requested_year,
+                'previous_year': requested_year - 1,
+                'total_tax_paid_n£': round(float(current[3]), 2),
+                'previous_total_tax_paid_n£': round(float(previous[3]), 2),
+                'total_increase_n£': round(float(current[3] - previous[3]), 2),
+                'average_tax_paid_n£': round(float(current[2]), 2),
+                'previous_average_tax_paid_n£': round(float(previous[2]), 2),
+                'average_increase_n£': round(float(current[2] - previous[2]), 2),
+            }
+            analytics['answer_hint'] = (
+                f"Across all citizens, total fictional tax paid increased by "
+                f"N£{float(current[3] - previous[3]):,.2f} from {requested_year - 1} "
+                f"to {requested_year}; average tax paid increased by "
+                f"N£{float(current[2] - previous[2]):,.2f} per citizen."
+            )
     if 'tax' in question_lower and any(word in question_lower for word in ('total', 'revenue', 'sum')):
         analytics['answer_hint'] = (
             f"Total tax revenue across all {total_count} fictional citizens is "
@@ -1256,6 +1279,84 @@ def citizens():
     except Exception as e:
         logger.error(f"Error loading citizen list: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+DATA_EXPLORER_TABLES = (
+    'citizen_registry', 'citizen_health_records', 'citizen_hospital_visits',
+    'norland_companies', 'citizen_employment_history', 'citizen_tax_history',
+    'demo_metadata',
+)
+
+
+def _data_explorer_schema():
+    conn = _get_db_conn()
+    cursor = conn.cursor()
+    tables = []
+    for table_name in DATA_EXPLORER_TABLES:
+        if DB_HOST:
+            cursor.execute('''
+                SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = ?
+                ORDER BY ORDINAL_POSITION
+            ''', (table_name,))
+            columns = [
+                {'name': row[0], 'type': row[1], 'nullable': row[2] == 'YES'}
+                for row in cursor.fetchall()
+            ]
+        else:
+            columns = [
+                {'name': row[1], 'type': row[2], 'nullable': not row[3]}
+                for row in cursor.execute(f'PRAGMA table_info({table_name})').fetchall()
+            ]
+        cursor.execute(f'SELECT COUNT(*) FROM {table_name}')
+        tables.append({'name': table_name, 'row_count': int(cursor.fetchone()[0]), 'columns': columns})
+    conn.close()
+    return tables
+
+
+@app.route('/data-explorer', methods=['GET'])
+def data_explorer():
+    """Render the read-only SQL database explorer."""
+    return render_template('data_explorer.html', current_page='data_explorer')
+
+
+@app.route('/api/data-explorer/schema', methods=['GET'])
+def data_explorer_schema():
+    """Return the allowlisted fictional database tree and column metadata."""
+    try:
+        return jsonify({'database': DB_NAME, 'read_only': True, 'fictional_only': True, 'tables': _data_explorer_schema()})
+    except Exception as error:
+        logger.error('Data Explorer schema failed: %s', type(error).__name__)
+        return jsonify({'error': 'Database schema is unavailable.'}), 503
+
+
+@app.route('/api/data-explorer/table/<table_name>', methods=['GET'])
+def data_explorer_table(table_name):
+    """Return a bounded preview from one allowlisted SQL table."""
+    if table_name not in DATA_EXPLORER_TABLES:
+        return jsonify({'error': 'Table is not available in the read-only explorer.'}), 404
+    try:
+        limit = min(max(request.args.get('limit', 25, type=int), 1), 100)
+        conn = _get_db_conn()
+        cursor = conn.cursor()
+        cursor.execute(f'SELECT TOP {limit} * FROM {table_name}' if DB_HOST else f'SELECT * FROM {table_name} LIMIT {limit}')
+        columns = [description[0] for description in cursor.description]
+        def json_value(value):
+            if isinstance(value, Decimal):
+                return float(value)
+            return value.isoformat() if hasattr(value, 'isoformat') else value
+        rows = [
+            {column: json_value(value) for column, value in zip(columns, row)}
+            for row in cursor.fetchall()
+        ]
+        cursor.execute(f'SELECT COUNT(*) FROM {table_name}')
+        row_count = int(cursor.fetchone()[0])
+        conn.close()
+        return jsonify({'database': DB_NAME, 'table': table_name, 'row_count': row_count, 'columns': columns, 'rows': rows, 'read_only': True, 'fictional_only': True})
+    except Exception as error:
+        logger.error('Data Explorer table failed: %s', type(error).__name__)
+        return jsonify({'error': 'Table preview is unavailable.'}), 503
 
 
 @app.route('/cctv', methods=['GET'])

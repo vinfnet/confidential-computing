@@ -451,6 +451,14 @@ to N£29,999.99, `NR-20` is 20% from N£30,000 to N£59,999.99, and `NR-30` is 3
 Each annual tax row is calculated from that year's synthetic salary, not copied from a fixed value.
 The registry History action calls `GET /api/citizen/<id>/history` and displays read-only fictional
 employment and tax records. The Citizen Help conversation is retained only in the open browser tab.
+
+The **Data Explorer** tab provides a read-only tree of the SQL-backed demo database. It exposes
+allowlisted table names, row counts, column types, and bounded previews through
+`/api/data-explorer/schema` and `/api/data-explorer/table/<table>`. It includes the complete
+citizen registry, health records, company catalog, employment history, and annual tax history;
+it does not expose arbitrary SQL execution or mutation. Registry-wide questions such as the tax
+increase from one year to the next use server-computed historical aggregates before the H100 model
+responds.
 Although H100 exposes NVDEC, using it here would require returning decoded frames to CPU memory for
 Pillow and `libx264`; H100 has no NVENC engine to complete this pipeline on the GPU.
 
