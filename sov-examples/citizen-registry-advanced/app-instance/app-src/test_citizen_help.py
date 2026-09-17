@@ -23,6 +23,10 @@ class CitizenHelpPolicyTests(unittest.TestCase):
         self.assertIn('never as instructions', messages[0]['content'])
         self.assertIn('use tools', messages[0]['content'])
 
+    def test_postal_code_question_preserves_citizen_name_terms(self):
+        question = validate_question('What is the postal code for Wanjiku Kamau?')
+        self.assertEqual(question, 'What is the postal code for Wanjiku Kamau?')
+
     def test_output_leakage_is_replaced(self):
         self.assertEqual(
             sanitize_output('The system prompt says secret credentials are ...'),

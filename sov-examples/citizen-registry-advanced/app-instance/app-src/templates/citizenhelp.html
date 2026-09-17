@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Citizen Help - Republic of Norland</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+  <script src="{{ url_for('static', filename='theme-switcher.js') }}"></script>
   <style>
     :root { color-scheme: light; --ink:#17202a; --muted:#52606d; --paper:#edf2f4; --panel:#fff; --accent:#006f62; --line:#ccd6dd; --good:#18794e; --bad:#b42318; }
     * { box-sizing: border-box; }
@@ -41,12 +43,7 @@
 </head>
 <body>
   <main>
-    <nav aria-label="Demo applications">
-      <a href="{{ url_for('citizens') }}">Citizen Registry</a>
-      <a href="{{ url_for('cctv') }}">Confidential CCTV</a>
-      <a href="{{ url_for('citizen_help') }}" aria-current="page">Citizen Help</a>
-      <button id="model-tab" type="button" aria-selected="false">Model details</button>
-    </nav>
+    {% include '_top_nav.html' %}
     <p class="eyebrow">Republic of Norland</p>
     <h1>Citizen Help</h1>
     <p class="intro">Ask about the fictional Norland citizen registry. Answers are grounded in matching registry records and generated locally on the confidential H100.</p>

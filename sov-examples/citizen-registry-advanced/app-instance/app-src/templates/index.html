@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Citizen Registry Advanced — Republic of Norland</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
+    <script src="{{ url_for('static', filename='theme-switcher.js') }}"></script>
     <style>
         * {
             margin: 0;
@@ -279,6 +281,7 @@
 </head>
 <body>
     <div class="container">
+        {% include '_top_nav.html' %}
         <header>
             <h1>🏛️ Republic of Norland — Citizen Registry</h1>
             <p>Advanced Confidential Computing Deployment with mTLS & Azure Attestation</p>

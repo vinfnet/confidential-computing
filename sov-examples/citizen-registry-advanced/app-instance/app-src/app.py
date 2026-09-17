@@ -644,6 +644,7 @@ def _citizen_help_records(question):
         'which', 'what', 'where', 'when', 'who', 'how', 'is', 'are', 'the',
         'a', 'an', 'in', 'on', 'for', 'of', 'to', 'and', 'registered',
         'citizen', 'citizens', 'region', 'state', 'town', 'address',
+        'postal', 'code',
     }
     terms = [
         term for term in re.findall(r'[A-Za-z0-9-]{2,}', question.lower())
@@ -755,7 +756,7 @@ def citizens():
         citizens = _citizens_for_media()
         media_generator.ensure_started(citizens)
         
-        return render_template('index.html', citizens=citizens, mtls_enabled=MTLS_ENABLED)
+        return render_template('index.html', citizens=citizens, mtls_enabled=MTLS_ENABLED, current_page='citizens')
     except Exception as e:
         logger.error(f"Error loading citizen list: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
@@ -764,13 +765,13 @@ def citizens():
 @app.route('/cctv', methods=['GET'])
 def cctv():
     """Render the confidential CCTV application."""
-    return render_template('cctv.html')
+    return render_template('cctv.html', current_page='cctv')
 
 
 @app.route('/citizenhelp', methods=['GET'])
 def citizen_help():
     """Render the GPU-only Norland Citizen Help experience."""
-    return render_template('citizenhelp.html')
+    return render_template('citizenhelp.html', current_page='citizen_help')
 
 
 @app.route('/api/citizenhelp/model', methods=['GET'])

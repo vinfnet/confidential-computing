@@ -1,0 +1,7 @@
+<nav class="top-nav" aria-label="Demo applications">
+    <a href="{{ url_for('citizens') }}" {% if current_page == 'citizens' %}aria-current="page"{% endif %}>Citizen Registry</a>
+    <a href="{{ url_for('cctv') }}" {% if current_page == 'cctv' %}aria-current="page"{% endif %}>Confidential CCTV</a>
+    <a href="{{ url_for('citizen_help') }}" {% if current_page == 'citizen_help' %}aria-current="page"{% endif %}>Citizen Help</a>
+    {% if current_page == 'citizen_help' %}<button id="model-tab" type="button" aria-selected="false">Model details</button>{% endif %}
+    <button class="theme-toggle" type="button" data-theme-toggle aria-pressed="false" onclick="window.toggleCitizenRegistryTheme()">Dark mode</button>
+</nav>
