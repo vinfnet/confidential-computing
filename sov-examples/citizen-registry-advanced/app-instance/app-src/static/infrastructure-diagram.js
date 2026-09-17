@@ -24,6 +24,8 @@
       this.lastPaths = [];
       this.replayTimer = null;
       this.setState('idle');
+      this.lastPaths = ['browser-app'];
+      if (this.replayButton) this.replayButton.disabled = false;
       this.replayButton?.addEventListener('click', () => this.replay());
     }
 
@@ -60,6 +62,9 @@
       this.root.dataset.replay = 'true';
       this.replayButton.disabled = true;
       this.replayButton.textContent = 'Replaying...';
+      this.root.classList.remove('is-replaying');
+      void this.root.offsetWidth;
+      this.root.classList.add('is-replaying');
       const motions = this.pulses
         .filter(pulse => this.lastPaths.includes(pulse.dataset.pulseFor))
         .map(pulse => {
@@ -68,7 +73,11 @@
           replacement.setAttribute('dur', '6.25s');
           replacement.setAttribute('repeatCount', '1');
           current.replaceWith(replacement);
-          replacement.beginElement();
+          try {
+            replacement.beginElement();
+          } catch {
+            // The CSS replay still provides a visible directional replay.
+          }
           return { pulse, motion: replacement };
         });
       this.replayTimer = window.setTimeout(() => {
@@ -77,8 +86,9 @@
           replacement.setAttribute('dur', '1.25s');
           replacement.setAttribute('repeatCount', 'indefinite');
           motion.replaceWith(replacement);
-          replacement.beginElement();
+          try { replacement.beginElement(); } catch { /* CSS animation remains active. */ }
         });
+        this.root.classList.remove('is-replaying');
         delete this.root.dataset.replay;
         this.replayButton.disabled = false;
         this.replayButton.textContent = 'Replay path';
