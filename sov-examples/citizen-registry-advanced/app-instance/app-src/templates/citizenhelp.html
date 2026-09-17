@@ -7,12 +7,11 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <script src="{{ url_for('static', filename='theme-switcher.js') }}"></script>
   <style>
-    :root { color-scheme: light; --ink:#17202a; --muted:#52606d; --paper:#edf2f4; --panel:#fff; --accent:#006f62; --line:#ccd6dd; --good:#18794e; --bad:#b42318; }
     * { box-sizing: border-box; }
-    body { min-height:100vh; margin:0; padding:24px; background:linear-gradient(145deg,#e5ecef 0%,var(--paper) 55%,#dce9e5 100%); color:var(--ink); font-family:Georgia,"Times New Roman",serif; }
-    main { width:min(1120px,100%); min-height:calc(100vh - 48px); margin:0 auto; padding:clamp(24px,4vw,52px); border-top:6px solid var(--accent); background:var(--panel); box-shadow:0 12px 40px rgb(23 32 42 / 10%); }
+    body { min-height:100vh; margin:0; padding:24px; background:linear-gradient(145deg,var(--paper) 0%,var(--panel) 55%,var(--panel-soft) 100%); color:var(--ink); font-family:Georgia,"Times New Roman",serif; }
+    main { width:min(1120px,100%); min-height:calc(100vh - 48px); margin:0 auto; padding:clamp(24px,4vw,52px); border-top:6px solid var(--accent); background:var(--panel); box-shadow:0 12px 40px var(--shadow); }
     nav { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:28px; border-bottom:1px solid var(--line); padding-bottom:14px; }
-    nav a, nav button { min-height:38px; padding:9px 13px; border:1px solid var(--line); border-radius:4px; background:#f8fafb; color:var(--ink); font:700 13px/1 "Trebuchet MS",sans-serif; text-decoration:none; cursor:pointer; }
+    nav a, nav button { min-height:38px; padding:9px 13px; border:1px solid var(--line); border-radius:4px; background:var(--panel-soft); color:var(--ink); font:700 13px/1 "Trebuchet MS",sans-serif; text-decoration:none; cursor:pointer; }
     nav a[aria-current="page"], nav button[aria-selected="true"] { border-color:var(--accent); background:var(--accent); color:#fff; }
     h1 { margin:0 0 10px; font-size:clamp(34px,6vw,58px); letter-spacing:0; }
     h2 { margin:0 0 10px; font-size:24px; }
@@ -21,8 +20,8 @@
     .eyebrow { margin:0 0 12px; color:var(--accent); font:700 13px/1.4 "Trebuchet MS",sans-serif; text-transform:uppercase; }
     .intro { max-width:760px; }
     .workspace { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr); gap:22px; margin-top:30px; }
-    .panel { border:1px solid var(--line); background:#f8fafb; padding:22px; }
-    textarea { width:100%; min-height:138px; resize:vertical; padding:13px; border:1px solid #aebbc4; border-radius:4px; background:#fff; color:var(--ink); }
+    .panel { border:1px solid var(--line); background:var(--panel-soft); padding:22px; }
+    textarea { width:100%; min-height:138px; resize:vertical; padding:13px; border:1px solid var(--line); border-radius:4px; background:var(--panel); color:var(--ink); }
     textarea:focus { outline:3px solid #f0b429; outline-offset:2px; }
     .actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; }
     .primary { border:0; border-radius:4px; padding:12px 17px; background:var(--accent); color:#fff; cursor:pointer; font-weight:700; }
@@ -31,7 +30,7 @@
     .chat-empty { margin:auto; color:var(--muted); text-align:center; }
     .message { max-width:88%; padding:12px 15px; white-space:pre-wrap; border:1px solid var(--line); border-radius:4px; font:15px/1.5 "Trebuchet MS",sans-serif; }
     .message.user { align-self:flex-end; background:var(--accent); color:#fff; border-color:var(--accent); }
-    .message.assistant { align-self:flex-start; background:#fff; border-left:4px solid var(--accent); }
+    .message.assistant { align-self:flex-start; background:var(--panel); border-left:4px solid var(--accent); color:var(--ink); }
     .message[data-state="blocked"], .message[data-state="error"] { border-left-color:var(--bad); }
     .message-meta { display:block; margin-bottom:4px; color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; }
     .user .message-meta { color:#d9f4ef; }
@@ -56,13 +55,13 @@
     <section class="workspace">
       <div class="panel">
         <h2>Ask the registry assistant</h2>
+        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Citizen Help conversation"><div class="chat-empty" id="chat-empty">Ask a question to begin the fictional Norland registry conversation.</div></div>
         <form id="chat-form">
           <label for="question">Question</label>
           <textarea id="question" maxlength="800" required placeholder="Example: Which region is Ama Mensah registered in? Enter sends; Shift+Enter adds a line. "></textarea>
           <div class="chat-tools"><span id="counter">0 / 800</span><button class="secondary" id="clear-chat" type="button">Clear conversation</button></div>
           <div class="actions"><span id="status" aria-live="polite">Ready</span><button class="primary" id="ask" type="submit">Send question</button></div>
         </form>
-        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Citizen Help conversation"><div class="chat-empty" id="chat-empty">Ask a question to begin the fictional Norland registry conversation.</div></div>
         <div class="guardrail">This assistant has no tools, shell access, network access, or authority to change records. Harmful, illegal, security-sensitive, prompt-injection, and credential-extraction requests are refused.</div>
       </div>
       <section class="panel model-panel" id="model-panel" hidden aria-live="polite">

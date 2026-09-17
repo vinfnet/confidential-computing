@@ -1055,11 +1055,34 @@ def _citizen_help_context(question):
     average_tax = total_tax / total_count if total_count else Decimal('0')
     town_counts = Counter(row[0] for row in summary_rows)
     region_counts = Counter(row[1] for row in summary_rows)
-    tax_code_counts = Counter(_tax_status(row[2])['code'] for row in summary_rows)
+    cursor.execute("""
+        SELECT tax_year, AVG(gross_salary_n), AVG(tax_paid_n), SUM(tax_paid_n), COUNT(*)
+        FROM citizen_tax_history
+        GROUP BY tax_year
+        ORDER BY tax_year
+    """)
+    salary_rows = cursor.fetchall()
+    latest_salary = next((row for row in reversed(salary_rows) if row[0] == 2025), None)
+    tax_code_counts = Counter()
+    cursor.execute("SELECT tax_code, COUNT(*) FROM citizen_tax_history GROUP BY tax_code ORDER BY tax_code")
+    tax_code_counts.update({row[0]: int(row[1]) for row in cursor.fetchall()})
     analytics = {
         'total_citizens': int(total_count),
         'total_tax_revenue_n£': round(float(total_tax), 2),
         'average_tax_paid_n£': round(float(average_tax), 2),
+        'historical_tax_years': [
+            {
+                'year': int(row[0]),
+                'average_salary_n£': round(float(row[1]), 2),
+                'average_tax_paid_n£': round(float(row[2]), 2),
+                'total_tax_paid_n£': round(float(row[3]), 2),
+                'citizens': int(row[4]),
+            }
+            for row in salary_rows
+        ],
+        'average_salary_2025_n£': round(float(latest_salary[1]), 2) if latest_salary else 0,
+        'average_tax_paid_2025_n£': round(float(latest_salary[2]), 2) if latest_salary else 0,
+        'total_tax_paid_all_historical_years_n£': round(sum(float(row[3]) for row in salary_rows), 2),
         'fictional_tax_code_rules': NORLAND_TAX_CODE,
         'citizens_by_tax_code': [
             {'code': code, 'citizens': count}
@@ -1079,6 +1102,11 @@ def _citizen_help_context(question):
         analytics['answer_hint'] = (
             f"Total tax revenue across all {total_count} fictional citizens is "
             f"N£{float(total_tax):,.2f}."
+        )
+    elif 'salary' in question_lower and any(word in question_lower for word in ('average', 'mean')):
+        analytics['answer_hint'] = (
+            f"The average fictional gross salary in 2025 was "
+            f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
         )
     elif any(word in question_lower for word in ('populous', 'population', 'largest')):
         top_town = sorted(town_counts.items(), key=lambda item: (-item[1], item[0]))[0]
