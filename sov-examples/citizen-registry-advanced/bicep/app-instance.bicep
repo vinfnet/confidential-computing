@@ -128,7 +128,7 @@ var vmOsPublisher = 'Canonical'
 var vmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
 var vmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
-var vmDataDiskSize = 64
+var vmDataDiskSize = 128
 var appPrivateIp = '10.${networkSecondOctet}.3.4'
 var sqlPrivateIp = '10.${sqlNetworkSecondOctet}.4.5'
 

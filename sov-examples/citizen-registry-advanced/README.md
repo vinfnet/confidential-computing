@@ -464,6 +464,13 @@ Qwen2.5-32B-Instruct runs in `bfloat16` on the attested H100 NVL. The model-deta
 service. Startup fails closed unless CUDA is available and the device name contains `H100`, and
 the systemd unit requires successful current-boot GPU attestation before loading the model.
 
+Deployment is repeatable: `Deploy-AppInstance.ps1` and the app-instance Bicep template target a
+128 GB model data disk, grow an existing ext4 filesystem when needed, download the pinned model
+revision only when the local revision marker is missing or changed, and rewrite the model
+environment consistently before restarting the localhost-only H100 service. Re-running the
+deployment therefore preserves the 32B model choice instead of silently reverting to the earlier
+7B configuration.
+
 Citizen Help applies defense in depth: bounded input length, parameterized retrieval, a strict
 registry-only system policy, refusal of prompt injection and jailbreak instructions, refusal of
 harmful/illegal/security-breach/credential-extraction requests, no tool or code execution, output

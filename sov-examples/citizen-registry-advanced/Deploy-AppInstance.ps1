@@ -119,6 +119,7 @@ $RgName = "$($Prefix)$($randomSuffix)app"
 $CvmName = "$($Prefix)-citizen-cvm"
 $sqlVmName = "$Prefix-sql-cvm"
 $DbName = "$($Prefix)-citizendb"
+$ModelDiskSizeGb = 128
 $BastionName = "$($Prefix)-$($randomSuffix)-bastion"
 $AttestationName = "$($Prefix)attest$(Get-Random -Minimum 100 -Maximum 999)"
 $VnetName = "$($Prefix)-$($randomSuffix)-vnet"
@@ -500,6 +501,7 @@ mkdir -p /var/lib/citizen-registry
 DATA_UUID=`$(blkid -s UUID -o value `$DATA_DEVICE)
 grep -q "UUID=`$DATA_UUID" /etc/fstab || printf 'UUID=%s /var/lib/citizen-registry ext4 defaults,nofail 0 2\n' "`$DATA_UUID" >> /etc/fstab
 mount /var/lib/citizen-registry
+resize2fs `$DATA_DEVICE
 mkdir -p /var/lib/citizen-registry/media /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
@@ -516,9 +518,13 @@ pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2
 MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
 MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
 MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
+MODEL_MARKER="$MODEL_PATH/.revision"
 mkdir -p "$MODEL_PATH"
-if [ ! -f "$MODEL_PATH/config.json" ]; then
+if [ ! -f "$MODEL_PATH/config.json" ] || [ "`$(cat "$MODEL_MARKER" 2>/dev/null || true)" != "$MODEL_REVISION" ]; then
+    rm -rf "$MODEL_PATH"
+    mkdir -p "$MODEL_PATH"
     MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+    printf '%s\n' "$MODEL_REVISION" > "$MODEL_MARKER"
 fi
 for attempt in `$(seq 1 30); do
     python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE" && break
@@ -538,7 +544,7 @@ printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSig
 openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256 -extfile /tmp/client-ext.cnf
 chmod 600 /etc/citizen-registry/certs/*.key
 cp /opt/citizen-registry/app-src/nginx.conf /etc/nginx/nginx.conf
-printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCITIZENHELP_MODEL_ID=Qwen/Qwen2.5-7B-Instruct\nCITIZENHELP_MODEL_REVISION=a09a35458c702b33eeacc393d103063234e8bc28\nCITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-7b-instruct\nCITIZENHELP_PORT=8010\nCCTV_VIDEO_PATH=/var/lib/citizen-registry/dvr-cache/$dvrBlobName\nCCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName\nDVR_STORAGE_ACCOUNT=$dvrStorageAccountName\nDVR_STORAGE_CONTAINER=$dvrContainerName\nDVR_STORAGE_KEY_NAME=$dvrStorageKeyName\nDVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
+printf 'MTLS_ENABLED=true\nPKI_MODE=$PkiMode\nAZURE_CLIENT_ID=$appIdentityClientId\nATTESTATION_ENDPOINT=https://$AttestationName.weu.attest.azure.net\nHSM_ENDPOINT=https://$hsmName.managedhsm.azure.net\nHSM_NAME=$hsmName\nOS_DISK_KEY_NAME=$osDiskKeyName\nKEY_RELEASE_STATUS=azure-cvm-attestation-bound\nAPP_CVM_IP=$appPrivateIp\nSQL_CVM_IP=$sqlPrivateIp\nDB_HOST=$sqlPrivateIp\nDB_NAME=$DbName\nDB_USER=registryadmin\nDB_PASSWORD=$sqlAppPassword\nDB_SA_PASSWORD=$sqlSaPassword\nCITIZEN_MEDIA_ROOT=/var/lib/citizen-registry/media\nGPU_ATTESTATION_PATH=/var/lib/citizen-registry/gpu-attestation.json\nCITIZENHELP_MODEL_ID=Qwen/Qwen2.5-32B-Instruct\nCITIZENHELP_MODEL_REVISION=5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd\nCITIZENHELP_MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct\nCITIZENHELP_PORT=8010\nCCTV_VIDEO_PATH=/var/lib/citizen-registry/dvr-cache/$dvrBlobName\nCCTV_VIDEO_BLOB_URI=https://$dvrStorageAccountName.blob.core.windows.net/$dvrContainerName/$dvrBlobName\nDVR_STORAGE_ACCOUNT=$dvrStorageAccountName\nDVR_STORAGE_CONTAINER=$dvrContainerName\nDVR_STORAGE_KEY_NAME=$dvrStorageKeyName\nDVR_STORAGE_KEY_VERSION=$dvrStorageKeyVersion\nCCTV_PROCESSING_ROOT=/var/lib/citizen-registry/cctv\nCCTV_OUTPUT_FPS=24\nCCTV_FACE_DETECTION_FPS=12\nCCTV_FACE_DETECTION_BATCH_SIZE=4\nCCTV_H264_PRESET=fast\nCCTV_H264_CRF=20\nPORTRAIT_MODEL_ID=stabilityai/sdxl-turbo\n' > /etc/citizen-registry/environment
 cat > /etc/systemd/system/citizen-registry.service <<'SERVICE'
 [Unit]
 After=network-online.target var-lib-citizen\x2dregistry.mount
@@ -871,6 +877,59 @@ if ($Deploy -or $ResumePostDeploy) {
             Write-Host ($deploymentOutputs | ConvertTo-Json -Depth 10)
         }
 
+        function Ensure-ModelDisk {
+            $diskId = az vm show `
+                --resource-group $RgName `
+                --name $CvmName `
+                --query "storageProfile.dataDisks[0].managedDisk.id" `
+                --output tsv `
+                --only-show-errors
+            if (-not $diskId) {
+                throw "Cannot locate the app CVM model data disk."
+            }
+            $currentSize = [int](az disk show `
+                --ids $diskId `
+                --query diskSizeGb `
+                --output tsv `
+                --only-show-errors)
+            if ($currentSize -ge $ModelDiskSizeGb) {
+                Write-Host "✓ Model disk is $currentSize GB (target $ModelDiskSizeGb GB)" -ForegroundColor Green
+                return
+            }
+            Write-Host "Expanding model disk from $currentSize GB to $ModelDiskSizeGb GB..." -ForegroundColor Yellow
+            az vm deallocate --resource-group $RgName --name $CvmName --only-show-errors
+            az disk update --ids $diskId --size-gb $ModelDiskSizeGb --only-show-errors | Out-Null
+            az vm start --resource-group $RgName --name $CvmName --only-show-errors
+            for ($attempt = 1; $attempt -le 30; $attempt++) {
+                $powerState = az vm get-instance-view `
+                    --resource-group $RgName `
+                    --name $CvmName `
+                    --query "instanceView.statuses[?code=='PowerState/running'].code" `
+                    --output tsv `
+                    --only-show-errors
+                if ($powerState) { break }
+                Start-Sleep -Seconds 10
+            }
+            $growScript = 'set -e; resize2fs /dev/disk/azure/scsi1/lun0; df -h /var/lib/citizen-registry; echo MODEL_DISK_READY=1'
+            $growPath = Join-Path $env:TEMP "citizen-registry-$Prefix-grow-model-disk.sh"
+            [IO.File]::WriteAllText($growPath, $growScript, [Text.UTF8Encoding]::new($false))
+            try {
+                az vm run-command invoke `
+                    --resource-group $RgName `
+                    --name $CvmName `
+                    --command-id RunShellScript `
+                    --scripts "@$growPath" `
+                    --query "value[].message" `
+                    --output tsv `
+                    --only-show-errors
+                if ($LASTEXITCODE -ne 0) { throw 'Guest filesystem resize failed.' }
+            } finally {
+                Remove-Item $growPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        Ensure-ModelDisk
+
         function Invoke-GpuRunCommand {
             param(
                 [Parameter(Mandatory)] [string]$Label,
@@ -996,9 +1055,13 @@ python3 -c 'import huggingface_hub, transformers, jinja2; assert tuple(map(int, 
 MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
 MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
 MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
+MODEL_MARKER="$MODEL_PATH/.revision"
 mkdir -p "$MODEL_PATH"
-if [ ! -f "$MODEL_PATH/config.json" ]; then
+if [ ! -f "$MODEL_PATH/config.json" ] || [ "`$(cat "$MODEL_MARKER" 2>/dev/null || true)" != "$MODEL_REVISION" ]; then
+    rm -rf "$MODEL_PATH"
+    mkdir -p "$MODEL_PATH"
     MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+    printf '%s\n' "$MODEL_REVISION" > "$MODEL_MARKER"
 fi
 if ! python3 /opt/citizen-registry/app-src/dvr_storage.py matches --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --recipe "`$CCTV_VIDEO_RECIPE"; then
     ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"
