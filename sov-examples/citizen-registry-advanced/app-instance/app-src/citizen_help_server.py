@@ -15,6 +15,7 @@ from citizen_help import (
     sanitize_output,
     validate_question,
 )
+from dataset_query import DATASET_SCHEMA
 
 LOGGER = logging.getLogger('citizen-help-llm')
 HOST = '127.0.0.1'
@@ -79,6 +80,44 @@ def generate_answer(
     return sanitize_output(_tokenizer.decode(generated, skip_special_tokens=True))
 
 
+def generate_query_plan(question: str) -> dict[str, Any]:
+    """Ask the H100 for intent as JSON; the CVM validates before execution."""
+    if _model is None or _tokenizer is None or _torch is None:
+        raise RuntimeError('Citizen Help model is not ready.')
+    schema = json.dumps(DATASET_SCHEMA, ensure_ascii=True, sort_keys=True)
+    messages = [
+        {'role': 'system', 'content': (
+            'You are a read-only SQL query planner for a fictional Norland registry. '
+            'Return JSON only, never SQL. Use only the supplied tables and columns. '
+            'The application CVM validates and executes your plan. '
+            'Schema JSON=' + schema + '\n'
+            'Plan shape: {"operation":"aggregate|retrieval","tables":[],"select":[],'
+            '"joins":[],"where":[],"group_by":[],"order_by":[],"limit":100}. '
+            'A select field is only a schema column string or {"function":"COUNT|COUNT_DISTINCT|SUM|AVG|MIN|MAX", "column":"schema.column"}. '
+            'Never emit SQL expressions, aliases, arithmetic, FLOOR, date functions, parentheses, or AS. '
+            'A where item is {"column":"...","operator":"=|!=|<|<=|>|>=|LIKE|IN", "parameter":"name"}. '
+            'A join is {"table":"...","left":"...","right":"..."}. '
+            'order_by must contain objects like {"column":"schema.column","direction":"ASC|DESC"}. '
+        )},
+        {'role': 'user', 'content': question},
+    ]
+    prompt = _tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = _tokenizer([prompt], return_tensors='pt').to('cuda:0')
+    with _torch.inference_mode():
+        output_ids = _model.generate(
+            **inputs, max_new_tokens=500, do_sample=False,
+            repetition_penalty=1.02, pad_token_id=_tokenizer.eos_token_id,
+        )
+    generated = _tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+    start, end = generated.find('{'), generated.rfind('}')
+    if start < 0 or end <= start:
+        raise ValueError('The planner did not return a JSON object.')
+    plan = json.loads(generated[start:end + 1])
+    if not isinstance(plan, dict):
+        raise ValueError('The planner result was not an object.')
+    return plan
+
+
 def _json_response(handler: BaseHTTPRequestHandler, payload: dict[str, Any], status: int = 200) -> None:
     body = json.dumps(payload, ensure_ascii=True).encode('utf-8')
     handler.send_response(status)
@@ -105,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
         _json_response(self, {'error': 'not found'}, 404)
 
     def do_POST(self) -> None:
-        if self.path != '/generate':
+        if self.path not in {'/generate', '/plan'}:
             _json_response(self, {'error': 'not found'}, 404)
             return
         try:
@@ -114,6 +153,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError('Request body is too large or empty.')
             payload = json.loads(self.rfile.read(length))
             question = validate_question(payload.get('question'))
+            if self.path == '/plan':
+                _json_response(self, {'query_plan': generate_query_plan(question), 'model': model_metadata('cuda:0')})
+                return
             records = payload.get('records')
             if not isinstance(records, list) or len(records) > 5:
                 raise ValueError('A bounded registry context is required.')

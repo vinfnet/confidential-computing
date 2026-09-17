@@ -1119,6 +1119,29 @@ def _citizen_help_context(question):
         ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
     """)
     current_company_rows = cursor.fetchall()
+    cursor.execute("""
+           SELECT CASE
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
+                      CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 20 AND 29 THEN '20s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
+                      CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 30 AND 39 THEN '30s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
+                      CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 40 AND 49 THEN '40s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
+                      CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 50 AND 59 THEN '50s'
+                END AS age_band,
+                c.sex, AVG(t.gross_salary_n), COUNT(DISTINCT c.id)
+           FROM citizen_registry c
+           JOIN citizen_tax_history t ON t.citizen_id = c.id AND t.tax_year = 2025
+           GROUP BY CASE
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) - CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 20 AND 29 THEN '20s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) - CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 30 AND 39 THEN '30s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) - CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 40 AND 49 THEN '40s'
+                  WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) - CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 50 AND 59 THEN '50s'
+                END, c.sex
+           ORDER BY age_band, c.sex
+    """)
+    salary_age_gender_rows = cursor.fetchall()
     analytics = {
         'query_plan': query_plan,
         'query_result': query_result,
@@ -1177,6 +1200,13 @@ def _citizen_help_context(question):
             {'condition_code': row[0], 'condition_name': row[1], 'citizens': int(row[2])}
             for row in health_condition_rows
         ],
+        'average_salary_by_age_band_and_gender_2025': [
+            {
+                'age_band': row[0], 'gender': row[1],
+                'average_salary_n£': round(float(row[2]), 2), 'citizens': int(row[3]),
+            }
+            for row in salary_age_gender_rows if row[0] is not None
+        ],
         'fictional_tax_code_rules': NORLAND_TAX_CODE,
         'citizens_by_tax_code': [
             {'code': code, 'citizens': count}
@@ -1225,6 +1255,11 @@ def _citizen_help_context(question):
             f"The average fictional gross salary in 2025 was "
             f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
         )
+    elif 'salary' in question_lower and 'gender' in question_lower and any(word in question_lower for word in ('age', 'band', '20', '30', '40', '50')):
+        analytics['answer_hint'] = 'Average 2025 fictional salary by age band and gender: ' + '; '.join(
+            f"{item['age_band']} {item['gender']}: N£{item['average_salary_n£']:,.2f} across {item['citizens']} citizens"
+            for item in analytics['average_salary_by_age_band_and_gender_2025']
+        ) + '.'
     elif 'age' in question_lower and any(word in question_lower for word in ('average', 'mean', 'calculate')):
         analytics['answer_hint'] = (
             f"The average age is {analytics['average_age_years']:.2f} years, calculated from "
@@ -1500,6 +1535,29 @@ def citizen_help_chat():
         payload = request.get_json(silent=True) or {}
         question = validate_question(payload.get('question'))
         records, analytics = _citizen_help_context(question)
+        try:
+            planner_response = requests.post(
+                'http://127.0.0.1:8010/plan',
+                json={'question': question},
+                timeout=90,
+            )
+            planner_response.raise_for_status()
+            proposed_plan = planner_response.json().get('query_plan')
+            valid, reason = validate_query_plan(proposed_plan)
+            if valid:
+                plan_conn = _get_db_conn()
+                try:
+                    analytics['llm_query_result'] = execute_validated_plan(
+                        plan_conn, proposed_plan, {}, sql_server=bool(DB_HOST)
+                    )
+                finally:
+                    plan_conn.close()
+            else:
+                analytics['llm_query_rejected'] = reason
+                logger.info('H100 query plan rejected by CVM validator: %s', reason)
+        except Exception as planner_error:
+            logger.warning('Structured H100 query planning fell back: %s', type(planner_error).__name__)
+            analytics['llm_query_fallback'] = True
         response = requests.post(
             'http://127.0.0.1:8010/generate',
             json={'question': question, 'records': records, 'analytics': analytics},

@@ -33,7 +33,10 @@ tables, columns, joins, policy topics, and confidential boundary for each reques
 structured plans, the application validates the requested tables, columns, joins, filters,
 operations, and row limit, then compiles parameterized read-only SQL inside the CVM. Raw SQL from
 the model is never executed. The H100 has no direct SQL connection, shell, network, tools, or
-record-mutation path; it receives only bounded serialized results and explains them.
+record-mutation path; it receives only bounded serialized results and explains them. Citizen Help
+now uses a two-call loop: the H100 proposes a JSON plan, the CVM validates and executes it, and the
+H100 explains the exact result. Invalid plans are rejected and the deterministic application
+retrieval path is used instead.
 
 ---
 
