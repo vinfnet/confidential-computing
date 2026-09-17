@@ -217,8 +217,10 @@
             </div>
             <p class="caption"><a href="https://commons.wikimedia.org/wiki/File:2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm">“2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe”</a> by <a href="https://commons.wikimedia.org/wiki/User:Acabashi">Acabashi</a>, licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="license">CC BY-SA 4.0</a>. This demo excerpts, crops, resizes, and transcodes the source; the confidential output also blurs detected face regions. Both adapted video streams are distributed under CC BY-SA 4.0.</p>
         </section>
+            {% set diagram_id = 'cctv' %}{% set diagram_flow = 'cctv' %}{% include '_infrastructure_diagram.html' %}
     </main>
     <script src="{{ url_for('static', filename='vendor/hls.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='infrastructure-diagram.js') }}"></script>
     <script>
         const openButton = document.getElementById('open-viewer');
         const pauseButton = document.getElementById('pause-comparison');
@@ -243,6 +245,7 @@
         let statusTimer = null;
         let comparisonPaused = false;
         let technicalDetailsLoaded = false;
+            const infrastructureDiagram = document.querySelector('[data-infrastructure-diagram]').infrastructureDiagram;
 
         function renderDetailList(element, details) {
             element.replaceChildren();
@@ -325,6 +328,14 @@
             faceCount.textContent = status.faces_detected ?? '-';
             unavailable.hidden = ready;
             unavailable.textContent = ready ? '' : (status.message || 'The anonymized stream is unavailable');
+            if (!ready) infrastructureDiagram.setState('unavailable', { state: status.message || 'Unavailable' });
+            else if (status.state === 'processing' || status.state === 'starting' || status.state === 'running') {
+                infrastructureDiagram.setState('cctv-processing', {
+                    gpu: status.confidential_gpu?.verified ? 'Anonymizing faces' : 'GPU evidence unavailable',
+                    app: `${status.processing_fps || 0} fps / HLS output`,
+                    browser: status.faces_detected == null ? 'Monitoring' : `${status.faces_detected} faces detected`,
+                });
+            } else if (status.state === 'completed') infrastructureDiagram.setState('cctv-processing', { state: 'Output ready', gpu: 'Anonymization complete', app: 'HLS output ready' });
         }
 
         async function refreshStatus() {
@@ -377,6 +388,7 @@
             source.src = source.dataset.src;
             sourceVideo.load();
             viewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            infrastructureDiagram.setState('cctv-processing');
             await refreshStatus();
             sourceVideo.play().catch(() => sourceVideo.focus());
             statusTimer = window.setInterval(refreshStatus, 3000);

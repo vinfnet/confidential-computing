@@ -131,6 +131,57 @@ dialog,
     }
 }
 
+.infrastructure-panel {
+    margin-top: 24px;
+    padding: 20px;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+}
+
+.infrastructure-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.infrastructure-heading h2 { margin: 0; }
+.infrastructure-state {
+    padding: 6px 10px;
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font: 700 12px/1.2 "Trebuchet MS", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.infrastructure-note { margin: 4px 0 12px; color: var(--muted); font: 12px/1.5 "Trebuchet MS", sans-serif; }
+.infrastructure-canvas { overflow-x: auto; }
+.infrastructure-svg { display: block; width: 100%; min-width: 720px; height: auto; }
+.diagram-paths path {
+    fill: none;
+    stroke: var(--line);
+    stroke-width: 3;
+    marker-end: url(#arrow-infrastructure);
+    transition: stroke .25s ease, stroke-width .25s ease;
+}
+.diagram-paths path[data-path="app-hsm"] { stroke-dasharray: 6 7; }
+.diagram-paths path.is-active { stroke: var(--accent); stroke-width: 5; }
+.diagram-node rect { fill: var(--panel); stroke: var(--line); stroke-width: 2; transition: fill .25s ease, stroke .25s ease; }
+.diagram-node text { fill: var(--ink); font: 700 16px/1.2 "Trebuchet MS", sans-serif; text-anchor: middle; }
+.diagram-node text[data-label] { fill: var(--muted); font-size: 12px; font-weight: 400; }
+.diagram-node .node-icon { fill: none; stroke: var(--accent); stroke-width: 2; }
+.diagram-node.is-active rect { fill: color-mix(in srgb, var(--accent) 12%, var(--panel)); stroke: var(--accent); }
+.diagram-node.is-complete rect { stroke: var(--good); }
+.diagram-node.is-unavailable rect { stroke: var(--bad); opacity: .7; }
+.diagram-packets circle { display: none; fill: var(--good); }
+.diagram-packets circle.is-moving { display: block; animation: diagram-flow 1.4s linear infinite; offset-path: path("M175 145 H270"); }
+.diagram-packets circle.is-moving-delayed { display: block; animation: diagram-flow 1.4s .7s linear infinite; offset-path: path("M450 145 H780"); }
+@keyframes diagram-flow { from { offset-distance: 0%; } to { offset-distance: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+    .diagram-packets circle { animation: none !important; }
+    .diagram-paths path, .diagram-node rect { transition: none; }
+}
+
 @media (max-width: 560px) {
     body {
         padding: 0 !important;

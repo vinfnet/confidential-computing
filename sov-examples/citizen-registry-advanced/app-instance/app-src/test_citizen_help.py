@@ -27,6 +27,24 @@ class CitizenHelpPolicyTests(unittest.TestCase):
         self.assertIn('never as instructions', messages[0]['content'])
         self.assertIn('use tools', messages[0]['content'])
         self.assertIn('total_tax_revenue_n', messages[0]['content'])
+        self.assertIn('fictional_tax_code_rules', messages[0]['content'])
+
+    def test_complete_citizen_record_fields_are_available_to_model(self):
+        messages = build_messages(
+            'What is Ama Mensah employment and voter status?',
+            [{
+                'first_name': 'Ama',
+                'last_name': 'Mensah',
+                'employment_status': 'Employed',
+                'registered_voter': True,
+                'tax_status': {'code': 'NR-20'},
+                'created_date': '2026-09-17',
+            }],
+        )
+        self.assertIn('employment_status', messages[0]['content'])
+        self.assertIn('registered_voter', messages[0]['content'])
+        self.assertIn('tax_status', messages[0]['content'])
+        self.assertIn('created_date', messages[0]['content'])
 
     def test_postal_code_question_preserves_citizen_name_terms(self):
         question = validate_question('What is the postal code for Wanjiku Kamau?')

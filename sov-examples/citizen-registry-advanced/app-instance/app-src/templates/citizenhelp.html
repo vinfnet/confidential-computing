@@ -27,10 +27,16 @@
     .actions { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; }
     .primary { border:0; border-radius:4px; padding:12px 17px; background:var(--accent); color:#fff; cursor:pointer; font-weight:700; }
     .primary:disabled { background:#73808a; cursor:default; }
-    .answer { min-height:190px; margin-top:20px; border-left:4px solid var(--accent); background:#fff; padding:18px; white-space:pre-wrap; }
-    .answer[data-state="blocked"] { border-left-color:var(--bad); }
-    .answer[data-state="error"] { border-left-color:var(--bad); color:var(--bad); }
-    .answer:empty::before { content:'The GPU assistant response will appear here.'; color:var(--muted); }
+    .chat-log { display:flex; flex-direction:column; gap:12px; min-height:230px; max-height:520px; overflow-y:auto; margin-top:20px; padding:4px; }
+    .chat-empty { margin:auto; color:var(--muted); text-align:center; }
+    .message { max-width:88%; padding:12px 15px; white-space:pre-wrap; border:1px solid var(--line); border-radius:4px; font:15px/1.5 "Trebuchet MS",sans-serif; }
+    .message.user { align-self:flex-end; background:var(--accent); color:#fff; border-color:var(--accent); }
+    .message.assistant { align-self:flex-start; background:#fff; border-left:4px solid var(--accent); }
+    .message[data-state="blocked"], .message[data-state="error"] { border-left-color:var(--bad); }
+    .message-meta { display:block; margin-bottom:4px; color:var(--muted); font-size:11px; font-weight:700; text-transform:uppercase; }
+    .user .message-meta { color:#d9f4ef; }
+    .chat-tools { display:flex; justify-content:space-between; gap:12px; margin-top:8px; color:var(--muted); font:12px/1.4 "Trebuchet MS",sans-serif; }
+    .secondary { border:1px solid var(--line); border-radius:4px; padding:7px 10px; background:var(--panel); color:var(--ink); cursor:pointer; font:700 12px/1.2 "Trebuchet MS",sans-serif; }
     .model-panel[hidden] { display:none; }
     .model-panel dl { display:grid; grid-template-columns:auto 1fr; gap:9px 14px; margin:0; }
     .model-panel dt { color:var(--muted); font-weight:700; }
@@ -52,11 +58,11 @@
         <h2>Ask the registry assistant</h2>
         <form id="chat-form">
           <label for="question">Question</label>
-          <textarea id="question" maxlength="800" required placeholder="Example: Which region is Ama Mensah registered in?"></textarea>
-          <div class="actions"><span id="status" aria-live="polite">Ready</span><button class="primary" id="ask" type="submit">Ask Citizen Help</button></div>
+          <textarea id="question" maxlength="800" required placeholder="Example: Which region is Ama Mensah registered in? Enter sends; Shift+Enter adds a line. "></textarea>
+          <div class="chat-tools"><span id="counter">0 / 800</span><button class="secondary" id="clear-chat" type="button">Clear conversation</button></div>
+          <div class="actions"><span id="status" aria-live="polite">Ready</span><button class="primary" id="ask" type="submit">Send question</button></div>
         </form>
-        <div class="answer" id="answer" aria-live="polite"></div>
-        <div class="matches" id="matches"></div>
+        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Citizen Help conversation"><div class="chat-empty" id="chat-empty">Ask a question to begin the fictional Norland registry conversation.</div></div>
         <div class="guardrail">This assistant has no tools, shell access, network access, or authority to change records. Harmful, illegal, security-sensitive, prompt-injection, and credential-extraction requests are refused.</div>
       </div>
       <section class="panel model-panel" id="model-panel" hidden aria-live="polite">
@@ -64,15 +70,38 @@
         <dl id="model-details"><dt>Status</dt><dd>Loading model metadata</dd></dl>
       </section>
     </section>
+    {% set diagram_id = 'citizen-help' %}{% set diagram_flow = 'citizen-help' %}{% include '_infrastructure_diagram.html' %}
     <footer>Local open-weight inference | Qwen2.5-7B-Instruct | H100 confidential-computing boundary | Synthetic Norland data only</footer>
   </main>
+  <script src="{{ url_for('static', filename='infrastructure-diagram.js') }}"></script>
   <script>
     const form = document.getElementById('chat-form');
     const question = document.getElementById('question');
-    const answer = document.getElementById('answer');
-    const matches = document.getElementById('matches');
+    const chatLog = document.getElementById('chat-log');
+    const chatEmpty = document.getElementById('chat-empty');
+    const counter = document.getElementById('counter');
+    const clearChat = document.getElementById('clear-chat');
+    const diagram = document.querySelector('[data-infrastructure-diagram]').infrastructureDiagram;
     const status = document.getElementById('status');
     const ask = document.getElementById('ask');
+    const addMessage = (role, text, state = '') => {
+      chatEmpty.hidden = true;
+      const message = document.createElement('div');
+      message.className = `message ${role}`;
+      if (state) message.dataset.state = state;
+      const meta = document.createElement('span');
+      meta.className = 'message-meta';
+      meta.textContent = role === 'user' ? 'You' : 'Norland Citizen Help';
+      message.append(meta, document.createTextNode(text));
+      chatLog.appendChild(message);
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return message;
+    };
+    question.addEventListener('input', () => { counter.textContent = `${question.value.length} / 800`; });
+    question.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); }
+    });
+    clearChat.addEventListener('click', () => { chatLog.replaceChildren(chatEmpty); chatEmpty.hidden = false; status.textContent = 'Ready'; });
     const modelTab = document.getElementById('model-tab');
     const modelPanel = document.getElementById('model-panel');
     const modelDetails = document.getElementById('model-details');
@@ -91,20 +120,25 @@
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
-      answer.dataset.state = '';
-      answer.textContent = '';
-      matches.textContent = '';
+      const submittedQuestion = question.value.trim();
+      if (!submittedQuestion) return;
+      addMessage('user', submittedQuestion);
+      question.value = '';
+      counter.textContent = '0 / 800';
       status.textContent = 'Running on H100...';
       ask.disabled = true;
+      diagram.setState('request');
+      window.setTimeout(() => diagram.setState('database'), 250);
+      window.setTimeout(() => diagram.setState('gpu-processing'), 700);
       try {
-        const response = await fetch('/api/citizenhelp', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:question.value}) });
+        const response = await fetch('/api/citizenhelp', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:submittedQuestion}) });
         const data = await response.json();
         if (!response.ok && !data.answer) throw new Error(data.error || 'Request failed');
-        answer.dataset.state = data.blocked ? 'blocked' : '';
-        answer.textContent = data.answer || data.error || 'No answer returned.';
-        if (data.matches?.length) matches.textContent = `Bounded registry matches: ${data.matches.map(item => item.name).join(', ')}`;
+        addMessage('assistant', data.answer || data.error || 'No answer returned.', data.blocked ? 'blocked' : '');
+        if (data.matches?.length) addMessage('assistant', `Matched fictional records: ${data.matches.map(item => item.name).join(', ')}`);
+        diagram.setState('response');
         status.textContent = data.blocked ? 'Request refused by policy' : 'Complete';
-      } catch (error) { answer.dataset.state = 'error'; answer.textContent = error.message; status.textContent = 'Unavailable'; }
+      } catch (error) { addMessage('assistant', error.message, 'error'); diagram.setState('unavailable'); status.textContent = 'Unavailable'; }
       finally { ask.disabled = false; }
     });
   </script>

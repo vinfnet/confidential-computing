@@ -1,0 +1,56 @@
+(() => {
+  const diagramStates = {
+    idle: { text: 'Idle', nodes: { browser: 'Ready', app: 'Waiting', database: 'Protected', hsm: 'Available', gpu: 'Verified' }, paths: [] },
+    request: { text: 'Request moving', nodes: { browser: 'Question sent', app: 'Validating', database: 'Protected', hsm: 'Available', gpu: 'Verified' }, paths: ['browser-app'] },
+    database: { text: 'Retrieving records', nodes: { browser: 'Waiting', app: 'Querying', database: 'Reading records', hsm: 'Available', gpu: 'Verified' }, paths: ['browser-app', 'app-db'] },
+    'hsm-evidence': { text: 'Checking key evidence', nodes: { browser: 'Waiting', app: 'Reading evidence', database: 'Protected', hsm: 'Key evidence', gpu: 'Verified' }, paths: ['app-hsm'] },
+    'gpu-processing': { text: 'Confidential GPU processing', nodes: { browser: 'Waiting', app: 'Bounded context', database: 'Protected', hsm: 'Available', gpu: 'Inference' }, paths: ['app-gpu'] },
+    response: { text: 'Response returning', nodes: { browser: 'Answer received', app: 'Returning answer', database: 'Protected', hsm: 'Available', gpu: 'Complete' }, paths: ['gpu-browser'] },
+    'cctv-processing': { text: 'CCTV anonymization', nodes: { browser: 'Monitoring', app: 'Streaming HLS', database: 'Protected', hsm: 'Key evidence', gpu: 'Anonymizing faces' }, paths: ['browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] },
+    unavailable: { text: 'Unavailable', nodes: { browser: 'Unavailable', app: 'Unavailable', database: 'Unknown', hsm: 'Unknown', gpu: 'Unavailable' }, paths: [] },
+  };
+
+  class InfrastructureDiagram {
+    constructor(root) {
+      this.root = root;
+      this.state = 'idle';
+      this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      this.stateElement = root.querySelector('[data-diagram-state]');
+      this.nodes = Object.fromEntries([...root.querySelectorAll('[data-node]')].map(node => [node.dataset.node, node]));
+      this.paths = Object.fromEntries([...root.querySelectorAll('[data-path]')].map(path => [path.dataset.path, path]));
+      this.packets = [...root.querySelectorAll('[data-packet]')];
+      this.root.dataset.flow = root.dataset.flow || 'citizen-help';
+      this.setState('idle');
+    }
+
+    setState(state, labels = {}) {
+      const next = diagramStates[state] || diagramStates.idle;
+      this.state = state;
+      this.root.dataset.state = state;
+      this.stateElement.textContent = labels.state || next.text;
+      Object.entries(next.nodes).forEach(([name, text]) => {
+        const node = this.nodes[name];
+        if (node) node.querySelector(`[data-label="${name}"]`).textContent = labels[name] || text;
+      });
+      Object.values(this.nodes).forEach(node => node.classList.remove('is-active', 'is-complete', 'is-unavailable'));
+      next.paths.forEach(pathName => {
+        const path = this.paths[pathName];
+        if (path) path.classList.add('is-active');
+      });
+      next.paths.forEach(pathName => {
+        const endpointNames = pathName.split('-').filter(name => this.nodes[name]);
+        endpointNames.forEach(name => this.nodes[name].classList.add('is-active'));
+      });
+      if (state === 'response' || state === 'cctv-processing') this.nodes.gpu?.classList.add('is-complete');
+      if (state === 'unavailable') Object.values(this.nodes).forEach(node => node.classList.add('is-unavailable'));
+      this.paths && Object.values(this.paths).forEach(path => { if (!next.paths.includes(path.dataset.path)) path.classList.remove('is-active'); });
+      this.packets.forEach((packet, index) => {
+        packet.classList.toggle('is-moving', !this.reducedMotion && next.paths.length > 0 && index === 0);
+        packet.classList.toggle('is-moving-delayed', !this.reducedMotion && next.paths.length > 1 && index === 1);
+      });
+    }
+  }
+
+  window.InfrastructureDiagram = InfrastructureDiagram;
+  document.querySelectorAll('[data-infrastructure-diagram]').forEach(root => { root.infrastructureDiagram = new InfrastructureDiagram(root); });
+})();

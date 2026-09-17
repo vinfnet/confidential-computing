@@ -379,6 +379,7 @@
                             <td><button class="health-button" type="button" data-citizen-id="{{ citizen.id }}">Loading</button></td>
                             <td><div class="actions">
                                 <button class="secondary-button edit-citizen" type="button" data-id="{{ citizen.id }}">Edit</button>
+                                <button class="secondary-button history-citizen" type="button" data-id="{{ citizen.id }}">History</button>
                                 <button class="danger-button delete-citizen" type="button" data-id="{{ citizen.id }}" data-name="{{ citizen.first_name }} {{ citizen.last_name }}">Delete</button>
                             </div></td>
                         </tr>
@@ -434,6 +435,20 @@
                 <ul id="health-conditions"><li>Loading</li></ul>
                 <h3>Hospital visits</h3>
                 <ul id="health-visits"><li>Loading</li></ul>
+            </div>
+        </dialog>
+
+        <dialog id="history-dialog">
+            <div class="dialog-content">
+                <div class="dialog-header">
+                    <h2 id="history-title">Employment and tax history</h2>
+                    <button class="close-button" id="close-history" type="button" aria-label="Close">×</button>
+                </div>
+                <p class="health-disclaimer">Fictional read-only demonstration records. Tax amounts are calculated from the Norland demo policy.</p>
+                <h3>Employment history</h3>
+                <div class="table-wrap"><table><thead><tr><th>Years</th><th>Company</th><th>Industry</th><th>Role</th></tr></thead><tbody id="employment-history"></tbody></table></div>
+                <h3>Annual salary and tax</h3>
+                <div class="table-wrap"><table><thead><tr><th>Year</th><th>Salary</th><th>Tax code</th><th>Tax paid</th></tr></thead><tbody id="tax-history"></tbody></table></div>
             </div>
         </dialog>
 
@@ -534,6 +549,10 @@
         const healthConditions = document.getElementById('health-conditions');
         const healthVisits = document.getElementById('health-visits');
         const healthTitle = document.getElementById('health-title');
+        const historyDialog = document.getElementById('history-dialog');
+        const employmentHistory = document.getElementById('employment-history');
+        const taxHistory = document.getElementById('tax-history');
+        const historyTitle = document.getElementById('history-title');
 
         fetch('/api/citizens/health/status').then(response => response.json()).then(data => {
             document.querySelectorAll('.health-button').forEach(button => {
@@ -567,6 +586,27 @@
             renderItems(healthVisits, data.hospital_visits, item => `${item.visit_date} - ${item.visit_reason} at ${item.hospital_name}`, 'No fictional hospital visits recorded');
         }));
         document.getElementById('close-health').addEventListener('click', () => healthDialog.close());
+        document.querySelectorAll('.history-citizen').forEach(button => button.addEventListener('click', async () => {
+            employmentHistory.replaceChildren();
+            taxHistory.replaceChildren();
+            historyDialog.showModal();
+            const response = await fetch(`/api/citizen/${button.dataset.id}/history`);
+            const data = await response.json();
+            historyTitle.textContent = `${data.citizen_name || 'Citizen'} - employment and tax history`;
+            const addRow = (target, values) => {
+                const row = document.createElement('tr');
+                values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.appendChild(cell); });
+                target.appendChild(row);
+            };
+            data.employment_history?.forEach(item => addRow(employmentHistory, [
+                `${item.start_year}-${item.end_year}`, `${item.company_name} (${item.company_code})`, item.industry_vertical, item.job_title,
+            ]));
+            data.tax_history?.forEach(item => addRow(taxHistory, [
+                item.tax_year, `N£${Number(item['gross_salary_n£']).toLocaleString(undefined, {minimumFractionDigits: 2})}`,
+                item.tax_code, `N£${Number(item['tax_paid_n£']).toLocaleString(undefined, {minimumFractionDigits: 2})}`,
+            ]));
+        }));
+        document.getElementById('close-history').addEventListener('click', () => historyDialog.close());
 
         const registryRows = [...document.querySelectorAll('tbody tr')];
         const pageSize = 50;

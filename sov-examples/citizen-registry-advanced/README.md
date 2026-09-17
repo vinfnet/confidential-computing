@@ -443,6 +443,14 @@ harmful/illegal/security-breach/credential-extraction requests, no tool or code 
 leakage checks, and fail-closed service errors. These controls reduce risk but do not turn a small
 open model into a general-purpose safety classifier; the assistant must remain limited to the
 synthetic Norland dataset and supervised demo use.
+
+Citizen Help can answer questions about each matched citizen's complete registry row, fictional
+employment history, company changes, annual salary, and annual tax calculations. The fictional
+Norland tax code is progressive: `NR-00` is 0% up to N£11,999.99, `NR-10` is 10% from N£12,000
+to N£29,999.99, `NR-20` is 20% from N£30,000 to N£59,999.99, and `NR-30` is 30% above N£60,000.
+Each annual tax row is calculated from that year's synthetic salary, not copied from a fixed value.
+The registry History action calls `GET /api/citizen/<id>/history` and displays read-only fictional
+employment and tax records. The Citizen Help conversation is retained only in the open browser tab.
 Although H100 exposes NVDEC, using it here would require returning decoded frames to CPU memory for
 Pillow and `libx264`; H100 has no NVENC engine to complete this pipeline on the GPU.
 
