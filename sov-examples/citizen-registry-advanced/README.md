@@ -10,6 +10,30 @@
 > `FileBackedDemo` profile. The app CVM reports `CC status: ON`, `CC Environment: PRODUCTION`,
 > successful NVIDIA GPU attestation, successful CPU SEV-SNP/vTPM attestation, and `CCTV_APP_READY=1`.
 
+## ELI5: How Citizen Help Uses SQL
+
+The SQL database is inside a protected Confidential VM, like a locked filing cabinet inside a
+secure room. The H100 assistant is also protected, but it is a separate service. The assistant
+does not open the filing cabinet itself and does not receive database credentials.
+
+Instead, the application CVM acts like a trusted librarian:
+
+```text
+Your question
+  -> application CVM understands the requested data
+  -> application runs allowlisted, read-only SQL inside the protected boundary
+  -> SQL returns exact rows or calculations
+  -> H100 receives only the serialized result and explains it
+```
+
+This means questions about the fictional citizens, health, companies, employment, salaries, taxes,
+history, and generated Norland policies can be answered from the data held in SQL without placing
+the entire database into the model prompt. The application query planner records the relevant
+tables, columns, joins, policy topics, and confidential boundary for each request. The H100 has no
+direct SQL connection, shell, network, tools, or record-mutation path. The query planner foundation
+is deployed; domain-specific aggregate retrieval is currently expanded incrementally as new SQL
+tables and generated policies are added.
+
 ---
 
 ## Guide Map
