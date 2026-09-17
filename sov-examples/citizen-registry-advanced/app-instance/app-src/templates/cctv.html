@@ -218,9 +218,12 @@
             <p class="caption"><a href="https://commons.wikimedia.org/wiki/File:2026_London_Marathon_Upper_Thames_Street_from_Blackfriars_Bridge_and_Queenhithe.webm">“2026 London Marathon Upper Thames Street from Blackfriars Bridge and Queenhithe”</a> by <a href="https://commons.wikimedia.org/wiki/User:Acabashi">Acabashi</a>, licensed under <a href="https://creativecommons.org/licenses/by-sa/4.0/" rel="license">CC BY-SA 4.0</a>. This demo excerpts, crops, resizes, and transcodes the source; the confidential output also blurs detected face regions. Both adapted video streams are distributed under CC BY-SA 4.0.</p>
         </section>
             {% set diagram_id = 'cctv' %}{% set diagram_flow = 'cctv' %}{% include '_infrastructure_diagram.html' %}
+        <button class="debug-open" type="button" data-debug-open="cctv">Debug diagnostics</button>
+        {% set debug_id = 'cctv' %}{% include '_debug_panel.html' %}
     </main>
     <script src="{{ url_for('static', filename='vendor/hls.min.js') }}"></script>
         <script src="{{ url_for('static', filename='infrastructure-diagram.js') }}"></script>
+        <script src="{{ url_for('static', filename='debug-panel.js') }}"></script>
     <script>
         const openButton = document.getElementById('open-viewer');
         const pauseButton = document.getElementById('pause-comparison');

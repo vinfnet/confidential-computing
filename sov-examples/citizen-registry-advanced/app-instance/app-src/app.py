@@ -1411,6 +1411,95 @@ def db_status():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+def _debug_response(payload, status=200):
+    response = jsonify(payload)
+    response.status_code = status
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
+
+
+@app.route('/api/debug/telemetry', methods=['GET'])
+def debug_telemetry():
+    """Return authorized-operator telemetry without PII, secrets, or raw queries."""
+    database = db_status().get_json() or {}
+    media = media_generator.status()
+    gpu = get_gpu_attestation_evidence()
+    model = model_metadata('cuda:0')
+    cctv = {'state': 'unavailable'}
+    try:
+        cctv = cctv_status().get_json() or cctv
+    except Exception:
+        pass
+    return _debug_response({
+        'timestamp': datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        'read_only': True,
+        'authorized_operator_notice': 'Infrastructure diagnostics only; no citizen data or secrets are shown.',
+        'components': {
+            'database': {
+                'status': database.get('status', 'unavailable'),
+                'record_count': database.get('record_count'),
+            },
+            'gpu': {
+                'status': 'attested' if gpu.get('verified') else 'unverified',
+                'model': model.get('model_id'),
+                'parameters': model.get('parameters'),
+                'device': model.get('device'),
+                'confidential_compute': gpu.get('mode', gpu.get('cc_status', 'unknown')),
+            },
+            'media': {
+                'state': media.get('state'),
+                'percent': media.get('percent'),
+                'completed': media.get('completed'),
+                'total': media.get('total'),
+            },
+            'cctv': {
+                'state': cctv.get('state'),
+                'processing_fps': cctv.get('processing_fps'),
+                'frames_behind': cctv.get('frames_behind'),
+                'faces_detected': cctv.get('faces_detected'),
+            },
+        },
+    })
+
+
+@app.route('/api/debug/logs', methods=['GET'])
+def debug_logs():
+    """Return sanitized application event classes, never raw log lines."""
+    limit = min(max(request.args.get('limit', 50, type=int), 1), 100)
+    requested_level = request.args.get('level', 'INFO').upper()
+    allowed_levels = {'INFO', 'WARNING', 'ERROR'}
+    if requested_level not in allowed_levels:
+        requested_level = 'INFO'
+    level_rank = {'INFO': 1, 'WARNING': 2, 'ERROR': 3}
+    events = []
+    try:
+        with open('/var/log/citizen-registry/app.log', encoding='utf-8', errors='replace') as log_file:
+            lines = log_file.readlines()[-500:]
+    except OSError:
+        lines = []
+    event_patterns = (
+        ('ERROR', 'Application operation failed'),
+        ('WARNING', 'Component warning'),
+        ('INFO', 'Application operation completed'),
+    )
+    for line in reversed(lines):
+        match = re.match(r'^(\S+ \S+).* - (INFO|WARNING|ERROR) - ', line)
+        if not match or level_rank[match.group(2)] < level_rank[requested_level]:
+            continue
+        level = match.group(2)
+        lower_line = line.lower()
+        if 'failed' in lower_line or 'error' in lower_line or 'exception' in lower_line:
+            message = 'Application operation failed'
+        elif 'warning' in lower_line or 'unavailable' in lower_line:
+            message = 'Component warning'
+        else:
+            message = 'Application operation completed'
+        events.append({'timestamp': match.group(1), 'level': level, 'component': 'citizen-registry', 'message': message})
+        if len(events) >= limit:
+            break
+    return _debug_response({'logs': events, 'level': requested_level, 'truncated': len(events) >= limit, 'read_only': True})
+
+
 @app.route('/', methods=['GET'])
 def index():
     """Redirect the server root to the primary application."""

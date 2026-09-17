@@ -70,9 +70,12 @@
       </section>
     </section>
     {% set diagram_id = 'citizen-help' %}{% set diagram_flow = 'citizen-help' %}{% include '_infrastructure_diagram.html' %}
+    <button class="debug-open" type="button" data-debug-open="citizen-help">Debug diagnostics</button>
+    {% set debug_id = 'citizen-help' %}{% include '_debug_panel.html' %}
     <footer>Local open-weight inference | Qwen2.5-32B-Instruct | H100 confidential-computing boundary | Synthetic Norland data only</footer>
   </main>
   <script src="{{ url_for('static', filename='infrastructure-diagram.js') }}"></script>
+  <script src="{{ url_for('static', filename='debug-panel.js') }}"></script>
   <script>
     const form = document.getElementById('chat-form');
     const question = document.getElementById('question');

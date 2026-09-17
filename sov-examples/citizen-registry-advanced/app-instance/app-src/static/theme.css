@@ -137,6 +137,19 @@ dialog,
     border: 1px solid var(--line);
     background: var(--panel-soft);
 }
+.debug-open { margin-top: 16px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel-soft); color: var(--ink); cursor: pointer; font: 700 13px/1.2 "Trebuchet MS", sans-serif; }
+.debug-panel { margin-top: 14px; padding: 18px; border: 1px solid var(--line); background: var(--panel-soft); color: var(--ink); }
+.debug-panel[hidden] { display: none; }
+.debug-header, .debug-controls { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.debug-header h2 { margin: 0; }
+.debug-close { border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; padding: 5px 9px; }
+.debug-disclaimer { color: var(--muted); font: 12px/1.5 "Trebuchet MS", sans-serif; }
+.debug-controls label { color: var(--muted); font: 12px/1.4 "Trebuchet MS", sans-serif; }
+.debug-controls select { margin-left: 5px; padding: 6px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+.debug-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 14px 0; font: 13px/1.4 "Trebuchet MS", sans-serif; }
+.debug-metrics dt { color: var(--muted); font-weight: 700; }
+.debug-metrics dd { margin: 0; color: var(--ink); }
+.debug-log { min-height: 150px; max-height: 260px; overflow: auto; padding: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); white-space: pre-wrap; font: 12px/1.5 ui-monospace, Consolas, monospace; }
 
 .infrastructure-heading {
     display: flex;
