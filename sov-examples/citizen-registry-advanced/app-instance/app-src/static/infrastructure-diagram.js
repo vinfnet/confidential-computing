@@ -59,6 +59,15 @@
 
     replay() {
       if (this.reducedMotion || !this.lastPaths.length || this.replayTimer) return;
+      const replayPaths = [...this.lastPaths];
+      Object.values(this.paths).forEach(path => path.classList.remove('is-active'));
+      Object.values(this.nodes).forEach(node => node.classList.remove('is-active'));
+      replayPaths.forEach(pathName => {
+        const path = this.paths[pathName];
+        if (path) path.classList.add('is-active');
+        pathName.split('-').filter(name => this.nodes[name]).forEach(name => this.nodes[name].classList.add('is-active'));
+      });
+      this.pulses.forEach(pulse => pulse.classList.toggle('is-active', replayPaths.includes(pulse.dataset.pulseFor)));
       this.root.dataset.replay = 'true';
       this.replayButton.disabled = true;
       this.replayButton.textContent = 'Replaying...';
@@ -66,7 +75,7 @@
       void this.root.offsetWidth;
       this.root.classList.add('is-replaying');
       const motions = this.pulses
-        .filter(pulse => this.lastPaths.includes(pulse.dataset.pulseFor))
+        .filter(pulse => replayPaths.includes(pulse.dataset.pulseFor))
         .map(pulse => {
           const current = pulse.querySelector('animateMotion');
           const replacement = current.cloneNode(true);
@@ -89,6 +98,7 @@
           try { replacement.beginElement(); } catch { /* CSS animation remains active. */ }
         });
         this.root.classList.remove('is-replaying');
+        this.setState(this.state);
         delete this.root.dataset.replay;
         this.replayButton.disabled = false;
         this.replayButton.textContent = 'Replay path';
