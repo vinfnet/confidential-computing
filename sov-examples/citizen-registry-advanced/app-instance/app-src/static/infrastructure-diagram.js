@@ -33,6 +33,7 @@
       this.root.dataset.state = state;
       this.stateElement.textContent = labels.state || next.text;
       this.lastPaths = [...next.paths];
+      if (this.replayButton) this.replayButton.disabled = !this.lastPaths.length || Boolean(this.replayTimer);
       Object.entries(next.nodes).forEach(([name, text]) => {
         const node = this.nodes[name];
         if (node) node.querySelector(`[data-label="${name}"]`).textContent = labels[name] || text;
@@ -61,17 +62,22 @@
       this.replayButton.textContent = 'Replaying...';
       const motions = this.pulses
         .filter(pulse => this.lastPaths.includes(pulse.dataset.pulseFor))
-        .map(pulse => pulse.querySelector('animateMotion'));
-      motions.forEach(motion => {
-        motion.setAttribute('dur', '6.25s');
-        motion.setAttribute('repeatCount', '1');
-        motion.beginElement();
-      });
+        .map(pulse => {
+          const current = pulse.querySelector('animateMotion');
+          const replacement = current.cloneNode(true);
+          replacement.setAttribute('dur', '6.25s');
+          replacement.setAttribute('repeatCount', '1');
+          current.replaceWith(replacement);
+          replacement.beginElement();
+          return { pulse, motion: replacement };
+        });
       this.replayTimer = window.setTimeout(() => {
-        motions.forEach(motion => {
-          motion.setAttribute('dur', '1.25s');
-          motion.setAttribute('repeatCount', 'indefinite');
-          motion.beginElement();
+        motions.forEach(({ pulse, motion }) => {
+          const replacement = motion.cloneNode(true);
+          replacement.setAttribute('dur', '1.25s');
+          replacement.setAttribute('repeatCount', 'indefinite');
+          motion.replaceWith(replacement);
+          replacement.beginElement();
         });
         delete this.root.dataset.replay;
         this.replayButton.disabled = false;
