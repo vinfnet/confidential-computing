@@ -607,7 +607,15 @@
             document.getElementById('media-progress-count').textContent = `${status.percent}%`;
             document.getElementById('media-progress-bar').value = status.percent;
             document.querySelectorAll('.portrait').forEach(image => {
-                if (!image.src && status.completed > 0) image.src = `${image.dataset.src}?v=${status.updated_at}`;
+                if (status.state === 'complete') {
+                    const version = encodeURIComponent(status.updated_at);
+                    if (image.dataset.mediaVersion !== version) {
+                        image.src = `${image.dataset.src}?v=${version}`;
+                        image.dataset.mediaVersion = version;
+                    }
+                } else if (!image.src && status.completed > 0) {
+                    image.src = `${image.dataset.src}?v=${encodeURIComponent(status.updated_at)}`;
+                }
             });
             if (status.state === 'complete') {
                 document.getElementById('media-progress').hidden = true;
