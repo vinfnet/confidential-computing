@@ -109,7 +109,7 @@ class PortraitPromptTests(unittest.TestCase):
         torch.inference_mode.return_value.__enter__ = Mock()
         torch.inference_mode.return_value.__exit__ = Mock(return_value=False)
         citizen = {
-            'national_id': 'NLD-00A-0001X',
+            'national_id': 'NLD-0001X',
             'date_of_birth': '1990-01-01',
             'sex': 'X',
             'portrait_profile': 'East African',
@@ -127,7 +127,7 @@ class PortraitPromptTests(unittest.TestCase):
     def test_fingerprint_changes_with_gender_or_portrait_profile(self):
         citizen = {
             'id': 1,
-            'national_id': 'NLD-00A-0001X',
+            'national_id': 'NLD-0001X',
             'first_name': 'Amani',
             'last_name': 'Njoroge',
             'date_of_birth': '1990-01-01',

@@ -69,7 +69,7 @@ if (-not (Test-Path $DataFile)) {
         $month = 1 + (($index * 5) % 12)
         $day = 1 + (($index * 11) % 27)
         [pscustomobject]@{
-            idNumber = 'NLD-{0:D2}{1}-{2:D4}X' -f ($year % 100), [char](65 + ($index % 26)), $index
+            idNumber = 'NLD-{0:D4}X' -f $index
             firstName = $firstNames[($index * 3) % $firstNames.Count]
             lastName = $lastNames[($index * 7) % $lastNames.Count]
             dateOfBirth = '{0:D4}-{1:D2}-{2:D2}' -f $year, $month, $day

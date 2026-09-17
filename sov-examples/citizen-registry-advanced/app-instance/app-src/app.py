@@ -246,7 +246,7 @@ def _synthetic_citizens():
         month = 1 + ((index * 5) % 12)
         day = 1 + ((index * 11) % 27)
         citizens.append({
-            'national_id': f'NLD-{year % 100:02d}{chr(65 + index % 26)}-{index:04d}X',
+            'national_id': f'NLD-{index:04d}X',
             'first_name': first_name,
             'last_name': last_name,
             'date_of_birth': f'{year:04d}-{month:02d}-{day:02d}',
@@ -263,8 +263,7 @@ def _synthetic_citizens():
 
 def _portrait_profile(national_id):
     for citizen_index, (_, _, _, portrait_profile) in enumerate(_expanded_personas(), start=1):
-        year = 1948 + ((citizen_index * 7) % 58)
-        expected_id = f'NLD-{year % 100:02d}{chr(65 + citizen_index % 26)}-{citizen_index:04d}X'
+        expected_id = f'NLD-{citizen_index:04d}X'
         if national_id == expected_id:
             return portrait_profile
     return None
@@ -347,7 +346,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute("""
             DECLARE @lock_result INT;
             EXEC @lock_result = sys.sp_getapplock
-                @Resource = N'citizen-registry-seed-v103',
+                @Resource = N'citizen-registry-seed-v104',
                 @LockMode = N'Exclusive',
                 @LockOwner = N'Session',
                 @LockTimeout = 30000;
@@ -421,7 +420,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
             END
         """)
 
-        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 103")
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 104")
         if cur.fetchone()[0] == 0:
             cur.execute("DELETE FROM dbo.citizen_health_records; DELETE FROM dbo.citizen_hospital_visits; DELETE FROM dbo.citizen_registry; DBCC CHECKIDENT ('dbo.citizen_registry', RESEED, 0)")
             insert_sql = """
@@ -459,7 +458,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                 item['hospital_name'], item['discharge_date'],
             ) for item in visits])
             cur.execute("DELETE FROM dbo.demo_metadata")
-            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (103)")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (104)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
@@ -548,7 +547,7 @@ def _get_db_conn():
                 created_date TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 103').fetchone()[0] == 0:
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 104').fetchone()[0] == 0:
             conn.execute('DELETE FROM citizen_health_records')
             conn.execute('DELETE FROM citizen_hospital_visits')
             conn.execute('DELETE FROM citizen_registry')
@@ -591,7 +590,7 @@ def _get_db_conn():
                 ) for item in visits],
             )
             conn.execute('DELETE FROM demo_metadata')
-            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (103)')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (104)')
             conn.commit()
         return conn
     
