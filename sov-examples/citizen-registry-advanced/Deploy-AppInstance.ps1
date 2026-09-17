@@ -552,7 +552,7 @@ RequiresMountsFor=/var/lib/citizen-registry
 [Service]
 WorkingDirectory=/opt/citizen-registry/app-src
 EnvironmentFile=/etc/citizen-registry/environment
-ExecStart=/usr/local/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 app:app
+ExecStart=/usr/local/bin/gunicorn --bind 127.0.0.1:8000 --workers 2 --timeout 180 app:app
 Restart=always
 [Install]
 WantedBy=multi-user.target

@@ -1,4 +1,4 @@
-<section class="debug-panel" data-debug-panel hidden aria-labelledby="debug-title-{{ debug_id }}">
+<section class="debug-panel" data-debug-panel data-debug-id="{{ debug_id }}" hidden aria-labelledby="debug-title-{{ debug_id }}">
   <div class="debug-header"><div><p class="eyebrow">Authorized operator view</p><h2 id="debug-title-{{ debug_id }}">Runtime diagnostics</h2></div><button class="debug-close" type="button" data-debug-close aria-label="Close diagnostics">×</button></div>
   <p class="debug-disclaimer">Safe infrastructure telemetry only. Citizen records, prompts, SQL, credentials, keys, and raw logs are never displayed.</p>
   <div class="debug-controls"><button class="secondary" type="button" data-debug-pause>Pause</button><button class="secondary" type="button" data-debug-refresh>Refresh</button><label>Level <select data-debug-level><option>INFO</option><option>WARNING</option><option>ERROR</option></select></label></div>
