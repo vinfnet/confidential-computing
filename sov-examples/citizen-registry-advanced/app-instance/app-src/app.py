@@ -222,7 +222,7 @@ HEALTH_VISIT_REASONS = [
 
 def _expanded_personas():
     """Build 1,000 deterministic persona/name combinations from curated pools."""
-    personas = []
+    grouped_personas = []
     for portrait_profile, group in PERSONA_GROUPS:
         given_names = [(first_name, sex) for first_name, _, sex in group]
         surnames = [last_name for _, last_name, _ in group]
@@ -230,9 +230,16 @@ def _expanded_personas():
             f'{surnames[index]}-{surnames[(index + 1) % len(surnames)]}'
             for index in range(len(surnames))
         ]
+        group_personas = []
         for first_name, sex in given_names:
             for last_name in surname_variants:
-                personas.append((first_name, last_name, sex, portrait_profile))
+                group_personas.append((first_name, last_name, sex, portrait_profile))
+        grouped_personas.append(group_personas)
+
+    personas = []
+    for persona_index in range(len(grouped_personas[0])):
+        for group_personas in grouped_personas:
+            personas.append(group_personas[persona_index])
     return personas
 
 
@@ -346,7 +353,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute("""
             DECLARE @lock_result INT;
             EXEC @lock_result = sys.sp_getapplock
-                @Resource = N'citizen-registry-seed-v104',
+                @Resource = N'citizen-registry-seed-v105',
                 @LockMode = N'Exclusive',
                 @LockOwner = N'Session',
                 @LockTimeout = 30000;
@@ -420,7 +427,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
             END
         """)
 
-        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 104")
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 105")
         if cur.fetchone()[0] == 0:
             cur.execute("DELETE FROM dbo.citizen_health_records; DELETE FROM dbo.citizen_hospital_visits; DELETE FROM dbo.citizen_registry; DBCC CHECKIDENT ('dbo.citizen_registry', RESEED, 0)")
             insert_sql = """
@@ -458,7 +465,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                 item['hospital_name'], item['discharge_date'],
             ) for item in visits])
             cur.execute("DELETE FROM dbo.demo_metadata")
-            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (104)")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (105)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
@@ -547,7 +554,7 @@ def _get_db_conn():
                 created_date TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 104').fetchone()[0] == 0:
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 105').fetchone()[0] == 0:
             conn.execute('DELETE FROM citizen_health_records')
             conn.execute('DELETE FROM citizen_hospital_visits')
             conn.execute('DELETE FROM citizen_registry')
@@ -590,7 +597,7 @@ def _get_db_conn():
                 ) for item in visits],
             )
             conn.execute('DELETE FROM demo_metadata')
-            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (104)')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (105)')
             conn.commit()
         return conn
     
@@ -1113,7 +1120,7 @@ def get_citizens():
                      address_line, municipality, region, socioeconomic_group,
                      tax_paid_last_year, sex, postal_code
             FROM citizen_registry
-            ORDER BY last_name, first_name
+            ORDER BY id
         """)
         
         citizens = []
