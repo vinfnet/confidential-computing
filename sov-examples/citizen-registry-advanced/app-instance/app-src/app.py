@@ -1066,6 +1066,47 @@ def _citizen_help_context(question):
     tax_code_counts = Counter()
     cursor.execute("SELECT tax_code, COUNT(*) FROM citizen_tax_history GROUP BY tax_code ORDER BY tax_code")
     tax_code_counts.update({row[0]: int(row[1]) for row in cursor.fetchall()})
+    cursor.execute("""
+        SELECT c.sex, COUNT(*), SUM(lifetime.total_tax), AVG(lifetime.total_tax)
+        FROM citizen_registry c
+        JOIN (
+            SELECT citizen_id, SUM(tax_paid_n) AS total_tax
+            FROM citizen_tax_history
+            GROUP BY citizen_id
+        ) lifetime ON lifetime.citizen_id = c.id
+        GROUP BY c.sex
+        ORDER BY c.sex
+    """)
+    gender_tax_rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT c.company_code, c.company_name, c.industry_vertical,
+               c.annual_profit_n, c.employee_count, COUNT(DISTINCT h.citizen_id)
+        FROM norland_companies c
+        LEFT JOIN citizen_employment_history h ON h.company_code = c.company_code
+        GROUP BY c.company_code, c.company_name, c.industry_vertical,
+                 c.annual_profit_n, c.employee_count
+        ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
+    """)
+    company_rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT condition_code, condition_name, COUNT(DISTINCT citizen_id)
+        FROM citizen_health_records
+        WHERE is_active = 1
+        GROUP BY condition_code, condition_name
+        ORDER BY condition_name
+    """)
+    health_condition_rows = cursor.fetchall()
+    cursor.execute("""
+        SELECT c.company_code, c.company_name, c.industry_vertical,
+               c.annual_profit_n, c.employee_count, COUNT(DISTINCT h.citizen_id)
+        FROM norland_companies c
+        LEFT JOIN citizen_employment_history h
+          ON h.company_code = c.company_code AND h.end_year = 2025
+        GROUP BY c.company_code, c.company_name, c.industry_vertical,
+                 c.annual_profit_n, c.employee_count
+        ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
+    """)
+    current_company_rows = cursor.fetchall()
     analytics = {
         'total_citizens': int(total_count),
         'total_tax_revenue_n£': round(float(total_tax), 2),
@@ -1083,6 +1124,41 @@ def _citizen_help_context(question):
         'average_salary_2025_n£': round(float(latest_salary[1]), 2) if latest_salary else 0,
         'average_tax_paid_2025_n£': round(float(latest_salary[2]), 2) if latest_salary else 0,
         'total_tax_paid_all_historical_years_n£': round(sum(float(row[3]) for row in salary_rows), 2),
+        'lifetime_tax_by_gender': [
+            {
+                'gender': row[0],
+                'citizens': int(row[1]),
+                'total_tax_paid_n£': round(float(row[2]), 2),
+                'average_lifetime_tax_paid_n£': round(float(row[3]), 2),
+            }
+            for row in gender_tax_rows
+        ],
+        'companies_by_historical_citizen_count': [
+            {
+                'company_code': row[0],
+                'company_name': row[1],
+                'industry_vertical': row[2],
+                'annual_profit_n£': round(float(row[3]), 2),
+                'employee_count': int(row[4]),
+                'citizens_with_historical_employment': int(row[5]),
+            }
+            for row in company_rows
+        ],
+        'companies_by_current_citizen_count_2025': [
+            {
+                'company_code': row[0],
+                'company_name': row[1],
+                'industry_vertical': row[2],
+                'annual_profit_n£': round(float(row[3]), 2),
+                'employee_count': int(row[4]),
+                'current_citizens_2025': int(row[5]),
+            }
+            for row in current_company_rows
+        ],
+        'health_conditions_by_citizen_count': [
+            {'condition_code': row[0], 'condition_name': row[1], 'citizens': int(row[2])}
+            for row in health_condition_rows
+        ],
         'fictional_tax_code_rules': NORLAND_TAX_CODE,
         'citizens_by_tax_code': [
             {'code': code, 'citizens': count}
@@ -1131,6 +1207,23 @@ def _citizen_help_context(question):
             f"The average fictional gross salary in 2025 was "
             f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
         )
+    elif 'tax' in question_lower and 'gender' in question_lower and any(word in question_lower for word in ('lifetime', 'total', 'average')):
+        analytics['answer_hint'] = (
+            'Average lifetime fictional tax paid by gender: ' + '; '.join(
+                f"{item['gender']}: N£{item['average_lifetime_tax_paid_n£']:,.2f} across {item['citizens']} citizens"
+                for item in analytics['lifetime_tax_by_gender']
+            ) + '.'
+        )
+    elif any(word in question_lower for word in ('company', 'companies', 'industry', 'employer')):
+        analytics['answer_hint'] = 'Top fictional companies by current 2025 citizen employment: ' + '; '.join(
+            f"{item['company_name']} ({item['industry_vertical']}): {item['current_citizens_2025']} citizens"
+            for item in analytics['companies_by_current_citizen_count_2025'][:5]
+        ) + '.'
+    elif any(word in question_lower for word in ('health', 'condition', 'conditions')):
+        analytics['answer_hint'] = 'Fictional active health conditions by citizen count: ' + '; '.join(
+            f"{item['condition_name']}: {item['citizens']} citizens"
+            for item in analytics['health_conditions_by_citizen_count']
+        ) + '.'
     elif any(word in question_lower for word in ('populous', 'population', 'largest')):
         top_town = sorted(town_counts.items(), key=lambda item: (-item[1], item[0]))[0]
         analytics['answer_hint'] = (
