@@ -29,6 +29,7 @@ from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
 from media_generator import MediaGenerator, get_gpu_attestation_evidence
 from citizen_help import MAX_RECORDS, model_metadata, validate_question
+from dataset_query import DATASET_SCHEMA, plan_question
 
 # Configure logging
 logging.basicConfig(
@@ -1028,6 +1029,7 @@ def _get_cmk_evidence():
 
 def _citizen_help_context(question):
     """Return bounded records plus server-computed facts for aggregate questions."""
+    query_plan = plan_question(question)
     stop_words = {
         'which', 'what', 'where', 'when', 'who', 'how', 'is', 'are', 'the',
         'a', 'an', 'in', 'on', 'for', 'of', 'to', 'and', 'or', 'did', 'does',
@@ -1108,6 +1110,9 @@ def _citizen_help_context(question):
     """)
     current_company_rows = cursor.fetchall()
     analytics = {
+        'query_plan': query_plan,
+        'query_schema': DATASET_SCHEMA,
+        'retrieval_boundary': 'SQL executes inside the confidential application/database boundary; the H100 receives serialized results only.',
         'total_citizens': int(total_count),
         'total_tax_revenue_n£': round(float(total_tax), 2),
         'average_tax_paid_n£': round(float(average_tax), 2),
