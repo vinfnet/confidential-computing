@@ -8,7 +8,7 @@
   </div>
   <p class="infrastructure-note">Logical application flow, not packet-level telemetry. All records and outputs shown here are fictional.</p>
   <div class="infrastructure-canvas">
-    <svg class="infrastructure-svg" viewBox="0 0 1440 540" role="img" aria-labelledby="infrastructure-title-{{ diagram_id }} infrastructure-description-{{ diagram_id }}">
+    <svg class="infrastructure-svg" viewBox="0 0 1440 590" role="img" aria-labelledby="infrastructure-title-{{ diagram_id }} infrastructure-description-{{ diagram_id }}">
       <desc id="infrastructure-description-{{ diagram_id }}">Animated logical flow between the browser, confidential application, database, managed HSM, and confidential GPU.</desc>
       <defs>
         <marker id="arrow-infrastructure" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" /></marker>
@@ -18,11 +18,11 @@
         <path id="{{ diagram_id }}-app-db" data-path="app-db" d="M610 210 H700 V120 H790" />
         <path id="{{ diagram_id }}-app-hsm" data-path="app-hsm" d="M610 300 H700 V410 H790" />
         <path id="{{ diagram_id }}-app-gpu" data-path="app-gpu" d="M610 240 H1090" />
-        <path id="{{ diagram_id }}-gpu-browser" data-path="gpu-browser" d="M1240 300 V475 H125 V300" />
+        <path id="{{ diagram_id }}-gpu-browser" data-path="gpu-browser" d="M1240 300 V555 H125 V300" />
         <path id="{{ diagram_id }}-browser-source" data-path="browser-source" d="M250 240 H350" />
         <path id="{{ diagram_id }}-source-app" data-path="source-app" d="M610 210 H700 V120 H790" />
         <path id="{{ diagram_id }}-app-gpu-cctv" data-path="app-gpu-cctv" d="M610 240 H1090" />
-        <path id="{{ diagram_id }}-gpu-browser-cctv" data-path="gpu-browser-cctv" d="M1240 300 V475 H125 V300" />
+        <path id="{{ diagram_id }}-gpu-browser-cctv" data-path="gpu-browser-cctv" d="M1240 300 V555 H125 V300" />
       </g>
       <g class="diagram-pulses" aria-hidden="true">
         {% for path_name in ['browser-app', 'app-db', 'app-hsm', 'app-gpu', 'gpu-browser', 'browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] %}
@@ -43,7 +43,7 @@
           <rect x="790" y="360" width="260" height="100" rx="8" /><image class="azure-icon" x="810" y="382" width="56" height="56" href="{{ url_for('static', filename='azure-icons/dedicated-hsm.svg') }}" /><text x="920" y="500">Managed HSM</text><text data-label="hsm" x="920" y="518">Key evidence only</text>
         </g>
         <g class="diagram-node gpu-node" data-node="gpu" tabindex="0" role="img" aria-label="NVIDIA H100 GPU in confidential compute mode">
-          <rect x="1090" y="190" width="260" height="100" rx="8" /><image class="azure-icon" x="1108" y="212" width="48" height="48" href="{{ url_for('static', filename='azure-icons/virtual-machine.svg') }}" /><image class="pcie-icon" x="1165" y="205" width="62" height="62" href="{{ url_for('static', filename='azure-icons/pcie-card.svg') }}" /><image class="key-icon" x="1235" y="208" width="38" height="38" href="{{ url_for('static', filename='azure-icons/keys.svg') }}" /><text x="1220" y="330">NVIDIA H100 GPU</text><text data-label="gpu" x="1220" y="352">PCIe · key released · CC ON</text>
+          <rect x="1090" y="190" width="260" height="100" rx="8" /><image class="pcie-icon" x="1145" y="205" width="72" height="72" href="{{ url_for('static', filename='azure-icons/pcie-card.svg') }}" /><image class="key-icon" x="1235" y="208" width="38" height="38" href="{{ url_for('static', filename='azure-icons/keys.svg') }}" /><text x="1220" y="330">NVIDIA H100 GPU</text><text data-label="gpu" x="1220" y="352">PCIe · key released · CC ON</text>
         </g>
       </g>
     </svg>
