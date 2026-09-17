@@ -42,8 +42,8 @@
         <g class="diagram-node" data-node="hsm" tabindex="0" role="img" aria-label="Managed HSM for key wrapping and evidence">
           <rect x="730" y="275" width="240" height="90" rx="8" /><image class="azure-icon" x="750" y="292" width="56" height="56" href="{{ url_for('static', filename='azure-icons/dedicated-hsm.svg') }}" /><text x="850" y="382">Managed HSM</text><text data-label="hsm" x="850" y="398">Key evidence only</text>
         </g>
-        <g class="diagram-node" data-node="gpu" tabindex="0" role="img" aria-label="Confidential H100 GPU">
-          <rect x="950" y="145" width="240" height="90" rx="8" /><image class="azure-icon" x="970" y="162" width="56" height="56" href="{{ url_for('static', filename='azure-icons/virtual-machine.svg') }}" /><text x="1070" y="270">Confidential GPU VM</text><text data-label="gpu" x="1070" y="292">H100 / CC mode</text>
+        <g class="diagram-node gpu-node" data-node="gpu" tabindex="0" role="img" aria-label="NVIDIA H100 GPU in confidential compute mode">
+          <rect x="950" y="145" width="240" height="90" rx="8" /><image class="azure-icon" x="962" y="162" width="48" height="48" href="{{ url_for('static', filename='azure-icons/virtual-machine.svg') }}" /><path class="pcie-card" d="M1025 165h82l18 12v28l-18 12h-82z" /><path class="pcie-edge" d="M1028 217h18m4 0h18m4 0h18m4 0h18" /><text class="pcie-label" x="1065" y="192">PCIe</text><image class="key-icon" x="1118" y="166" width="36" height="36" href="{{ url_for('static', filename='azure-icons/keys.svg') }}" /><text x="1070" y="270">NVIDIA H100 GPU</text><text data-label="gpu" x="1070" y="292">PCIe · key released · CC ON</text>
         </g>
       </g>
     </svg>

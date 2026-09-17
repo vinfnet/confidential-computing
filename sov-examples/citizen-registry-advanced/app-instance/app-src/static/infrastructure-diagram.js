@@ -1,11 +1,11 @@
 (() => {
   const diagramStates = {
-    idle: { text: 'Idle', nodes: { browser: 'Ready', app: 'Waiting', database: 'Protected', hsm: 'Available', gpu: 'Verified' }, paths: [] },
-    request: { text: 'Request moving', nodes: { browser: 'Question sent', app: 'Validating', database: 'Protected', hsm: 'Available', gpu: 'Verified' }, paths: ['browser-app'] },
-    database: { text: 'Retrieving records', nodes: { browser: 'Waiting', app: 'Querying', database: 'Reading records', hsm: 'Available', gpu: 'Verified' }, paths: ['browser-app', 'app-db'] },
-    'hsm-evidence': { text: 'Checking key evidence', nodes: { browser: 'Waiting', app: 'Reading evidence', database: 'Protected', hsm: 'Key evidence', gpu: 'Verified' }, paths: ['app-hsm'] },
-    'gpu-processing': { text: 'Confidential GPU processing', nodes: { browser: 'Waiting', app: 'Bounded context', database: 'Protected', hsm: 'Available', gpu: 'Inference' }, paths: ['app-gpu'] },
-    response: { text: 'Response returning', nodes: { browser: 'Answer received', app: 'Returning answer', database: 'Protected', hsm: 'Available', gpu: 'Complete' }, paths: ['gpu-browser'] },
+    idle: { text: 'Idle', nodes: { browser: 'Ready', app: 'Waiting', database: 'Protected', hsm: 'Available', gpu: 'CC ON · attested' }, paths: [] },
+    request: { text: 'Request moving', nodes: { browser: 'Question sent', app: 'Validating', database: 'Protected', hsm: 'Available', gpu: 'CC ON · attested' }, paths: ['browser-app'] },
+    database: { text: 'Retrieving records', nodes: { browser: 'Waiting', app: 'Querying', database: 'Reading records', hsm: 'Available', gpu: 'CC ON · attested' }, paths: ['browser-app', 'app-db'] },
+    'hsm-evidence': { text: 'Checking key evidence', nodes: { browser: 'Waiting', app: 'Reading evidence', database: 'Protected', hsm: 'Key evidence', gpu: 'CC ON · attested' }, paths: ['app-hsm'] },
+    'gpu-processing': { text: 'Confidential GPU processing', nodes: { browser: 'Waiting', app: 'Bounded context', database: 'Protected', hsm: 'Available', gpu: 'H100 · inference' }, paths: ['app-gpu'] },
+    response: { text: 'Response returning', nodes: { browser: 'Answer received', app: 'Returning answer', database: 'Protected', hsm: 'Available', gpu: 'H100 · complete' }, paths: ['gpu-browser'] },
     'cctv-processing': { text: 'CCTV anonymization', nodes: { browser: 'Monitoring', app: 'Streaming HLS', database: 'Protected', hsm: 'Key evidence', gpu: 'Anonymizing faces' }, paths: ['browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] },
     unavailable: { text: 'Unavailable', nodes: { browser: 'Unavailable', app: 'Unavailable', database: 'Unknown', hsm: 'Unknown', gpu: 'Unavailable' }, paths: [] },
   };

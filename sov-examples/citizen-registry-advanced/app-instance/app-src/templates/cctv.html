@@ -331,11 +331,11 @@
             if (!ready) infrastructureDiagram.setState('unavailable', { state: status.message || 'Unavailable' });
             else if (status.state === 'processing' || status.state === 'starting' || status.state === 'running') {
                 infrastructureDiagram.setState('cctv-processing', {
-                    gpu: status.confidential_gpu?.verified ? 'Anonymizing faces' : 'GPU evidence unavailable',
+                    gpu: status.confidential_gpu?.verified ? 'H100 · anonymizing faces' : 'H100 evidence unavailable',
                     app: `${status.processing_fps || 0} fps / HLS output`,
                     browser: status.faces_detected == null ? 'Monitoring' : `${status.faces_detected} faces detected`,
                 });
-            } else if (status.state === 'completed') infrastructureDiagram.setState('cctv-processing', { state: 'Output ready', gpu: 'Anonymization complete', app: 'HLS output ready' });
+            } else if (status.state === 'completed') infrastructureDiagram.setState('cctv-processing', { state: 'Output ready', gpu: 'H100 · anonymization complete', app: 'HLS output ready' });
         }
 
         async function refreshStatus() {

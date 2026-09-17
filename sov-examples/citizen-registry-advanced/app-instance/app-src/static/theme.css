@@ -172,6 +172,12 @@ dialog,
 .diagram-node text { fill: var(--ink); font: 700 16px/1.2 "Trebuchet MS", sans-serif; text-anchor: middle; }
 .diagram-node text[data-label] { fill: var(--muted); font-size: 12px; font-weight: 400; }
 .diagram-node .node-icon { fill: none; stroke: var(--accent); stroke-width: 2; }
+.gpu-node .gpu-badge { fill: var(--accent); stroke: var(--accent-strong); stroke-width: 1; }
+.gpu-node .gpu-badge-text { fill: #fff; font-size: 13px; font-weight: 700; }
+.gpu-node .pcie-card { fill: color-mix(in srgb, var(--accent) 22%, var(--panel)); stroke: var(--accent); stroke-width: 2; }
+.gpu-node .pcie-edge { stroke: #d6a84f; stroke-width: 3; stroke-linecap: round; }
+.gpu-node .pcie-label { fill: var(--ink); font-size: 11px; font-weight: 700; }
+.gpu-node .key-icon { opacity: .95; }
 .diagram-node.is-active rect { fill: color-mix(in srgb, var(--accent) 12%, var(--panel)); stroke: var(--accent); }
 .diagram-node.is-complete rect { stroke: var(--good); }
 .diagram-node.is-unavailable rect { stroke: var(--bad); opacity: .7; }
