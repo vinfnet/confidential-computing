@@ -18,7 +18,7 @@
       this.stateElement = root.querySelector('[data-diagram-state]');
       this.nodes = Object.fromEntries([...root.querySelectorAll('[data-node]')].map(node => [node.dataset.node, node]));
       this.paths = Object.fromEntries([...root.querySelectorAll('[data-path]')].map(path => [path.dataset.path, path]));
-      this.packets = [...root.querySelectorAll('[data-packet]')];
+      this.pulses = [...root.querySelectorAll('[data-pulse-for]')];
       this.root.dataset.flow = root.dataset.flow || 'citizen-help';
       this.setState('idle');
     }
@@ -44,9 +44,8 @@
       if (state === 'response' || state === 'cctv-processing') this.nodes.gpu?.classList.add('is-complete');
       if (state === 'unavailable') Object.values(this.nodes).forEach(node => node.classList.add('is-unavailable'));
       this.paths && Object.values(this.paths).forEach(path => { if (!next.paths.includes(path.dataset.path)) path.classList.remove('is-active'); });
-      this.packets.forEach((packet, index) => {
-        packet.classList.toggle('is-moving', !this.reducedMotion && next.paths.length > 0 && index === 0);
-        packet.classList.toggle('is-moving-delayed', !this.reducedMotion && next.paths.length > 1 && index === 1);
+      this.pulses.forEach(pulse => {
+        pulse.classList.toggle('is-active', !this.reducedMotion && next.paths.includes(pulse.dataset.pulseFor));
       });
     }
   }

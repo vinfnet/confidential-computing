@@ -8,41 +8,42 @@
   </div>
   <p class="infrastructure-note">Logical application flow, not packet-level telemetry. All records and outputs shown here are fictional.</p>
   <div class="infrastructure-canvas">
-    <svg class="infrastructure-svg" viewBox="0 0 1080 300" role="img" aria-labelledby="infrastructure-title-{{ diagram_id }} infrastructure-description-{{ diagram_id }}">
+    <svg class="infrastructure-svg" viewBox="0 0 1280 400" role="img" aria-labelledby="infrastructure-title-{{ diagram_id }} infrastructure-description-{{ diagram_id }}">
       <desc id="infrastructure-description-{{ diagram_id }}">Animated logical flow between the browser, confidential application, database, managed HSM, and confidential GPU.</desc>
       <defs>
-        <marker id="arrow-infrastructure" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" /></marker>
+        <marker id="arrow-infrastructure" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 Z" /></marker>
       </defs>
       <g class="diagram-paths" aria-hidden="true">
-        <path data-path="browser-app" d="M175 145 H270" />
-        <path data-path="app-db" d="M450 110 H570" />
-        <path data-path="app-hsm" d="M360 185 V245 H700 V185" />
-        <path data-path="app-gpu" d="M450 145 H780" />
-        <path data-path="gpu-browser" d="M870 185 V270 H90 V185" />
-        <path data-path="browser-source" d="M175 145 H270" />
-        <path data-path="source-app" d="M450 110 H570" />
-        <path data-path="app-gpu-cctv" d="M660 145 H780" />
-        <path data-path="gpu-browser-cctv" d="M870 185 V270 H90 V185" />
+        <path id="{{ diagram_id }}-browser-app" data-path="browser-app" d="M220 190 H320" />
+        <path id="{{ diagram_id }}-app-db" data-path="app-db" d="M560 145 H650 V105 H730" />
+        <path id="{{ diagram_id }}-app-hsm" data-path="app-hsm" d="M560 235 H650 V305 H730" />
+        <path id="{{ diagram_id }}-app-gpu" data-path="app-gpu" d="M560 190 H950" />
+        <path id="{{ diagram_id }}-gpu-browser" data-path="gpu-browser" d="M1040 235 V365 H110 V235" />
+        <path id="{{ diagram_id }}-browser-source" data-path="browser-source" d="M220 190 H320" />
+        <path id="{{ diagram_id }}-source-app" data-path="source-app" d="M560 145 H650 V105 H730" />
+        <path id="{{ diagram_id }}-app-gpu-cctv" data-path="app-gpu-cctv" d="M560 190 H950" />
+        <path id="{{ diagram_id }}-gpu-browser-cctv" data-path="gpu-browser-cctv" d="M1040 235 V365 H110 V235" />
       </g>
-      <g class="diagram-packets" aria-hidden="true">
-        <circle data-packet="one" r="6" />
-        <circle data-packet="two" r="6" />
+      <g class="diagram-pulses" aria-hidden="true">
+        {% for path_name in ['browser-app', 'app-db', 'app-hsm', 'app-gpu', 'gpu-browser', 'browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] %}
+        <circle class="data-pulse" data-pulse-for="{{ path_name }}" r="7"><animateMotion dur="1.25s" repeatCount="indefinite" rotate="auto"><mpath href="#{{ diagram_id }}-{{ path_name }}" /></animateMotion></circle>
+        {% endfor %}
       </g>
       <g class="diagram-nodes">
         <g class="diagram-node" data-node="browser" tabindex="0" role="img" aria-label="End-user web browser">
-          <rect x="25" y="105" width="150" height="80" rx="6" /><path class="node-icon" d="M52 125h96v42H52z M52 125h96 M94 176h12 M88 185h24" /><text x="100" y="215">End-user browser</text><text data-label="browser" x="100" y="235">Waiting</text>
+          <rect x="30" y="145" width="190" height="90" rx="8" /><path class="node-icon" d="M75 162h100v52H75z M75 162h100 M118 224h14 M108 235h34" /><text x="125" y="270">End-user browser</text><text data-label="browser" x="125" y="292">Waiting</text>
         </g>
         <g class="diagram-node" data-node="app" tabindex="0" role="img" aria-label="Confidential application CVM">
-          <rect x="270" y="105" width="180" height="80" rx="6" /><path class="node-icon" d="M300 127h120v38H300z M315 140h30 M315 151h55" /><text x="360" y="215">Application CVM</text><text data-label="app" x="360" y="235">Orchestrator</text>
+          <rect x="320" y="145" width="240" height="90" rx="8" /><image class="azure-icon" x="340" y="162" width="56" height="56" href="{{ url_for('static', filename='azure-icons/virtual-machine.svg') }}" /><text x="450" y="270">Application CVM</text><text data-label="app" x="450" y="292">Orchestrator</text>
         </g>
         <g class="diagram-node" data-node="database" tabindex="0" role="img" aria-label="Confidential SQL database CVM">
-          <rect x="570" y="55" width="180" height="80" rx="6" /><path class="node-icon" d="M610 75c0-8 30-8 30 0v38c0 8-30 8-30 0z M610 75c0 8 30 8 30 0 M610 94c0 8 30 8 30 0" /><text x="660" y="165">Database CVM</text><text data-label="database" x="660" y="185">Registry storage</text>
+          <rect x="730" y="55" width="240" height="90" rx="8" /><image class="azure-icon" x="750" y="72" width="56" height="56" href="{{ url_for('static', filename='azure-icons/sql-database.svg') }}" /><text x="850" y="180">Database CVM</text><text data-label="database" x="850" y="202">Azure SQL registry</text>
         </g>
         <g class="diagram-node" data-node="hsm" tabindex="0" role="img" aria-label="Managed HSM for key wrapping and evidence">
-          <rect x="570" y="205" width="180" height="65" rx="6" /><path class="node-icon" d="M635 220a15 15 0 1 0 30 0v-4a15 15 0 1 0-30 0z M650 234v16" /><text x="660" y="287">Managed HSM</text><text data-label="hsm" x="660" y="299">Key evidence</text>
+          <rect x="730" y="275" width="240" height="90" rx="8" /><image class="azure-icon" x="750" y="292" width="56" height="56" href="{{ url_for('static', filename='azure-icons/dedicated-hsm.svg') }}" /><text x="850" y="382">Managed HSM</text><text data-label="hsm" x="850" y="398">Key evidence only</text>
         </g>
         <g class="diagram-node" data-node="gpu" tabindex="0" role="img" aria-label="Confidential H100 GPU">
-          <rect x="780" y="105" width="180" height="80" rx="6" /><path class="node-icon" d="M815 125h70v42h-70z M805 135h10 M805 147h10 M805 159h10 M885 135h10 M885 147h10 M885 159h10" /><text x="870" y="215">Confidential GPU</text><text data-label="gpu" x="870" y="235">H100 / CC mode</text>
+          <rect x="950" y="145" width="240" height="90" rx="8" /><image class="azure-icon" x="970" y="162" width="56" height="56" href="{{ url_for('static', filename='azure-icons/virtual-machine.svg') }}" /><text x="1070" y="270">Confidential GPU VM</text><text data-label="gpu" x="1070" y="292">H100 / CC mode</text>
         </g>
       </g>
     </svg>
