@@ -230,6 +230,10 @@
         .command-button { background: #1d4ed8; color: white; padding: 9px 14px; border-radius: 4px; font-weight: 600; }
         .secondary-button { background: #e2e8f0; color: #1e293b; padding: 7px 10px; border-radius: 4px; }
         .danger-button { background: #fee2e2; color: #b91c1c; padding: 7px 10px; border-radius: 4px; }
+        .health-button { background: #dbeafe; color: #075985; padding: 7px 10px; border-radius: 4px; font-size: 12px; }
+        .health-disclaimer { border-left: 4px solid #0f766e; padding: 10px 12px; background: #ecfdf5; color: #166534; font-size: 13px; }
+        .pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 18px 0; }
+        .pagination button { padding: 7px 12px; }
         dialog { width: min(720px, calc(100% - 32px)); border: 0; padding: 0; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
         dialog::backdrop { background: rgba(15, 23, 42, .6); }
         .dialog-content { padding: 24px; }
@@ -354,6 +358,7 @@
                             <th>State</th>
                             <th>Socio-economic group</th>
                             <th>Tax paid last year</th>
+                            <th>Health status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -371,6 +376,7 @@
                             <td><span class="badge region">{{ citizen.region }}</span></td>
                             <td>{{ citizen.socioeconomic_group }}</td>
                             <td class="currency">N£{{ "{:,.2f}".format(citizen.tax_paid_last_year) }}</td>
+                            <td><button class="health-button" type="button" data-citizen-id="{{ citizen.id }}">Loading</button></td>
                             <td><div class="actions">
                                 <button class="secondary-button edit-citizen" type="button" data-id="{{ citizen.id }}">Edit</button>
                                 <button class="danger-button delete-citizen" type="button" data-id="{{ citizen.id }}" data-name="{{ citizen.first_name }} {{ citizen.last_name }}">Delete</button>
@@ -379,6 +385,11 @@
                         {% endfor %}
                     </tbody>
                 </table>
+            </div>
+            <div class="pagination" aria-label="Citizen registry pages">
+                <button type="button" id="previous-page">Previous</button>
+                <span id="page-status" aria-live="polite"></span>
+                <button type="button" id="next-page">Next</button>
             </div>
             {% else %}
                 <div class="loading">
@@ -410,6 +421,20 @@
                 <div id="form-message" role="alert"></div>
                 <div class="dialog-actions"><button class="secondary-button" id="cancel-dialog" type="button">Cancel</button><button class="command-button" type="submit">Save</button></div>
             </form>
+        </dialog>
+
+        <dialog id="health-dialog">
+            <div class="dialog-content">
+                <div class="dialog-header">
+                    <h2 id="health-title">Fictional health details</h2>
+                    <button class="close-button" id="close-health" type="button" aria-label="Close">×</button>
+                </div>
+                <p class="health-disclaimer">Fictional demonstration data only. This is not medical advice or a clinical record.</p>
+                <h3>Conditions</h3>
+                <ul id="health-conditions"><li>Loading</li></ul>
+                <h3>Hospital visits</h3>
+                <ul id="health-visits"><li>Loading</li></ul>
+            </div>
         </dialog>
 
         <dialog class="credential-dialog" id="credential-dialog">
@@ -505,6 +530,59 @@
         const credentialDialog = document.getElementById('credential-dialog');
         const credentialImage = document.getElementById('credential-image');
         const form = document.getElementById('citizen-form');
+        const healthDialog = document.getElementById('health-dialog');
+        const healthConditions = document.getElementById('health-conditions');
+        const healthVisits = document.getElementById('health-visits');
+        const healthTitle = document.getElementById('health-title');
+
+        fetch('/api/citizens/health/status').then(response => response.json()).then(data => {
+            document.querySelectorAll('.health-button').forEach(button => {
+                const count = data.status?.[button.dataset.citizenId] || 0;
+                button.textContent = count === 0 ? 'No conditions' : `${count} condition${count === 1 ? '' : 's'}`;
+            });
+        }).catch(() => document.querySelectorAll('.health-button').forEach(button => { button.textContent = 'Unavailable'; }));
+
+        document.querySelectorAll('.health-button').forEach(button => button.addEventListener('click', async () => {
+            healthTitle.textContent = 'Fictional health details';
+            healthConditions.innerHTML = '<li>Loading</li>';
+            healthVisits.innerHTML = '<li>Loading</li>';
+            healthDialog.showModal();
+            const response = await fetch(`/api/citizen/${button.dataset.citizenId}/health`);
+            const data = await response.json();
+            const renderItems = (element, items, format, emptyText) => {
+                element.replaceChildren();
+                if (!items?.length) {
+                    const emptyItem = document.createElement('li');
+                    emptyItem.textContent = emptyText;
+                    element.appendChild(emptyItem);
+                    return;
+                }
+                items.forEach(item => {
+                    const listItem = document.createElement('li');
+                    listItem.textContent = format(item);
+                    element.appendChild(listItem);
+                });
+            };
+            renderItems(healthConditions, data.conditions, item => `${item.condition_name} (${item.severity}) - onset ${item.onset_date}`, 'No fictional conditions recorded');
+            renderItems(healthVisits, data.hospital_visits, item => `${item.visit_date} - ${item.visit_reason} at ${item.hospital_name}`, 'No fictional hospital visits recorded');
+        }));
+        document.getElementById('close-health').addEventListener('click', () => healthDialog.close());
+
+        const registryRows = [...document.querySelectorAll('tbody tr')];
+        const pageSize = 50;
+        let currentPage = 1;
+        const pageCount = Math.max(1, Math.ceil(registryRows.length / pageSize));
+        const renderPage = () => {
+            registryRows.forEach((row, index) => {
+                row.hidden = index < (currentPage - 1) * pageSize || index >= currentPage * pageSize;
+            });
+            document.getElementById('page-status').textContent = `Page ${currentPage} of ${pageCount}`;
+            document.getElementById('previous-page').disabled = currentPage === 1;
+            document.getElementById('next-page').disabled = currentPage === pageCount;
+        };
+        document.getElementById('previous-page')?.addEventListener('click', () => { currentPage--; renderPage(); });
+        document.getElementById('next-page')?.addEventListener('click', () => { currentPage++; renderPage(); });
+        renderPage();
         const fields = {
             national_id: document.getElementById('national-id'), first_name: document.getElementById('first-name'),
             last_name: document.getElementById('last-name'), date_of_birth: document.getElementById('date-of-birth'),

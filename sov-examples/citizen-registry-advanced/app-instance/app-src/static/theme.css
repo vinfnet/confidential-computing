@@ -108,6 +108,18 @@ dialog,
     border-color: var(--line) !important;
 }
 
+.health-button {
+    background: var(--panel-soft) !important;
+    color: var(--accent) !important;
+    border: 1px solid var(--line) !important;
+}
+
+.health-disclaimer {
+    background: var(--panel-soft) !important;
+    color: var(--good) !important;
+    border-color: var(--good) !important;
+}
+
 @media (max-width: 760px) {
     .container {
         width: 100%;

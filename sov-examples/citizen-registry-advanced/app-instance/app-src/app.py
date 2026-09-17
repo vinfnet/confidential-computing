@@ -196,16 +196,50 @@ SOCIOECONOMIC_GROUPS = [
     'A1 - Professional', 'A2 - Managerial', 'B1 - Skilled',
     'B2 - Intermediate', 'C1 - Service', 'C2 - Supported',
 ]
+HEALTH_CONDITIONS = [
+    ('Seasonal allergies', 'DEMO-ALLERGY', 'Mild'),
+    ('Mild hypertension', 'DEMO-HTN', 'Moderate'),
+    ('Type 2 diabetes, controlled', 'DEMO-T2D', 'Moderate'),
+    ('Lower back pain', 'DEMO-BACK', 'Mild'),
+    ('Migraine', 'DEMO-MIGRAINE', 'Moderate'),
+    ('Mild asthma', 'DEMO-ASTHMA', 'Moderate'),
+    ('Eczema', 'DEMO-ECZEMA', 'Mild'),
+    ('Iron deficiency', 'DEMO-IRON', 'Mild'),
+    ('Repetitive strain injury', 'DEMO-RSI', 'Mild'),
+    ('High cholesterol, managed', 'DEMO-CHOLESTEROL', 'Moderate'),
+]
+HEALTH_HOSPITALS = [
+    'Alderwick Community Hospital', 'Kingshaven General Hospital',
+    'Riverside Health Centre', 'Lakeside District Hospital',
+    'Hillview Medical Pavilion',
+]
+HEALTH_VISIT_REASONS = [
+    'Annual wellness check', 'Routine laboratory work',
+    'Physiotherapy review', 'Vaccination appointment',
+    'Dietary consultation', 'Follow-up appointment',
+]
+
+
+def _expanded_personas():
+    """Build 1,000 deterministic persona/name combinations from curated pools."""
+    personas = []
+    for portrait_profile, group in PERSONA_GROUPS:
+        given_names = [(first_name, sex) for first_name, _, sex in group]
+        surnames = [last_name for _, last_name, _ in group]
+        surname_variants = surnames + [
+            f'{surnames[index]}-{surnames[(index + 1) % len(surnames)]}'
+            for index in range(len(surnames))
+        ]
+        for first_name, sex in given_names:
+            for last_name in surname_variants:
+                personas.append((first_name, last_name, sex, portrait_profile))
+    return personas
 
 
 def _synthetic_citizens():
-    """Build 100 deterministic, entirely fictional Republic of Norland records."""
+    """Build 1,000 deterministic, entirely fictional Republic of Norland records."""
     citizens = []
-    personas = [
-        (first_name, last_name, sex, portrait_profile)
-        for portrait_profile, group in PERSONA_GROUPS
-        for first_name, last_name, sex in group
-    ]
+    personas = _expanded_personas()
     for index, (first_name, last_name, sex, _) in enumerate(personas, start=1):
         state, town, street, postal_area = LOCATIONS[(index - 1) % len(LOCATIONS)]
         year = 1948 + ((index * 7) % 58)
@@ -228,14 +262,38 @@ def _synthetic_citizens():
 
 
 def _portrait_profile(national_id):
-    for index, (portrait_profile, group) in enumerate(PERSONA_GROUPS, start=1):
-        for offset, _ in enumerate(group):
-            citizen_index = ((index - 1) * 5) + offset + 1
-            year = 1948 + ((citizen_index * 7) % 58)
-            expected_id = f'NLD-{year % 100:02d}{chr(65 + citizen_index % 26)}-{citizen_index:04d}X'
-            if national_id == expected_id:
-                return portrait_profile
+    for citizen_index, (_, _, _, portrait_profile) in enumerate(_expanded_personas(), start=1):
+        year = 1948 + ((citizen_index * 7) % 58)
+        expected_id = f'NLD-{year % 100:02d}{chr(65 + citizen_index % 26)}-{citizen_index:04d}X'
+        if national_id == expected_id:
+            return portrait_profile
     return None
+
+
+def _synthetic_health_records(citizens):
+    """Build deterministic, fictional, non-critical health records."""
+    conditions = []
+    visits = []
+    for citizen_id, citizen in enumerate(citizens, start=1):
+        if citizen_id % 2 == 0:
+            condition = HEALTH_CONDITIONS[citizen_id % len(HEALTH_CONDITIONS)]
+            conditions.append({
+                'citizen_id': citizen_id,
+                'condition_name': condition[0],
+                'condition_code': condition[1],
+                'onset_date': f'{2018 + citizen_id % 7:04d}-{1 + citizen_id % 9:02d}-15',
+                'is_active': True,
+                'severity': condition[2],
+            })
+        if citizen_id % 3 == 0:
+            visits.append({
+                'citizen_id': citizen_id,
+                'visit_date': f'2025-{1 + citizen_id % 9:02d}-{1 + citizen_id % 20:02d}',
+                'visit_reason': HEALTH_VISIT_REASONS[citizen_id % len(HEALTH_VISIT_REASONS)],
+                'hospital_name': HEALTH_HOSPITALS[citizen_id % len(HEALTH_HOSPITALS)],
+                'discharge_date': f'2025-{1 + citizen_id % 9:02d}-{2 + citizen_id % 20:02d}',
+            })
+    return conditions, visits
 
 # ============================================================================
 # Database Connection Management
@@ -289,7 +347,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute("""
             DECLARE @lock_result INT;
             EXEC @lock_result = sys.sp_getapplock
-                @Resource = N'citizen-registry-seed-v101',
+                @Resource = N'citizen-registry-seed-v103',
                 @LockMode = N'Exclusive',
                 @LockOwner = N'Session',
                 @LockTimeout = 30000;
@@ -331,11 +389,41 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                 ALTER TABLE dbo.citizen_registry ADD tax_paid_last_year DECIMAL(12,2) NULL;
             IF OBJECT_ID(N'dbo.demo_metadata', N'U') IS NULL
                 CREATE TABLE dbo.demo_metadata (seed_version INT NOT NULL);
+            IF OBJECT_ID(N'dbo.citizen_health_records', N'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.citizen_health_records (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    citizen_id INT NOT NULL,
+                    condition_name NVARCHAR(120) NOT NULL,
+                    condition_code NVARCHAR(40) NOT NULL,
+                    onset_date DATE NOT NULL,
+                    is_active BIT NOT NULL,
+                    severity NVARCHAR(20) NOT NULL,
+                    created_date DATETIME DEFAULT GETUTCDATE(),
+                    modified_date DATETIME DEFAULT GETUTCDATE(),
+                    CONSTRAINT FK_health_citizen FOREIGN KEY (citizen_id)
+                        REFERENCES dbo.citizen_registry(id) ON DELETE CASCADE
+                )
+            END
+            IF OBJECT_ID(N'dbo.citizen_hospital_visits', N'U') IS NULL
+            BEGIN
+                CREATE TABLE dbo.citizen_hospital_visits (
+                    id INT IDENTITY(1,1) PRIMARY KEY,
+                    citizen_id INT NOT NULL,
+                    visit_date DATE NOT NULL,
+                    visit_reason NVARCHAR(120) NOT NULL,
+                    hospital_name NVARCHAR(120) NOT NULL,
+                    discharge_date DATE NULL,
+                    created_date DATETIME DEFAULT GETUTCDATE(),
+                    CONSTRAINT FK_visit_citizen FOREIGN KEY (citizen_id)
+                        REFERENCES dbo.citizen_registry(id) ON DELETE CASCADE
+                )
+            END
         """)
 
-        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 101")
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 103")
         if cur.fetchone()[0] == 0:
-            cur.execute("DELETE FROM dbo.citizen_registry")
+            cur.execute("DELETE FROM dbo.citizen_health_records; DELETE FROM dbo.citizen_hospital_visits; DELETE FROM dbo.citizen_registry; DBCC CHECKIDENT ('dbo.citizen_registry', RESEED, 0)")
             insert_sql = """
                 INSERT INTO dbo.citizen_registry
                 (national_id, first_name, last_name, date_of_birth, sex, region,
@@ -343,7 +431,8 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                  tax_paid_last_year)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
-            for citizen in _synthetic_citizens():
+            generated_citizens = _synthetic_citizens()
+            for citizen in generated_citizens:
                 cur.execute(insert_sql, (
                     citizen['national_id'], citizen['first_name'], citizen['last_name'],
                     citizen['date_of_birth'], citizen['sex'], citizen['region'],
@@ -351,8 +440,26 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                     citizen['postal_code'], citizen['socioeconomic_group'],
                     citizen['tax_paid_last_year'],
                 ))
+            conditions, visits = _synthetic_health_records(generated_citizens)
+            cur.fast_executemany = True
+            cur.executemany("""
+                INSERT INTO dbo.citizen_health_records
+                (citizen_id, condition_name, condition_code, onset_date, is_active, severity)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, [(
+                item['citizen_id'], item['condition_name'], item['condition_code'],
+                item['onset_date'], item['is_active'], item['severity'],
+            ) for item in conditions])
+            cur.executemany("""
+                INSERT INTO dbo.citizen_hospital_visits
+                (citizen_id, visit_date, visit_reason, hospital_name, discharge_date)
+                VALUES (?, ?, ?, ?, ?)
+            """, [(
+                item['citizen_id'], item['visit_date'], item['visit_reason'],
+                item['hospital_name'], item['discharge_date'],
+            ) for item in visits])
             cur.execute("DELETE FROM dbo.demo_metadata")
-            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (101)")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (103)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
@@ -417,8 +524,36 @@ def _get_db_conn():
         if 'tax_paid_last_year' not in existing_columns:
             conn.execute('ALTER TABLE citizen_registry ADD COLUMN tax_paid_last_year NUMERIC')
         conn.execute('CREATE TABLE IF NOT EXISTS demo_metadata (seed_version INTEGER NOT NULL)')
-        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 101').fetchone()[0] == 0:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS citizen_health_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                citizen_id INTEGER NOT NULL,
+                condition_name TEXT NOT NULL,
+                condition_code TEXT NOT NULL,
+                onset_date TEXT NOT NULL,
+                is_active INTEGER NOT NULL,
+                severity TEXT NOT NULL,
+                created_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                modified_date TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS citizen_hospital_visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                citizen_id INTEGER NOT NULL,
+                visit_date TEXT NOT NULL,
+                visit_reason TEXT NOT NULL,
+                hospital_name TEXT NOT NULL,
+                discharge_date TEXT,
+                created_date TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 103').fetchone()[0] == 0:
+            conn.execute('DELETE FROM citizen_health_records')
+            conn.execute('DELETE FROM citizen_hospital_visits')
             conn.execute('DELETE FROM citizen_registry')
+            conn.execute("DELETE FROM sqlite_sequence WHERE name = 'citizen_registry'")
+            generated_citizens = _synthetic_citizens()
             conn.executemany(
                 """
                 INSERT INTO citizen_registry
@@ -429,11 +564,34 @@ def _get_db_conn():
                 """,
                 [
                     tuple(float(value) if isinstance(value, Decimal) else value for value in citizen.values())
-                    for citizen in _synthetic_citizens()
+                    for citizen in generated_citizens
                 ],
             )
+            conditions, visits = _synthetic_health_records(generated_citizens)
+            conn.executemany(
+                """
+                INSERT INTO citizen_health_records
+                (citizen_id, condition_name, condition_code, onset_date, is_active, severity)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [(
+                    item['citizen_id'], item['condition_name'], item['condition_code'],
+                    item['onset_date'], int(item['is_active']), item['severity'],
+                ) for item in conditions],
+            )
+            conn.executemany(
+                """
+                INSERT INTO citizen_hospital_visits
+                (citizen_id, visit_date, visit_reason, hospital_name, discharge_date)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [(
+                    item['citizen_id'], item['visit_date'], item['visit_reason'],
+                    item['hospital_name'], item['discharge_date'],
+                ) for item in visits],
+            )
             conn.execute('DELETE FROM demo_metadata')
-            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (101)')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (103)')
             conn.commit()
         return conn
     
@@ -981,6 +1139,112 @@ def get_citizens():
     except Exception as e:
         logger.error(f"Error retrieving citizens: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/citizens/health/status', methods=['GET'])
+def health_status():
+    """Return compact health counts for all fictional citizens."""
+    try:
+        conn = _get_db_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT citizen_id, COUNT(*)
+            FROM citizen_health_records
+            WHERE is_active = 1
+            GROUP BY citizen_id
+        """)
+        status = {str(row[0]): int(row[1]) for row in cursor.fetchall()}
+        conn.close()
+        return jsonify({'status': status})
+    except Exception as error:
+        logger.error('Health status retrieval failed: %s', type(error).__name__)
+        return jsonify({'error': 'Health status is unavailable.'}), 503
+
+
+@app.route('/api/citizen/<int:citizen_id>/health', methods=['GET'])
+def citizen_health(citizen_id):
+    """Return read-only fictional health details for one citizen."""
+    try:
+        conn = _get_db_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT condition_name, condition_code, onset_date, is_active, severity
+            FROM citizen_health_records
+            WHERE citizen_id = ?
+            ORDER BY onset_date DESC
+        """, (citizen_id,))
+        conditions = [{
+            'condition_name': row[0], 'condition_code': row[1],
+            'onset_date': str(row[2]), 'is_active': bool(row[3]), 'severity': row[4],
+        } for row in cursor.fetchall()]
+        cursor.execute("""
+            SELECT visit_date, visit_reason, hospital_name, discharge_date
+            FROM citizen_hospital_visits
+            WHERE citizen_id = ?
+            ORDER BY visit_date DESC
+        """, (citizen_id,))
+        visits = [{
+            'visit_date': str(row[0]), 'visit_reason': row[1],
+            'hospital_name': row[2],
+            'discharge_date': str(row[3]) if row[3] else None,
+        } for row in cursor.fetchall()]
+        conn.close()
+        return jsonify({
+            'citizen_id': citizen_id,
+            'fictional_only': True,
+            'medical_advice': False,
+            'conditions': conditions,
+            'hospital_visits': visits,
+        })
+    except Exception as error:
+        logger.error('Citizen health retrieval failed: %s', type(error).__name__)
+        return jsonify({'error': 'Health details are unavailable.'}), 503
+
+
+@app.route('/api/citizens/health/conditions', methods=['GET'])
+def health_conditions():
+    """Return condition counts for fictional registry analytics."""
+    try:
+        conn = _get_db_conn()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT condition_name, condition_code, COUNT(*)
+            FROM citizen_health_records
+            WHERE is_active = 1
+            GROUP BY condition_name, condition_code
+            ORDER BY condition_name
+        """)
+        conditions = [
+            {'condition_name': row[0], 'condition_code': row[1], 'citizens': int(row[2])}
+            for row in cursor.fetchall()
+        ]
+        conn.close()
+        return jsonify({'fictional_only': True, 'conditions': conditions})
+    except Exception as error:
+        logger.error('Condition summary retrieval failed: %s', type(error).__name__)
+        return jsonify({'error': 'Condition summary is unavailable.'}), 503
+
+
+@app.route('/api/citizens/health/summary', methods=['GET'])
+def health_summary():
+    """Return aggregate fictional health-record counts."""
+    try:
+        conn = _get_db_conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(DISTINCT citizen_id) FROM citizen_health_records WHERE is_active = 1")
+        citizens_with_conditions = int(cursor.fetchone()[0])
+        cursor.execute("SELECT COUNT(*) FROM citizen_hospital_visits")
+        hospital_visits = int(cursor.fetchone()[0])
+        conn.close()
+        return jsonify({
+            'fictional_only': True,
+            'medical_advice': False,
+            'citizens_with_active_conditions': citizens_with_conditions,
+            'hospital_visits': hospital_visits,
+        })
+    except Exception as error:
+        logger.error('Health summary retrieval failed: %s', type(error).__name__)
+        return jsonify({'error': 'Health summary is unavailable.'}), 503
 
 
 @app.route('/api/citizen/<int:citizen_id>', methods=['GET'])

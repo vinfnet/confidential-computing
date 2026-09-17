@@ -161,7 +161,7 @@ Stage 2 deploys two Confidential VMs on separate, non-overlapping VNets: the NCC
 application CVM on `10.{NetworkSecondOctet}.3.4` in West Europe and the SQL Server CVM on
 `10.{SqlNetworkSecondOctet}.4.5` in North Europe. The defaults are `10.20.3.4` and `10.21.4.5`.
 Bidirectional peering carries private TLS traffic on TCP 1433. SQL Server is initialized with
-`citizendb`, the `registryadmin` login, and 100 fictional demo citizen records.
+`citizendb`, the `registryadmin` login, and 1,000 fictional demo citizen records with read-only fictional health fixtures.
 
 CRUD means **create, read, update, and delete**, the four basic operations used to manage stored
 records. It is relevant here because the sample demonstrates more than a read-only connection:
@@ -183,7 +183,7 @@ The West Europe NCC40 deployment and private DVR workflow have been validated en
 | Disk encryption | `ConfidentialVmEncryptedWithCustomerKey` via `yourprefix-cvm-os-des` |
 | Secure key release | Azure CVM Orchestrator has release-only access to `yourprefix-cvm-os-key` |
 | Application | Healthy; mTLS returns `401` without a certificate and `200` with one |
-| Database | Connected; 100 fictional records with CRUD operations |
+| Database | Connected; 1,000 fictional records with CRUD operations and read-only fictional health fixtures |
 | CPU attestation | Current-boot SEV-SNP/vTPM verification succeeded |
 | Attestation endpoint | Provider metadata reachable; separate from local CPU/GPU evidence |
 | Confidential GPU | H100 production CC mode plus successful nvtrust GPU attestation |
@@ -301,16 +301,18 @@ Validation also confirmed:
 - Managed HSM remains `publicNetworkAccess: Disabled` with no public IP rules;
 - the app identity has only `Managed HSM Crypto Auditor` on the single CMK;
 - the browser CMK foldout displays one indented JSON block with no horizontal overflow;
-- the citizen table displays all 100 fictional records and government-style fields.
+- the citizen table displays all 1,000 fictional records and government-style fields; client-side pagination keeps the view responsive;
 
 ## Demo Experience
 
 ### Citizen Registry Data and CRUD UI
 
-The demo generates 100 deterministic, entirely fictional Republic of Norland records. Each
+The demo generates 1,000 deterministic, entirely fictional Republic of Norland records. Each
 record includes an alphanumeric national ID, date of birth, street address, town, state,
 socio-economic group, and tax paid in the prior year. Names, locations, identifiers, and
-financial values are synthetic and must not be treated as real personal data.
+financial values are synthetic and must not be treated as real personal data. The registry
+also exposes read-only fictional health conditions and hospital visits, clearly marked as
+non-medical demo data and excluded from Citizen Help LLM context.
 
 ![Republic of Norland Citizen Registry showing confidential-computing status and fictional citizen records](docs/images/confidential-citizen-registry.png)
 
@@ -327,8 +329,11 @@ The web table supports:
 - horizontal scrolling for the expanded government-record columns on narrow screens;
 - startup progress for GPU-generated portraits and click-to-expand fictional credentials.
 
-The deterministic seed contains 100 unique fictional names across 20 explicitly curated synthetic
-heritage profiles, with 40 `F`, 40 `M`, and 20 `X` gender markers. Portrait prompts use each
+The deterministic seed contains 1,000 unique fictional names across 20 explicitly curated synthetic
+heritage profiles, with balanced `F`, `M`, and `X` gender markers. Health records are generated
+from deterministic fictional conditions, hospitals, visit reasons, and dates; they are read-only
+through `/api/citizen/<id>/health`, `/api/citizens/health/status`, and
+`/api/citizens/health/summary`. Portrait prompts use each
 record's explicit synthetic profile, age, and gender presentation; they do not infer those traits
 from a user-entered name.
 
