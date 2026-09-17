@@ -16,11 +16,15 @@
       this.state = 'idle';
       this.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       this.stateElement = root.querySelector('[data-diagram-state]');
+      this.replayButton = root.querySelector('[data-diagram-replay]');
       this.nodes = Object.fromEntries([...root.querySelectorAll('[data-node]')].map(node => [node.dataset.node, node]));
       this.paths = Object.fromEntries([...root.querySelectorAll('[data-path]')].map(path => [path.dataset.path, path]));
       this.pulses = [...root.querySelectorAll('[data-pulse-for]')];
       this.root.dataset.flow = root.dataset.flow || 'citizen-help';
+      this.lastPaths = [];
+      this.replayTimer = null;
       this.setState('idle');
+      this.replayButton?.addEventListener('click', () => this.replay());
     }
 
     setState(state, labels = {}) {
@@ -28,6 +32,7 @@
       this.state = state;
       this.root.dataset.state = state;
       this.stateElement.textContent = labels.state || next.text;
+      this.lastPaths = [...next.paths];
       Object.entries(next.nodes).forEach(([name, text]) => {
         const node = this.nodes[name];
         if (node) node.querySelector(`[data-label="${name}"]`).textContent = labels[name] || text;
@@ -47,6 +52,32 @@
       this.pulses.forEach(pulse => {
         pulse.classList.toggle('is-active', !this.reducedMotion && next.paths.includes(pulse.dataset.pulseFor));
       });
+    }
+
+    replay() {
+      if (this.reducedMotion || !this.lastPaths.length || this.replayTimer) return;
+      this.root.dataset.replay = 'true';
+      this.replayButton.disabled = true;
+      this.replayButton.textContent = 'Replaying...';
+      const motions = this.pulses
+        .filter(pulse => this.lastPaths.includes(pulse.dataset.pulseFor))
+        .map(pulse => pulse.querySelector('animateMotion'));
+      motions.forEach(motion => {
+        motion.setAttribute('dur', '6.25s');
+        motion.setAttribute('repeatCount', '1');
+        motion.beginElement();
+      });
+      this.replayTimer = window.setTimeout(() => {
+        motions.forEach(motion => {
+          motion.setAttribute('dur', '1.25s');
+          motion.setAttribute('repeatCount', 'indefinite');
+          motion.beginElement();
+        });
+        delete this.root.dataset.replay;
+        this.replayButton.disabled = false;
+        this.replayButton.textContent = 'Replay path';
+        this.replayTimer = null;
+      }, 6250);
     }
   }
 

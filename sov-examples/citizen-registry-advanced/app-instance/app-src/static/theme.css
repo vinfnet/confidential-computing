@@ -146,6 +146,10 @@ dialog,
 }
 
 .infrastructure-heading h2 { margin: 0; }
+.infrastructure-controls { display: flex; align-items: center; gap: 10px; }
+.infrastructure-replay { padding: 7px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); cursor: pointer; font: 700 12px/1.2 "Trebuchet MS", sans-serif; }
+.infrastructure-replay:hover:not(:disabled), .infrastructure-replay:focus-visible { border-color: var(--accent); color: var(--accent); }
+.infrastructure-replay:disabled { opacity: .65; cursor: wait; }
 .infrastructure-state {
     padding: 6px 10px;
     border: 1px solid var(--line);
@@ -169,6 +173,7 @@ dialog,
 }
 .diagram-paths path[data-path="app-hsm"] { stroke-dasharray: 6 7; }
 .diagram-paths path.is-active { stroke: var(--accent); stroke-width: 6; stroke-dasharray: 18 12; animation: path-flow 1s linear infinite; }
+.infrastructure-panel[data-replay="true"] .diagram-paths path.is-active { animation-duration: 5s; }
 .diagram-node rect { fill: var(--panel); stroke: var(--line); stroke-width: 2; transition: fill .25s ease, stroke .25s ease; }
 .diagram-node text { fill: var(--ink); font: 700 16px/1.2 "Trebuchet MS", sans-serif; text-anchor: middle; }
 .diagram-node text[data-label] { fill: var(--muted); font-size: 12px; font-weight: 400; }
