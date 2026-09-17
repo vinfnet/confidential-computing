@@ -158,6 +158,7 @@ dialog,
 .infrastructure-canvas { overflow-x: auto; }
 .infrastructure-svg { display: block; width: 100%; min-width: 720px; height: auto; }
 .azure-icon { shape-rendering: geometricPrecision; }
+.pcie-icon { shape-rendering: geometricPrecision; }
 .diagram-paths path {
     fill: none;
     stroke: var(--line);

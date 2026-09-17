@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 96" role="img" aria-label="Generic PCIe accelerator card">
+  <path fill="#0078d4" d="M14 12h76l24 18v40l-24 14H14z"/>
+  <path fill="#50e6ff" d="M24 24h54v48H24z"/>
+  <path fill="#0078d4" d="M32 34h38v28H32z"/>
+  <path fill="#ffca28" d="M14 75h10v9H14zm16 0h10v9H30zm16 0h10v9H46zm16 0h10v9H62zm16 0h10v9H78z"/>
+  <circle cx="88" cy="36" r="5" fill="#fff" opacity=".9"/><circle cx="88" cy="54" r="5" fill="#fff" opacity=".9"/>
+</svg>
