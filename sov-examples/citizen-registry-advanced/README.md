@@ -29,10 +29,11 @@ Your question
 This means questions about the fictional citizens, health, companies, employment, salaries, taxes,
 history, and generated Norland policies can be answered from the data held in SQL without placing
 the entire database into the model prompt. The application query planner records the relevant
-tables, columns, joins, policy topics, and confidential boundary for each request. The H100 has no
-direct SQL connection, shell, network, tools, or record-mutation path. The query planner foundation
-is deployed; domain-specific aggregate retrieval is currently expanded incrementally as new SQL
-tables and generated policies are added.
+tables, columns, joins, policy topics, and confidential boundary for each request. For supported
+structured plans, the application validates the requested tables, columns, joins, filters,
+operations, and row limit, then compiles parameterized read-only SQL inside the CVM. Raw SQL from
+the model is never executed. The H100 has no direct SQL connection, shell, network, tools, or
+record-mutation path; it receives only bounded serialized results and explains them.
 
 ---
 

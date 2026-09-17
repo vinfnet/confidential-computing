@@ -67,3 +67,69 @@ def plan_question(question: str) -> dict[str, Any]:
         'policy_topics': policies,
         'boundary': 'Application CVM executes allowlisted SQL; H100 receives results only.',
     }
+
+
+def _json_value(value: Any) -> Any:
+    if hasattr(value, 'as_tuple'):
+        return float(value)
+    if hasattr(value, 'isoformat'):
+        return value.isoformat()
+    return value
+
+
+def execute_query_plan(cursor: Any, question: str) -> dict[str, Any]:
+    """Execute a fixed read-only query shape selected from the user question."""
+    text = question.lower()
+
+    if re.search(r'health|condition', text) and re.search(r'how many|count|each', text):
+        cursor.execute('''
+            SELECT condition_name, condition_code, COUNT(DISTINCT citizen_id)
+            FROM citizen_health_records
+            WHERE is_active = 1
+            GROUP BY condition_name, condition_code
+            ORDER BY condition_name
+        ''')
+        columns = ['condition_name', 'condition_code', 'citizens']
+        operation = 'count citizens by active health condition'
+        tables = ['citizen_health_records']
+    elif re.search(r'company|companies|employer|industry', text) and re.search(r'most|top|how many|count', text):
+        cursor.execute('''
+            SELECT c.company_name, c.industry_vertical, COUNT(DISTINCT h.citizen_id)
+            FROM norland_companies c
+            LEFT JOIN citizen_employment_history h
+              ON h.company_code = c.company_code AND h.end_year = 2025
+            GROUP BY c.company_name, c.industry_vertical
+            ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
+        ''')
+        columns = ['company_name', 'industry_vertical', 'current_citizens_2025']
+        operation = 'rank current 2025 employers by citizen count'
+        tables = ['norland_companies', 'citizen_employment_history']
+    elif re.search(r'average|mean|total|sum', text) and re.search(r'salary|tax|income|revenue', text):
+        cursor.execute('''
+            SELECT tax_year, AVG(gross_salary_n), AVG(tax_paid_n), SUM(tax_paid_n)
+            FROM citizen_tax_history
+            GROUP BY tax_year ORDER BY tax_year
+        ''')
+        columns = ['tax_year', 'average_salary_n', 'average_tax_paid_n', 'total_tax_paid_n']
+        operation = 'aggregate annual salary and tax history'
+        tables = ['citizen_tax_history']
+    else:
+        return {
+            'operation': 'bounded citizen record retrieval',
+            'tables': ['citizen_registry'],
+            'columns': DATASET_SCHEMA['citizen_registry']['columns'],
+            'rows': [],
+            'read_only': True,
+        }
+
+    rows = cursor.fetchall()
+    return {
+        'operation': operation,
+        'tables': tables,
+        'columns': columns,
+        'rows': [
+            dict(zip(columns, (_json_value(value) for value in row)))
+            for row in rows
+        ],
+        'read_only': True,
+    }

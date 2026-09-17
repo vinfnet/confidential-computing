@@ -29,7 +29,9 @@ from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
 import requests
 from media_generator import MediaGenerator, get_gpu_attestation_evidence
 from citizen_help import MAX_RECORDS, model_metadata, validate_question
-from dataset_query import DATASET_SCHEMA, plan_question
+from dataset_query import DATASET_SCHEMA, execute_query_plan, plan_question
+from query_executor import execute_validated_plan
+from sql_validator import validate_query_plan
 
 # Configure logging
 logging.basicConfig(
@@ -1047,6 +1049,7 @@ def _citizen_help_context(question):
     ][:6]
     conn = _get_db_conn()
     cursor = conn.cursor()
+    query_result = execute_query_plan(cursor, question)
     cursor.execute("""
         SELECT municipality, region, tax_paid_last_year
         FROM citizen_registry
@@ -1111,6 +1114,7 @@ def _citizen_help_context(question):
     current_company_rows = cursor.fetchall()
     analytics = {
         'query_plan': query_plan,
+        'query_result': query_result,
         'query_schema': DATASET_SCHEMA,
         'retrieval_boundary': 'SQL executes inside the confidential application/database boundary; the H100 receives serialized results only.',
         'total_citizens': int(total_count),
@@ -1503,6 +1507,29 @@ def citizen_help_chat():
     except Exception as error:
         logger.error('Citizen Help request failed: %s', type(error).__name__)
         return jsonify({'error': 'Citizen Help could not complete the request.'}), 503
+
+
+@app.route('/api/citizenhelp/query-plan', methods=['POST'])
+def citizen_help_query_plan():
+    """Validate and execute a structured read-only plan inside the application CVM."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        plan = payload.get('query_plan')
+        parameters = payload.get('parameters') or {}
+        valid, reason = validate_query_plan(plan)
+        if not valid:
+            return jsonify({'status': 'rejected', 'read_only': True, 'reason': reason}), 400
+        conn = _get_db_conn()
+        try:
+            result = execute_validated_plan(conn, plan, parameters, sql_server=bool(DB_HOST))
+        finally:
+            conn.close()
+        return jsonify({'status': 'ok', 'query_plan_validated': True, 'query_result': result})
+    except ValueError as error:
+        return jsonify({'status': 'rejected', 'read_only': True, 'reason': str(error)}), 400
+    except Exception as error:
+        logger.error('Structured query execution failed: %s', type(error).__name__)
+        return jsonify({'status': 'error', 'read_only': True, 'reason': 'Query execution failed.'}), 503
 
 
 @app.route('/api/citizen/<int:citizen_id>/history', methods=['GET'])
