@@ -21,6 +21,7 @@ import time
 import pyodbc
 import sqlite3
 import logging
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -638,8 +639,8 @@ def _get_cmk_evidence():
 # Flask Routes
 # ============================================================================
 
-def _citizen_help_records(question):
-    """Return a bounded, parameterized context slice for the local LLM."""
+def _citizen_help_context(question):
+    """Return bounded records plus server-computed facts for aggregate questions."""
     stop_words = {
         'which', 'what', 'where', 'when', 'who', 'how', 'is', 'are', 'the',
         'a', 'an', 'in', 'on', 'for', 'of', 'to', 'and', 'registered',
@@ -650,8 +651,45 @@ def _citizen_help_records(question):
         term for term in re.findall(r'[A-Za-z0-9-]{2,}', question.lower())
         if term not in stop_words
     ][:6]
+    conn = _get_db_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT municipality, region, tax_paid_last_year
+        FROM citizen_registry
+    """)
+    summary_rows = cursor.fetchall()
+    total_tax = sum((Decimal(row[2] or 0) for row in summary_rows), Decimal('0'))
+    total_count = len(summary_rows)
+    average_tax = total_tax / total_count if total_count else Decimal('0')
+    town_counts = Counter(row[0] for row in summary_rows)
+    region_counts = Counter(row[1] for row in summary_rows)
+    analytics = {
+        'total_citizens': int(total_count),
+        'total_tax_revenue_n£': round(float(total_tax), 2),
+        'average_tax_paid_n£': round(float(average_tax), 2),
+        'most_populous_towns': [
+            {'town': town, 'citizens': count}
+            for town, count in sorted(town_counts.items(), key=lambda item: (-item[1], item[0]))[:5]
+        ],
+        'citizens_by_region': [
+            {'region': region, 'citizens': count}
+            for region, count in sorted(region_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+    }
+    question_lower = question.lower()
+    if 'tax' in question_lower and any(word in question_lower for word in ('total', 'revenue', 'sum')):
+        analytics['answer_hint'] = (
+            f"Total tax revenue across all {total_count} fictional citizens is "
+            f"N£{float(total_tax):,.2f}."
+        )
+    elif any(word in question_lower for word in ('populous', 'population', 'largest')):
+        top_town = sorted(town_counts.items(), key=lambda item: (-item[1], item[0]))[0]
+        analytics['answer_hint'] = (
+            f"The most populous town is {top_town[0]}, with {top_town[1]} fictional citizens."
+        )
     if not terms:
-        return []
+        conn.close()
+        return [], analytics
     clauses = []
     values = []
     for term in terms:
@@ -662,8 +700,6 @@ def _citizen_help_records(question):
             'OR LOWER(municipality) LIKE ?)'
         )
         values.extend([like, like, like, like, like])
-    conn = _get_db_conn()
-    cursor = conn.cursor()
     cursor.execute(f"""
         SELECT id, national_id, first_name, last_name, date_of_birth, sex,
                region, municipality, address_line, postal_code,
@@ -674,7 +710,7 @@ def _citizen_help_records(question):
     """, values)
     rows = cursor.fetchall()[:MAX_RECORDS]
     conn.close()
-    return [
+    records = [
         {
             'id': row[0],
             'national_id': row[1],
@@ -691,6 +727,7 @@ def _citizen_help_records(question):
         }
         for row in rows
     ]
+    return records, analytics
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -786,10 +823,10 @@ def citizen_help_chat():
     try:
         payload = request.get_json(silent=True) or {}
         question = validate_question(payload.get('question'))
-        records = _citizen_help_records(question)
+        records, analytics = _citizen_help_context(question)
         response = requests.post(
             'http://127.0.0.1:8010/generate',
-            json={'question': question, 'records': records},
+            json={'question': question, 'records': records, 'analytics': analytics},
             timeout=90,
         )
         response.raise_for_status()

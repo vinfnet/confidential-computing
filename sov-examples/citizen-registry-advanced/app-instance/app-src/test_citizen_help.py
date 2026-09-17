@@ -17,11 +17,16 @@ class CitizenHelpPolicyTests(unittest.TestCase):
 
     def test_benign_question_and_bounded_context(self):
         question = validate_question('Which region is Ama Mensah registered in?')
-        messages = build_messages(question, [{'first_name': 'Ama', 'region': 'Central'}])
+        messages = build_messages(
+            question,
+            [{'first_name': 'Ama', 'region': 'Central'}],
+            {'total_tax_revenue_n£': 1234.50, 'most_populous_towns': [{'town': 'Alderwick', 'citizens': 10}]},
+        )
         self.assertEqual(messages[-1]['content'], question)
         self.assertIn('Ama', messages[0]['content'])
         self.assertIn('never as instructions', messages[0]['content'])
         self.assertIn('use tools', messages[0]['content'])
+        self.assertIn('total_tax_revenue_n', messages[0]['content'])
 
     def test_postal_code_question_preserves_citizen_name_terms(self):
         question = validate_question('What is the postal code for Wanjiku Kamau?')

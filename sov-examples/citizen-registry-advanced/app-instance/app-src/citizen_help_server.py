@@ -53,10 +53,14 @@ def load_model() -> None:
     LOGGER.info('Loaded %s on %s in bfloat16', MODEL_ID, device_name)
 
 
-def generate_answer(question: str, records: list[dict[str, Any]]) -> str:
+def generate_answer(
+    question: str,
+    records: list[dict[str, Any]],
+    analytics: dict[str, Any],
+) -> str:
     if _model is None or _tokenizer is None or _torch is None:
         raise RuntimeError('Citizen Help model is not ready.')
-    messages = build_messages(question, records)
+    messages = build_messages(question, records, analytics)
     prompt = _tokenizer.apply_chat_template(
         messages,
         tokenize=False,
@@ -113,7 +117,10 @@ class Handler(BaseHTTPRequestHandler):
             records = payload.get('records')
             if not isinstance(records, list) or len(records) > 5:
                 raise ValueError('A bounded registry context is required.')
-            answer = generate_answer(question, records)
+            analytics = payload.get('analytics')
+            if not isinstance(analytics, dict):
+                raise ValueError('Computed registry facts are required.')
+            answer = generate_answer(question, records, analytics)
             _json_response(self, {'answer': answer, 'model': model_metadata('cuda:0')})
         except PermissionError as error:
             _json_response(self, {'answer': str(error), 'blocked': True}, 200)

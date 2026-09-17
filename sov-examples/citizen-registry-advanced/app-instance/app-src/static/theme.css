@@ -80,6 +80,26 @@ dialog,
     border-color: var(--line) !important;
 }
 
+.container table thead,
+.container table th,
+.container table th:last-child {
+    background: var(--panel-soft) !important;
+    color: var(--ink) !important;
+    border-color: var(--line) !important;
+}
+
+.container table td,
+.container table td:last-child {
+    color: var(--ink) !important;
+    background: var(--panel) !important;
+    border-color: var(--line) !important;
+}
+
+.container table tbody tr:hover td,
+.container table tbody tr:hover td:last-child {
+    background: var(--panel-soft) !important;
+}
+
 .success,
 .error,
 .alert {
