@@ -2138,6 +2138,11 @@ def config():
 @app.route('/security/evidence', methods=['GET'])
 def security_evidence():
     """Return non-secret evidence used by the security detail panels."""
+    try:
+        with open('/var/lib/citizen-registry/ubuntu-pro-status.json', encoding='utf-8') as status_file:
+            ubuntu_pro = json.load(status_file)
+    except (FileNotFoundError, json.JSONDecodeError):
+        ubuntu_pro = {'enabled': False, 'services': [], 'reboot_policy': 'manual', 'status': 'not_configured'}
     return jsonify({
         'mtls': {
             'enabled': MTLS_ENABLED,
@@ -2154,6 +2159,7 @@ def security_evidence():
         },
         'cpu_attestation': _get_cpu_attestation_evidence(),
         'gpu_attestation': get_gpu_attestation_evidence(),
+        'ubuntu_pro': ubuntu_pro,
         'private_link': {
             'app_cvm_ip': APP_CVM_IP,
             'sql_cvm_ip': SQL_CVM_IP,

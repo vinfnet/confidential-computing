@@ -36,6 +36,12 @@
     TLS private-key mode. FileBackedDemo preserves the current generated demo keys.
     ManagedHsm provisions a dedicated identity for Managed HSM TLS offload.
 
+.PARAMETER UbuntuProEnabled
+    Attach Ubuntu Pro during app CVM bootstrap and enable ESM services.
+
+.PARAMETER UbuntuProAttachCommand
+    Secret-safe external attach command supplied at invocation time. Never commit a Pro token.
+
 .PARAMETER Deploy
     Execute the deployment.
 
@@ -95,6 +101,10 @@ param(
     [ValidateSet("FileBackedDemo", "ManagedHsm")]
     [string]$PkiMode = "FileBackedDemo",
 
+    [switch]$UbuntuProEnabled,
+
+    [string]$UbuntuProAttachCommand = '',
+
     [switch]$Deploy,
     [switch]$ResumePostDeploy,
     [switch]$ValidateOnly,
@@ -103,6 +113,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
+
+if ($UbuntuProEnabled -and [string]::IsNullOrWhiteSpace($UbuntuProAttachCommand)) {
+    throw 'Ubuntu Pro was requested, but -UbuntuProAttachCommand was not supplied. Pass a secret-safe external attach command; never commit a Pro token.'
+}
 
 # Generate a 5-digit suffix, or reuse one to repair an existing deployment.
 if (-not $Cleanup) {
@@ -492,6 +506,24 @@ curl -fL --retry 5 --retry-delay 5 'https://raw.githubusercontent.com/video-dev/
 echo 'ca8773cf798c7ed997d4dd7c8e23c348699f8d5b7462636694cc14de6cda12db  '"`$HLS_LICENSE.tmp" | sha256sum --check
 mv "`$HLS_LICENSE.tmp" "`$HLS_LICENSE"
 apt-get update
+if [ '$UbuntuProEnabled' = 'True' ]; then
+    if ! command -v pro >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools
+    fi
+    if ! pro status --format json 2>/dev/null | grep -q 'attached'; then
+        $UbuntuProAttachCommand
+    fi
+    pro enable esm-infra
+    pro enable esm-apps
+    printf '%s\n' '{"enabled":true,"services":["esm-infra","esm-apps"],"reboot_policy":"manual"}' > /var/lib/citizen-registry/ubuntu-pro-status.json
+else
+    printf '%s\n' '{"enabled":false,"services":[],"reboot_policy":"manual"}' > /var/lib/citizen-registry/ubuntu-pro-status.json
+fi
+DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades
+cat > /etc/apt/apt.conf.d/52-citizen-registry-security-updates <<'APTCONF'
+Unattended-Upgrade::Automatic-Reboot "false";
+APTCONF
+systemctl enable --now unattended-upgrades.service
 DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg nginx openssl python3-flask python3-requests libodbc2
 CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
 ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"

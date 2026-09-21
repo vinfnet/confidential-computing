@@ -474,6 +474,12 @@ environment consistently before restarting the localhost-only H100 service. Re-r
 deployment therefore preserves the 32B model choice instead of silently reverting to the earlier
 7B configuration.
 
+The deployment can also enable Ubuntu Pro on the citizen app CVM with `-UbuntuProEnabled` and a
+secret-safe external `-UbuntuProAttachCommand`. The attach command is never committed, placed in
+README examples, or returned by telemetry. ESM services and unattended security updates are
+configured with automatic reboot disabled; kernel reboots require an explicit maintenance action.
+The `/security/evidence` response reports only the non-secret Pro state and reboot policy.
+
 Citizen Help applies defense in depth: bounded input length, parameterized retrieval, a strict
 registry-only system policy, refusal of prompt injection and jailbreak instructions, refusal of
 harmful/illegal/security-breach/credential-extraction requests, no tool or code execution, output
