@@ -50,6 +50,11 @@ variables:
   maaEndpoint:    'sharedeus2e.eus2e.attest.azure.net'
   imageName:      'cc-attest'
   imageTag:       '$(Build.BuildId)'
+  ledgerEndpoint: 'https://sgallprovledger2026.confidential-ledger.azure.com'
+  ledgerCollectionId: 'build-provenance'
+  ledgerWriterClientId: '24d64a04-890e-4ddc-9cef-071c4a9e2a59'
+  evidenceStorageAccountName: 'sgallprovstg2026'
+  evidenceContainerName: 'build-evidence'
   # Self-contained repo layout: app source and deploy templates live here.
   sourceDir:      'app'
   deployDir:      'deploy'
@@ -90,12 +95,24 @@ stages:
                 "$(sourceDir)"
             displayName: 'az acr build (MI login)'
 
+  - template: ../templates/provenance-stage.yml
+    parameters:
+      dependsOn: [Build]
+      ledgerEndpoint: '$(ledgerEndpoint)'
+      ledgerCollectionId: '$(ledgerCollectionId)'
+      ledgerWriterClientId: '$(ledgerWriterClientId)'
+      evidenceStorageAccountName: '$(evidenceStorageAccountName)'
+      evidenceContainerName: '$(evidenceContainerName)'
+      acrName: '$(acrName)'
+      imageName: '$(imageName)'
+      imageTag: '$(imageTag)'
+
   # ---------------------------------------------------------------------------
   # STANDARD — plain ACI. The app's Attest button fails by design (no TEE).
   # ---------------------------------------------------------------------------
   - stage: DeployStandard
     displayName: 'Deploy Standard ACI'
-    dependsOn: Build
+    dependsOn: [Build, Provenance]
     condition: and(succeeded(), eq('${{ parameters.aciSku }}', 'Standard'))
     pool: confidential-build-pool
     jobs:

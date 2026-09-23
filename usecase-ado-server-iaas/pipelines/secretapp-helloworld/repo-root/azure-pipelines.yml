@@ -67,6 +67,11 @@ variables:
   # -----------------------------------------------------------------------------------
   imageName: 'secretapp'
   imageTag: '$(Build.BuildId)'
+  ledgerEndpoint: 'https://sgallprovledger2026.confidential-ledger.azure.com'
+  ledgerCollectionId: 'build-provenance'
+  ledgerWriterClientId: '24d64a04-890e-4ddc-9cef-071c4a9e2a59'
+  evidenceStorageAccountName: 'sgallprovstg2026'
+  evidenceContainerName: 'build-evidence'
 
 stages:
   # ---------------------------------------------------------------------------
@@ -266,3 +271,16 @@ stages:
                 }
                 Write-Host "##vso[task.logissue type=error]$url did not report unsealed=true within timeout."
                 exit 1
+
+  - template: ../../templates/provenance-stage.yml
+    parameters:
+      dependsOn: [Standard, Confidential]
+      condition: "or(and(eq(dependencies.Standard.result, 'Succeeded'), eq(dependencies.Confidential.result, 'Skipped')), and(eq(dependencies.Standard.result, 'Skipped'), eq(dependencies.Confidential.result, 'Succeeded')))"
+      ledgerEndpoint: '$(ledgerEndpoint)'
+      ledgerCollectionId: '$(ledgerCollectionId)'
+      ledgerWriterClientId: '$(ledgerWriterClientId)'
+      evidenceStorageAccountName: '$(evidenceStorageAccountName)'
+      evidenceContainerName: '$(evidenceContainerName)'
+      acrName: '$(acrName)'
+      imageName: '$(imageName)'
+      imageTag: '$(imageTag)'

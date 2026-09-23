@@ -270,7 +270,10 @@ cd usecase-ado-server-iaas
   -subsID <subscription-id> `
   -basename <name> `
   -region northeurope `
-  -vmsize Standard_DC8as_v5
+  -vmsize Standard_DC8as_v5 `
+  -EvidenceStorageAccountName <evidence-storage-account> `
+  -EvidenceStorageResourceGroupName <evidence-storage-resource-group> `
+  -EvidenceContainerName build-evidence
 ```
 
 The script prints the resource group, VM name, and Bastion name at the end. By convention:
@@ -279,6 +282,139 @@ The script prints the resource group, VM name, and Bastion name at the end. By c
 - VNet: `<name>vnet` (e.g. `myadovnet`)
 - Bastion: `<name>vnet-bastion` (e.g. `myadovnet-bastion`)
 - Private IP of the CVM: `10.0.0.4`
+
+When the evidence parameters are supplied, the script ensures the CVM has a
+system-assigned managed identity and grants it `Storage Blob Data Reader` only on the
+`build-evidence` container. The storage account should have a Blob private endpoint linked
+to this VNet; public access and shared-key access should remain disabled.
+
+### Fresh ADO server setup block
+
+The following is the single block to paste for a new deployment after the provenance storage
+and private endpoint have been deployed. It provisions the CVM identity permission, connects
+through Bastion, and then downloads and formats an SBOM from inside the CVM:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$subscription = '<subscription-id>'
+$resourceGroup = '<ado-resource-group>'
+$name = '<ado-name>'
+$evidenceStorage = '<evidence-storage-account>'
+$evidenceStorageResourceGroup = '<evidence-storage-resource-group>'
+$evidenceContainer = 'build-evidence'
+
+Set-AzContext -SubscriptionId $subscription
+.\Build-AdoServerCvm.ps1 `
+  -subsID $subscription `
+  -basename $name `
+  -region eastus2euap `
+  -vmsize Standard_DC4as_v6 `
+  -EvidenceStorageAccountName $evidenceStorage `
+  -EvidenceStorageResourceGroupName $evidenceStorageResourceGroup `
+  -EvidenceContainerName $evidenceContainer
+
+$vmId = az vm show -g $resourceGroup -n $name --query id -o tsv
+az network bastion rdp `
+  --name "${name}vnet-bastion" `
+  --resource-group $resourceGroup `
+  --target-resource-id $vmId
+```
+
+Worked example for the deployed resources in this repository:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$subscription = '68432aaa-6eba-435c-bc7c-1d998d835e80'
+$resourceGroup = 'sgalladopovcr'
+$name = 'sgalladopovcr'
+$evidenceStorage = 'sgallprovstg2026'
+$evidenceStorageResourceGroup = 'sgalladopovcr'
+
+Set-AzContext -SubscriptionId $subscription
+
+.\usecase-ado-server-iaas\Build-AdoServerCvm.ps1 `
+  -subsID $subscription `
+  -basename $name `
+  -region eastus2euap `
+  -vmsize Standard_DC4as_v6 `
+  -EvidenceStorageAccountName $evidenceStorage `
+  -EvidenceStorageResourceGroupName $evidenceStorageResourceGroup `
+  -EvidenceContainerName build-evidence
+
+$vmId = az vm show `
+  --subscription $subscription `
+  --resource-group $resourceGroup `
+  --name $name `
+  --query id -o tsv
+
+az network bastion rdp `
+  --name 'sgalladopovcrvnet-bastion' `
+  --resource-group $resourceGroup `
+  --target-resource-id $vmId
+```
+
+Run the remaining ADO Server installation and agent-pool steps from the CVM. The identity
+permission is idempotent, so rerunning the CVM script does not create duplicate assignments.
+
+### View an SBOM from the CVM
+
+After connecting to the CVM over RDP, run this in an elevated PowerShell session. It uses the
+CVM's system-assigned managed identity, the private Blob endpoint, and the container-scoped
+`Storage Blob Data Reader` permission. Azure CLI is not required on the CVM:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$storageAccount = 'sgallprovstg2026'
+$container = 'build-evidence'
+$blob = 'builds/101/sbom.spdx.json'
+$output = 'C:\Temp\sbom.spdx.json'
+
+New-Item -ItemType Directory -Path (Split-Path $output) -Force | Out-Null
+$token = Invoke-RestMethod `
+  -Headers @{ Metadata = 'true' } `
+  -Uri 'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https%3A%2F%2Fstorage.azure.com%2F'
+
+Invoke-WebRequest `
+  -Uri "https://$storageAccount.blob.core.windows.net/$container/$blob" `
+  -Headers @{
+    Authorization = "Bearer $($token.access_token)"
+    'x-ms-version' = '2023-11-03'
+  } `
+  -OutFile $output
+
+Get-Content $output -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 100
+```
+
+The blob path must use the real ADO build ID. The provenance pipeline uploads to
+`builds/<Build.BuildId>/sbom.spdx.json`; the earlier ledger connectivity test used sample
+transaction `2.47` and did not upload an SBOM blob. To list the available build prefixes from
+the CVM, use the Storage Blob listing API:
+
+```powershell
+$listUri = "https://$storageAccount.blob.core.windows.net/$container`?restype=container&comp=list&prefix=builds/"
+$xml = Invoke-RestMethod `
+  -Uri $listUri `
+  -Headers @{
+    Authorization = "Bearer $($token.access_token)"
+    'x-ms-version' = '2023-11-03'
+  }
+
+[xml]$xml | Select-Xml -XPath '//Blob/Name' | ForEach-Object Node | Select-Object -ExpandProperty InnerText
+```
+
+Then set `$blob` to one of the returned names and rerun the download request. A
+`BlobNotFound` response means either the build ID is wrong or the provenance pipeline has not
+completed its `az storage blob upload-batch` step for that build.
+
+Confirm that the storage hostname resolves privately before downloading:
+
+```powershell
+Resolve-DnsName sgallprovstg2026.blob.core.windows.net
+```
+
+The answer should include the private endpoint address `10.0.0.5`. A `401` or `403` usually
+means the managed-identity role assignment has not propagated; a public-network or DNS error
+means the CVM is not using the linked Blob private DNS zone.
 
 ### Step 2 — Connect to the CVM over Bastion (RDP)
 

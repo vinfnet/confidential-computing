@@ -55,6 +55,11 @@ variables:
   miClientId:     '8a8ed6b8-1a16-4f8d-b6ee-1ab828546456'
   imageName:      'hello-world'
   imageTag:       '$(Build.BuildId)'
+  ledgerEndpoint: 'https://sgallprovledger2026.confidential-ledger.azure.com'
+  ledgerCollectionId: 'build-provenance'
+  ledgerWriterClientId: '24d64a04-890e-4ddc-9cef-071c4a9e2a59'
+  evidenceStorageAccountName: 'sgallprovstg2026'
+  evidenceContainerName: 'build-evidence'
   sourceDir:      'app'
   deployDir:      'deploy'
 
@@ -94,6 +99,18 @@ stages:
                 "$(sourceDir)"
             displayName: 'az acr build (MI login)'
 
+  - template: ../templates/provenance-stage.yml
+    parameters:
+      dependsOn: [Build]
+      ledgerEndpoint: '$(ledgerEndpoint)'
+      ledgerCollectionId: '$(ledgerCollectionId)'
+      ledgerWriterClientId: '$(ledgerWriterClientId)'
+      evidenceStorageAccountName: '$(evidenceStorageAccountName)'
+      evidenceContainerName: '$(evidenceContainerName)'
+      acrName: '$(acrName)'
+      imageName: '$(imageName)'
+      imageTag: '$(imageTag)'
+
   # ---------------------------------------------------------------------------
   # CONFIDENTIAL — generate a per-image CCE policy (dockerless) and deploy on
   # the AMD SEV-SNP SKU. `az container exec` into the result is denied by the
@@ -101,7 +118,7 @@ stages:
   # ---------------------------------------------------------------------------
   - stage: DeployConfidential
     displayName: 'Deploy Confidential ACI (SEV-SNP)'
-    dependsOn: Build
+    dependsOn: [Build, Provenance]
     condition: succeeded()
     pool: confidential-build-pool
     jobs:

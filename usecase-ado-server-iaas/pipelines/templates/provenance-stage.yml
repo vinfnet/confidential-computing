@@ -1,0 +1,164 @@
+parameters:
+  - name: dependsOn
+    type: object
+    default: []
+  - name: provenancePool
+    type: string
+    default: confidential-provenance-pool
+  - name: provenanceStageName
+    type: string
+    default: Provenance
+  - name: condition
+    type: string
+    default: succeeded()
+  - name: ledgerEndpoint
+    type: string
+  - name: ledgerCollectionId
+    type: string
+  - name: ledgerWriterClientId
+    type: string
+  - name: evidenceStorageAccountName
+    type: string
+  - name: evidenceContainerName
+    type: string
+    default: build-evidence
+  - name: acrName
+    type: string
+  - name: imageName
+    type: string
+  - name: imageTag
+    type: string
+    default: '$(Build.BuildId)'
+  - name: syftVersion
+    type: string
+    default: '1.18.1'
+  - name: preProvenanceSteps
+    type: stepList
+    default: []
+
+stages:
+  - stage: ${{ parameters.provenanceStageName }}
+    displayName: Record mandatory provenance
+    dependsOn: ${{ parameters.dependsOn }}
+    condition: ${{ parameters.condition }}
+    jobs:
+      - job: Record
+        displayName: Generate SBOM and verify ledger receipt
+        pool: ${{ parameters.provenancePool }}
+        steps:
+          - checkout: self
+          - ${{ each step in parameters.preProvenanceSteps }}:
+            - ${{ step }}
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                curl -sSfL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              python3 -m pip install --disable-pip-version-check \
+                -r usecase-ado-server-iaas/provenance/requirements.txt
+              az login --identity --client-id '${{ parameters.ledgerWriterClientId }}' \
+                --allow-no-subscriptions --only-show-errors -o none
+            displayName: Prepare provenance tools
+          - bash: |
+              set -euo pipefail
+              VERSION='${{ parameters.syftVersion }}'
+              TOOL_DIR='$(Agent.TempDirectory)/provenance-tools'
+              mkdir -p "$TOOL_DIR"
+              cd "$TOOL_DIR"
+              ARCHIVE="syft_${VERSION}_linux_amd64.tar.gz"
+              RELEASE="https://github.com/anchore/syft/releases/download/v${VERSION}"
+              curl -sSfLO "$RELEASE/$ARCHIVE"
+              curl -sSfLO "$RELEASE/syft_${VERSION}_checksums.txt"
+              grep "  $ARCHIVE$" "syft_${VERSION}_checksums.txt" | sha256sum --check --strict
+              tar -xzf "$ARCHIVE" syft
+              chmod +x syft
+            displayName: Install pinned Syft
+          - bash: |
+              set -euo pipefail
+              OUTPUT='$(Build.ArtifactStagingDirectory)/provenance'
+              mkdir -p "$OUTPUT" "$HOME/.docker"
+
+              LOGIN_SERVER=$(az acr show --name '${{ parameters.acrName }}' --query loginServer -o tsv)
+              IMAGE_TAG='${{ parameters.imageTag }}'
+              IMAGE_REF="$LOGIN_SERVER/${{ parameters.imageName }}:$IMAGE_TAG"
+              DIGEST=$(az acr manifest show-metadata \
+                --registry '${{ parameters.acrName }}' \
+                --name "${{ parameters.imageName }}:$IMAGE_TAG" \
+                --query digest -o tsv)
+              test -n "$DIGEST"
+              IMAGE_URI="$LOGIN_SERVER/${{ parameters.imageName }}@$DIGEST"
+
+              cat > "$OUTPUT/artifact.json" <<EOF
+              {
+                "name": "${{ parameters.imageName }}",
+                "uri": "$IMAGE_URI",
+                "sha256": "${DIGEST#sha256:}"
+              }
+              EOF
+
+              ACR_TOKEN=$(az acr login --name '${{ parameters.acrName }}' --expose-token --query accessToken -o tsv)
+              export SYFT_REGISTRY_AUTH_AUTHORITY="$LOGIN_SERVER"
+              export SYFT_REGISTRY_AUTH_USERNAME='00000000-0000-0000-0000-000000000000'
+              export SYFT_REGISTRY_AUTH_PASSWORD="$ACR_TOKEN"
+              '$(Agent.TempDirectory)/provenance-tools/syft' "$IMAGE_URI" -o "spdx-json=$OUTPUT/sbom.spdx.json"
+
+              BUILD_URI="${SYSTEM_COLLECTIONURI}${SYSTEM_TEAMPROJECT}/_build/results?buildId=${BUILD_BUILDID}"
+              ARTIFACT_URI="$BUILD_URI&view=artifacts&type=publishedArtifacts"
+              PROVENANCE_PREFIX="builds/${BUILD_BUILDID}"
+              BLOB_BASE="https://${{ parameters.evidenceStorageAccountName }}.blob.core.windows.net/${{ parameters.evidenceContainerName }}/$PROVENANCE_PREFIX"
+              FINISHED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+              python3 usecase-ado-server-iaas/provenance/provenance.py create \
+                --descriptor "$OUTPUT/artifact.json" \
+                --sbom "$OUTPUT/sbom.spdx.json" \
+                --sbom-uri "$BLOB_BASE/sbom.spdx.json" \
+                --repository "$BUILD_REPOSITORY_URI" \
+                --commit "$BUILD_SOURCEVERSION" \
+                --build-id "$BUILD_BUILDID" \
+                --build-definition "$BUILD_DEFINITIONNAME" \
+                --build-uri "$BUILD_URI" \
+                --started-at "$BUILD_QUEUEDTIME" \
+                --finished-at "$FINISHED_AT" \
+                --output "$OUTPUT/evidence.json"
+
+              TRANSACTION_ID=$(python3 usecase-ado-server-iaas/provenance/ledger.py \
+                --endpoint '${{ parameters.ledgerEndpoint }}' \
+                --collection-id '${{ parameters.ledgerCollectionId }}' \
+                --managed-identity-client-id '${{ parameters.ledgerWriterClientId }}' \
+                --evidence "$OUTPUT/evidence.json" \
+                --output "$OUTPUT/receipt.json")
+
+              python3 usecase-ado-server-iaas/provenance/provenance.py report \
+                --evidence "$OUTPUT/evidence.json" \
+                --transaction-id "$TRANSACTION_ID" \
+                --receipt-verified \
+                --output "$OUTPUT/report.html"
+
+              az storage blob upload-batch \
+                --account-name '${{ parameters.evidenceStorageAccountName }}' \
+                --auth-mode login \
+                --destination '${{ parameters.evidenceContainerName }}' \
+                --destination-path "$PROVENANCE_PREFIX" \
+                --source "$OUTPUT" \
+                --overwrite false \
+                --only-show-errors \
+                --output none
+
+              SUMMARY="$OUTPUT/summary.md"
+              cat > "$SUMMARY" <<EOF
+              ## Verified build provenance
+
+              | | |
+              | --- | --- |
+              | **Artifact** | \`$IMAGE_URI\` |
+              | **Ledger transaction** | \`$TRANSACTION_ID\` |
+              | **Receipt verification** | Passed |
+              | **Evidence bundle** | [Open build artifacts]($ARTIFACT_URI) |
+              EOF
+              echo "##vso[task.uploadsummary]$SUMMARY"
+            displayName: Generate, record, and preserve verified evidence
+          - task: PublishBuildArtifacts@1
+            displayName: Publish provenance bundle
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/provenance'
+              ArtifactName: provenance
+              publishLocation: Container

@@ -29,7 +29,16 @@ param(
     # Skip VM build and jump straight to post-provisioning steps (data disk, format, Bastion)
     # against an existing CVM. Provide the resource group name of the already-deployed CVM.
     [Parameter(Mandatory = $false)]
-    [string]$ExistingResourceGroup = ""
+    [string]$ExistingResourceGroup = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$EvidenceStorageAccountName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$EvidenceStorageResourceGroupName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$EvidenceContainerName = "build-evidence"
 )
 
 $ErrorActionPreference = "Stop"
@@ -169,8 +178,53 @@ if (`$max -gt `$cur + 1GB) {
 } else {
     Write-Host "C: already spans the OS disk (`$([math]::Round(`$cur/1GB)) GB); nothing to extend"
 }
+
 "@
     Invoke-AzVMRunCommand -ResourceGroupName $ResourceGroupName -Name $VmName -CommandId "RunPowerShellScript" -ScriptString $extendScript | Out-Null
+}
+
+function Ensure-EvidenceReaderIdentity {
+    param(
+        [string]$ResourceGroupName,
+        [string]$VmName,
+        [string]$StorageAccountName,
+        [string]$StorageResourceGroupName,
+        [string]$ContainerName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($StorageAccountName)) {
+        return
+    }
+
+    if ([string]::IsNullOrWhiteSpace($StorageResourceGroupName)) {
+        $StorageResourceGroupName = $ResourceGroupName
+    }
+
+    Write-Host "=== Configure CVM managed identity for private evidence downloads ===" -ForegroundColor Cyan
+    $identityType = (Invoke-AzCli "az vm show --resource-group $ResourceGroupName --name $VmName --query identity.type --output tsv").Trim()
+    if ($identityType -notmatch "SystemAssigned") {
+        Invoke-AzCli "az vm identity assign --resource-group $ResourceGroupName --name $VmName --only-show-errors --output none"
+    }
+
+    $principalId = (Invoke-AzCli "az vm show --resource-group $ResourceGroupName --name $VmName --query identity.principalId --output tsv").Trim()
+    if ([string]::IsNullOrWhiteSpace($principalId)) {
+        throw "The CVM system-assigned managed identity was not available after assignment."
+    }
+
+    $storageId = (Invoke-AzCli "az storage account show --resource-group $StorageResourceGroupName --name $StorageAccountName --query id --output tsv").Trim()
+    if ([string]::IsNullOrWhiteSpace($storageId)) {
+        throw "Evidence storage account '$StorageAccountName' was not found in '$StorageResourceGroupName'."
+    }
+
+    $containerScope = "$storageId/blobServices/default/containers/$ContainerName"
+    $role = "Storage Blob Data Reader"
+    $existing = (Invoke-AzCli "az role assignment list --assignee-object-id $principalId --scope `"$containerScope`" --role `"$role`" --query `"[0].id`" --output tsv").Trim()
+    if ([string]::IsNullOrWhiteSpace($existing)) {
+        Invoke-AzCli "az role assignment create --assignee-object-id $principalId --assignee-principal-type ServicePrincipal --role `"$role`" --scope `"$containerScope`" --only-show-errors --output none"
+        Write-Host "Granted $role to CVM identity $principalId at $containerScope." -ForegroundColor Green
+    } else {
+        Write-Host "CVM identity already has $role at $containerScope." -ForegroundColor DarkGray
+    }
 }
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -235,6 +289,13 @@ if ($ExistingResourceGroup) {
 $vmName = $resourceGroupName
 Write-Host "Detected resource group: $resourceGroupName" -ForegroundColor Green
 Write-Host "Detected VM name: $vmName" -ForegroundColor Green
+
+Ensure-EvidenceReaderIdentity `
+    -ResourceGroupName $resourceGroupName `
+    -VmName $vmName `
+    -StorageAccountName $EvidenceStorageAccountName `
+    -StorageResourceGroupName $EvidenceStorageResourceGroupName `
+    -ContainerName $EvidenceContainerName
 
 Write-Host "=== Step 2/5: Expand OS disk to $OSDiskSizeGB GB and extend C: in guest ===" -ForegroundColor Cyan
 Ensure-OSDiskExpanded -ResourceGroupName $resourceGroupName -VmName $vmName -TargetSizeGB $OSDiskSizeGB

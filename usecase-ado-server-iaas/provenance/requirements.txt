@@ -1,0 +1,2 @@
+azure-confidentialledger>=1.1,<2
+azure-identity>=1.25,<2

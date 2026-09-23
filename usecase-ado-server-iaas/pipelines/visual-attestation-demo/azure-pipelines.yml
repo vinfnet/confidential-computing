@@ -59,6 +59,11 @@ variables:
   miClientId: '8a8ed6b8-1a16-4f8d-b6ee-1ab828546456'
   imageName: 'cc-attest'
   imageTag: '$(Build.BuildId)'
+  ledgerEndpoint: 'https://sgallprovledger2026.confidential-ledger.azure.com'
+  ledgerCollectionId: 'build-provenance'
+  ledgerWriterClientId: '24d64a04-890e-4ddc-9cef-071c4a9e2a59'
+  evidenceStorageAccountName: 'sgallprovstg2026'
+  evidenceContainerName: 'build-evidence'
   # Microsoft Azure Attestation endpoint for the Confidential mode. Match your
   # region: eastus -> sharedeus.eus.attest.azure.net,
   #          northeurope -> sharedneu.neu.attest.azure.net, etc.
@@ -97,12 +102,24 @@ stages:
                 "$(sourceDir)"
             displayName: 'az acr build'
 
+  - template: ../templates/provenance-stage.yml
+    parameters:
+      dependsOn: [Build]
+      ledgerEndpoint: '$(ledgerEndpoint)'
+      ledgerCollectionId: '$(ledgerCollectionId)'
+      ledgerWriterClientId: '$(ledgerWriterClientId)'
+      evidenceStorageAccountName: '$(evidenceStorageAccountName)'
+      evidenceContainerName: '$(evidenceContainerName)'
+      acrName: '$(acrName)'
+      imageName: '$(imageName)'
+      imageTag: '$(imageTag)'
+
   # ---------------------------------------------------------------------------
   # STANDARD: deploy plain ACI. Attestation fails by design (educational).
   # ---------------------------------------------------------------------------
   - stage: DeployStandard
     displayName: 'Deploy Standard ACI'
-    dependsOn: Build
+    dependsOn: [Build, Provenance]
     condition: and(succeeded(), eq('${{ parameters.aciSku }}', 'Standard'))
     pool: confidential-build-pool
     jobs:
