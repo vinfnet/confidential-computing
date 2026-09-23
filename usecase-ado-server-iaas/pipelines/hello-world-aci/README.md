@@ -13,22 +13,20 @@ parts are as small as possible.
 
 ## Flow
 
-```
- git push (main)                Azure DevOps Server (on a CVM)
-      │                        ┌───────────────────────────────┐
-      ▼                        │  Pipeline: hello-world-aci      │
- ADO Git repo  ── trigger ───▶ │  pool: confidential-build-pool  │
- hello-world-                  │  agent: confidential ACI (MI)   │
- aci                           └──────────────┬────────────────┘
-                                              │ az login --identity
-                        ┌─────────────────────┼─────────────────────┐
-                        ▼                     ▼                     ▼
-                 az acr build         az confcom acipolicygen   az deployment
-                 (server-side)        (CCE policy, dockerless)  group create
-                        │                     │                     │
-                        ▼                     ▼                     ▼
-                 ACR image             HOST_DATA = policy hash   Confidential
-                 :$(BuildId)           bound into the guest      ACI (SEV-SNP)
+```mermaid
+flowchart LR
+    commit["Push to main<br/>root application paths"] --> definition["root-application YAML definition"]
+    definition --> pool["confidential-build-pool<br/>Confidential ACI agent"]
+    uami["Shared agent UAMI<br/>attached at initial deployment"] -.-> pool
+    pool -->|"az login --identity"| build["az acr build<br/>server-side"]
+    pool --> policy["az confcom acipolicygen<br/>dockerless CCE policy"]
+    pool --> deploy["az deployment group create"]
+    uami -->|"AcrPush"| acr["Workload ACR<br/>image: BuildId"]
+    uami -->|"Contributor scoped to workload RG"| app
+    build --> acr
+    acr --> policy
+    policy -->|"HOST_DATA = policy hash"| app["Confidential app ACI<br/>in workload resource group<br/>AMD SEV-SNP"]
+    deploy --> app
 ```
 
 ## Repo layout (self-contained)
@@ -120,48 +118,33 @@ creation is blocked over Windows/NTLM auth). Create one with these scopes:
 | Create the pipeline + queue a run | **Build** | Read & execute |
 | Create the team project (only if it doesn't exist yet) | **Project and Team** | Read, write & manage |
 
-### Step 5 — Create the user-assigned managed identity and grant roles
+### Step 5 — Create the shared agent identity and grant workload roles
 
-```powershell
-$rg   = 'sgallhyglz'
-$acr  = 'sgallacr74016'
-$sub  = '68432aaa-6eba-435c-bc7c-1d998d835e80'
-$miName = 'sgall-caci-pipeline-mi'
+Use the same user-assigned identity that is attached to the confidential agents. The agent
+builder can create or reuse it and idempotently grant `Contributor` on the workload resource
+group plus `AcrPush` on the workload registry. These assignments must be persistent; PIM can
+be used to administer RBAC, but a pipeline run must not depend on an active PIM assignment.
 
-# Create the identity
-$mi = az identity create -g $rg -n $miName -o json | ConvertFrom-Json
+### Step 6 — Deploy the runners with the identity attached
 
-# AcrPush on the registry (for `az acr build`)
-$acrId = az acr show -n $acr -g $rg --query id -o tsv
-az role assignment create --assignee-object-id $mi.principalId --assignee-principal-type ServicePrincipal `
-  --role AcrPush --scope $acrId
-
-# Contributor on the resource group (for `az deployment group create`)
-az role assignment create --assignee-object-id $mi.principalId --assignee-principal-type ServicePrincipal `
-  --role Contributor --scope "/subscriptions/$sub/resourceGroups/$rg"
-
-"MI clientId  = $($mi.clientId)"       # -> put this in azure-pipelines.yml (miClientId)
-"MI resource  = $($mi.id)"             # -> pass to the agent redeploy below
-```
-
-### Step 6 — Attach the MI to the confidential runners (redeploy)
-
-Redeploy the agents with `-UserAssignedIdentityResourceId` so each confidential
-ACI runner carries the identity. Run from `usecase-ado-server-iaas/`:
+Run from `usecase-ado-server-iaas/`. Substitute your own resource names:
 
 ```powershell
 .\Build-ConfidentialAciAdoAgent.ps1 `
-  -SubscriptionId $sub `
-  -ResourceGroupName $rg `
-  -Prefix sgall `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName <agent-resource-group> `
+  -Prefix <prefix> `
   -AzpUrl 'https://10.0.0.4/DefaultCollection' `
   -AzpPool confidential-build-pool `
   -AzpToken $env:AZP_TOKEN `
   -AgentCount 2 `
-  -Location westus2 `
-  -VnetName sgallhyglzvnet `
-  -AcrName $acr `
-  -UserAssignedIdentityResourceId $mi.id
+  -Location <location> `
+  -VnetName <vnet-name> `
+  -AcrName <agent-image-acr> `
+  -UserAssignedIdentityName <agent-identity-name> `
+  -WorkloadResourceGroupName <workload-resource-group> `
+  -WorkloadAcrName <workload-acr> `
+  -WorkloadAcrResourceGroupName <workload-acr-resource-group>
 ```
 
 The script rebuilds the agent image, regenerates a restrictive CCE policy,
@@ -178,6 +161,10 @@ az vm run-command invoke -g $rg -n sgallhyglz --command-id RunPowerShellScript `
   --parameters "PoolId=2" "Pat=$env:AZP_TOKEN" --query "value[0].message" -o tsv
 ```
 
+The script attaches the identity in the initial ACI template. Do not patch only the identity
+onto an existing private container group; ACI can reject that update with
+`MissingIpAddressPorts`. Rerun the complete agent deployment instead.
+
 ### Step 7 — Point the pipeline at your MI and registry
 
 Edit [`azure-pipelines.yml`](azure-pipelines.yml) `variables` so `miClientId`
@@ -189,9 +176,8 @@ matches the identity from Step 5 and `acrName`/`resourceGroup`/`subscriptionId`/
 The pipeline needs to live in a git repo **on the ADO Server**, bound to the
 `confidential-build-pool`.
 
-**8a. Project + repo.** If they don't already exist, create a team project (via
-the web UI over Bastion, or the REST API with the *Project and Team* scope). This
-demo uses project **`Confidential-IaaS-ADO`** with a repo of the same name.
+**8a. Project + repo.** The helper creates or reuses both. This demo uses project
+**`ADO-IaaS-ACC-Demo`** with a repository of the same name.
 
 **8b. Push the pipeline into the server repo.** Open a Bastion tunnel to the
 server's HTTPS port, then push the `hello-world-aci` folder to the repo root so
@@ -212,30 +198,35 @@ Push-Location $tmp
 git init -b main
 git add .
 git -c user.email=demo@local -c user.name=demo commit -m 'hello-world-aci pipeline'
-$remote = "https://user:$env:AZP_TOKEN@localhost:8443/DefaultCollection/Confidential-IaaS-ADO/_git/Confidential-IaaS-ADO"
+$remote = "https://user:$env:AZP_TOKEN@localhost:8443/DefaultCollection/ADO-IaaS-ACC-Demo/_git/ADO-IaaS-ACC-Demo"
 git -c http.sslVerify=false push $remote main
 Pop-Location
 ```
 
-> The self-signed server cert makes `git` reject TLS; `-c http.sslVerify=false`
-> is acceptable for this private, tunneled demo only.
+> Prefer an ADO Server certificate trusted by developer workstations. The
+> `http.sslVerify=false` override is for a one-command recovery push only; do not
+> persist it in repository configuration.
 
-**8c. Create the pipeline definition and queue a run.** Use the helper script,
-which runs on the server and talks to `localhost`:
+**8c. Create both pipeline definitions and queue their first runs.** The helper
+runs on the server and talks to `localhost`:
 
 ```powershell
 az vm run-command invoke -g $rg -n sgallhyglz --command-id RunPowerShellScript `
   --scripts "@usecase-ado-server-iaas/pipelines/hello-world-aci/Create-HelloWorldPipeline.ps1" `
-  --parameters "Pat=$env:AZP_TOKEN" "Project=Confidential-IaaS-ADO" `
-               "RepoName=Confidential-IaaS-ADO" "Pool=confidential-build-pool" `
-               "YamlPath=azure-pipelines.yml" "Queue=true" `
+  --parameters "Pat=$env:AZP_TOKEN" "Project=ADO-IaaS-ACC-Demo" `
+               "RepoName=ADO-IaaS-ACC-Demo" "Pool=confidential-build-pool" `
+               "RootDefinitionName=root-application" "RootYamlPath=azure-pipelines.yml" `
+               "ContosoDefinitionName=contoso-application" `
+               "ContosoYamlPath=usecase-ado-server-iaas/pipelines/visual-attestation-demo/azure-pipelines.yml" `
+               "QueueDefinitions=true" `
   --query "value[0].message" -o tsv
 ```
 
-It resolves the repo id and the `confidential-build-pool` agent-queue id, creates
-a YAML pipeline definition named `hello-world-aci` bound to that queue, and (with
-`Queue=true`) queues a build — printing `BUILD-QUEUED id=... number=...`. Every
-subsequent push to `main` triggers the pipeline automatically.
+It ensures the project, repository, project queue, repository checkout permission, and pool
+permissions; then it creates or updates the root and Contoso definitions. A newly introduced
+YAML file cannot trigger before its definition exists, so `QueueDefinitions=true` explicitly
+queues both definitions after the files are pushed. Omit the switch on reconciliation-only
+runs. Subsequent pushes use each YAML file's independent path filter.
 
 The queued build runs on a confidential ACI agent: it `az login --identity`s with
 the attached MI, runs `az acr build`, generates the CCE policy with

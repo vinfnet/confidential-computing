@@ -22,6 +22,7 @@ component is exposed to the public internet.
   - [Step 6 — Create the confidential build agent pool](#step-6--create-the-confidential-build-agent-pool)
   - [Step 7 — Build and deploy the confidential ACI agents](#step-7--build-and-deploy-the-confidential-aci-agents)
   - [Step 8 — Verify the agents registered](#step-8--verify-the-agents-registered)
+  - [Step 9 — Provision the project and two YAML pipelines](#step-9--provision-the-project-and-two-yaml-pipelines)
 - [Personas (two-session model)](#personas-two-session-model)
 - [Onboarding a developer (edit → push → redeploy)](#onboarding-a-developer-edit--push--redeploy)
 - [Connecting via Bastion](#connecting-via-bastion)
@@ -81,23 +82,23 @@ overhead of running it yourself.
    │   default subnet                               │
    │     └─ ADO Server CVM  (10.0.0.4, no PIP)      │
    │          IIS "Azure DevOps Server", HTTPS 443  │
-   │          repo + pipeline definition            │
+  │          repo + 2 YAML pipeline definitions    │
    │                                                │
    │   aci-agents-subnet (10.0.1.0/24, delegated)   │
-   │     ├─ Confidential ACI build agent 1 ─┐       │
-   │     └─ Confidential ACI build agent 2 ─┤ self- │
-   │                                        │ reg.  │
-   │            NAT gateway (egress) ───────┘ HTTPS │
+     │     ├─ Confidential ACI build agent 1 ─┐       │
+     │     └─ Confidential ACI build agent 2 ─┤ self- │
+     │          shared UAMI attached at deploy│ reg.  │
+     │            NAT gateway (egress) ───────┘ HTTPS │
    └───────────────────────────────────────────────┘
-        │ pipeline: az acr build          │ pipeline: deploy
-        ▼                                 ▼
-   ACR <acr-name>                    Confidential app ACI
-   (agent MI has AcrPush)            cc-attest-conf-*  (SEV-SNP)
-                                     http://<dns>.<region>.azurecontainer.io
+       │ UAMI: AcrPush                    │ UAMI: Contributor
+       ▼                                  ▼
+     Workload ACR                       Workload resource group
+     <acr-name>                         └─ Confidential app ACI
+                   cc-attest-conf-* (SEV-SNP)
 ```
 
-The same topology as a rendered diagram — everything stays inside the VNet, and only
-outbound HTTPS leaves through the NAT gateway:
+The same topology as a rendered diagram: the ADO Server and build agents stay private in
+the VNet, while outbound HTTPS reaches Key Vault, ACR, and Azure control-plane endpoints:
 
 ```mermaid
 flowchart TB
@@ -110,8 +111,8 @@ flowchart TB
             bastion["Azure Bastion<br/>(Standard, tunneling)"]
         end
         subgraph dsub["default subnet"]
-            cvm["ADO Server CVM<br/>10.0.0.4 · no public IP<br/>AMD SEV-SNP TEE<br/>repo + pipeline · HTTPS 443"]
-            kv["Key Vault<br/>(PAT + CMK)"]
+            cvm["ADO Server CVM<br/>10.0.0.4 · no public IP<br/>AMD SEV-SNP TEE · HTTPS 443"]
+            ado["ADO project + repository<br/>root-application + contoso-application<br/>confidential-build-pool queue"]
         end
         subgraph asub["aci-agents-subnet — 10.0.1.0/24 (delegated)"]
             a1["Confidential ACI build agent 1<br/>AMD SEV-SNP TEE"]
@@ -120,18 +121,28 @@ flowchart TB
         nat["NAT gateway<br/>(outbound only)"]
     end
 
-    acr["Azure Container Registry<br/>&lt;acr-name&gt;"]
-    app["Confidential app ACI<br/>cc-attest-conf-* · AMD SEV-SNP TEE<br/>public FQDN"]
+    uami["Shared user-assigned managed identity<br/>attached during initial agent deployment"]
+  kv["Key Vault<br/>(agent PAT + CVM disk CMK)"]
+    subgraph workload["Workload resource group"]
+        acr["Azure Container Registry<br/>&lt;acr-name&gt;"]
+        app["Confidential app ACI<br/>cc-attest-conf-* · AMD SEV-SNP TEE<br/>public FQDN"]
+    end
 
     owner -->|"manage infra + pipeline · tunnel over Bastion"| bastion
     dev -->|"git push to main · tunnel over Bastion"| bastion
     bastion --> cvm
-    cvm -->|"trigger pipeline"| a1
-    cvm -->|"trigger pipeline"| a2
+    cvm --- ado
+    ado -->|"queue authorized definitions"| a1
+    ado -->|"queue authorized definitions"| a2
     a1 -->|"self-register · HTTPS 443"| cvm
     a2 -->|"self-register · HTTPS 443"| cvm
     a1 -.->|"fetch PAT via managed identity"| kv
     a2 -.->|"fetch PAT via managed identity"| kv
+    uami -.->|"attached"| a1
+    uami -.->|"attached"| a2
+    uami -->|"Key Vault Secrets User"| kv
+    uami -->|"AcrPush"| acr
+    uami -->|"Contributor scoped to workload RG"| app
     a1 -->|"az acr build · push image"| acr
     acr -->|"image pull"| app
     a1 -->|"generate CCE policy · deploy"| app
@@ -209,8 +220,8 @@ Throughout this guide, replace the placeholders:
 
 ## End-to-end installation
 
-The eight steps below move from an empty subscription to confidential build agents
-registered and ready. Blue steps run **on your workstation**; green steps run **on the
+The nine steps below move from an empty subscription to two ready-to-run YAML pipelines on
+confidential build agents. Blue steps run **on your workstation**; green steps run **on the
 CVM** (through `az vm run-command` or an RDP session):
 
 ```mermaid
@@ -222,9 +233,10 @@ flowchart TD
         s4["Step 4 · Enable HTTPS<br/>enable-ado-https.ps1"]
         s5["Step 5 · Create PAT (Agent Pools: manage)"]
         s6["Step 6 · Create agent pool<br/>create-ado-pool.ps1"]
-        s7["Step 7 · Build + deploy ACI agents<br/>Build-ConfidentialAciAdoAgent.ps1"]
+        s7["Step 7 · Create/reuse UAMI + workload RBAC<br/>build + deploy ACI agents"]
         s8["Step 8 · Verify registration<br/>check-ado-agents.ps1"]
-        s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8
+        s9["Step 9 · Ensure project, repo, queue + permissions<br/>root + Contoso YAML definitions"]
+        s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7 --> s8 --> s9
     end
 
     subgraph loop["Application developer — inner loop"]
@@ -236,13 +248,13 @@ flowchart TD
         d1 --> d2 --> d3 --> d4 --> d5
     end
 
-    s8 ==>|"platform ready"| d1
+    s9 ==>|"platform ready"| d1
 
     classDef ws fill:#e8f0fe,stroke:#1a56db,stroke-width:1px;
     classDef vm fill:#e6f4ea,stroke:#137333,stroke-width:1px;
     classDef dev fill:#fef7e0,stroke:#f9ab00,stroke-width:1px;
     class s1,s7 ws;
-    class s3,s4,s6,s8 vm;
+    class s3,s4,s6,s8,s9 vm;
     class d1,d2,d3,d4,d5 dev;
 ```
 
@@ -486,6 +498,37 @@ to seed the secret from `$env:AZP_TOKEN` on the first run (the script also grant
   -StorePatInKeyVault
 ```
 
+The script can instead create/reuse the identity and grant the persistent workload roles in
+the same idempotent run. `Contributor` is scoped to the workload resource group and
+`AcrPush` to the workload ACR; pipeline execution must not depend on a temporary PIM
+activation:
+
+```powershell
+.\Build-ConfidentialAciAdoAgent.ps1 `
+  -SubscriptionId <subscription-id> `
+  -ResourceGroupName <agent-resource-group> `
+  -Prefix <name> `
+  -Location <location> `
+  -AzpUrl 'https://10.0.0.4/DefaultCollection' `
+  -AzpPool 'confidential-build-pool' `
+  -AcrName <agent-image-acr> `
+  -AgentCount 2 `
+  -VnetName '<vnet-name>' `
+  -AgentSubnetName 'aci-agents-subnet' `
+  -UserAssignedIdentityName '<agent-identity-name>' `
+  -WorkloadResourceGroupName '<workload-resource-group>' `
+  -WorkloadAcrName '<workload-acr>' `
+  -WorkloadAcrResourceGroupName '<workload-acr-resource-group>' `
+  -KeyVaultName '<key-vault-name>' `
+  -PatSecretName 'ado-agent-pat' `
+  -StorePatInKeyVault
+```
+
+The identity is attached in the initial private ACI deployment. Do not patch only the
+identity onto an existing private container group: ACI can reject that update with
+`MissingIpAddressPorts` because the live private group exposes no public port collection.
+Rerun this script so the complete template is deployed with the identity attached.
+
 On subsequent runs, drop `-StorePatInKeyVault` (and you no longer need `$env:AZP_TOKEN` set) —
 the agents read the existing secret straight from the vault:
 
@@ -536,23 +579,9 @@ sequenceDiagram
 > (`az keyvault secret set`) after the agents are registered. Existing agents keep running on
 > their established connection; a new PAT is only needed for re-registration.
 
-> **Agent image prerequisites — bake in the Azure CLI.** The sample pipeline
-> ([`pipelines/secretapp-helloworld`](pipelines/secretapp-helloworld/README.md))
-> calls `az` **on the agent** (`az login --identity`, `az acr build`,
-> `az deployment group create`). The default agent Dockerfile in
-> `Build-ConfidentialAciAdoAgent.ps1` is `ubuntu:22.04` with only
-> `curl`/`git`/`jq`, so a pipeline run fails with `az: command not found`.
-> The container also runs as the non-root user `azp`, so installing `az` at
-> pipeline runtime is not viable — it must be part of the image. Add the Azure
-> CLI to the Dockerfile before building, e.g.:
->
-> ```dockerfile
-> RUN curl -sL https://aka.ms/InstallAzureCLIDeb | bash
-> ```
->
-> Because the agents run as **Confidential** ACI, rebuilding the image changes
-> the measured layers, so the CCE policy is regenerated and both agents are
-> redeployed as part of re-running this step.
+> The sample pipelines test for `az` and install it only when the agent image does not
+> already provide it. Rebuilding the confidential agent image changes its measured layers,
+> so always regenerate the CCE policy and redeploy the agents after an image change.
 
 #### Alternative — run the agents on AKS virtual nodes (not recommended)
 
@@ -726,6 +755,37 @@ queue a pipeline against `confidential-build-pool` and it runs on a confidential
 > `SandboxHost-639203230470841966`), not the CVM or Kubernetes pod name — that is
 > expected. Each SEV-SNP runner reports the sandbox host it booted inside.
 
+### Step 9 — Provision the project and two YAML pipelines
+
+Run the idempotent helper once with its default `QueueDefinitions=false` to create or reuse
+the project and repository, then push the YAML files and run the command below. The helper
+also exposes the collection pool as a project
+queue, grants the project build service repository read access, authorizes both definitions
+to use the queue, and creates or updates the definitions without hard-coded IDs.
+
+```powershell
+az vm run-command invoke -g <resource-group> -n <vm-name> `
+  --command-id RunPowerShellScript `
+  --scripts "@usecase-ado-server-iaas/pipelines/hello-world-aci/Create-HelloWorldPipeline.ps1" `
+  --parameters `
+    "Pat=$env:AZP_TOKEN" `
+    "Project=ADO-IaaS-ACC-Demo" `
+    "RepoName=ADO-IaaS-ACC-Demo" `
+    "Pool=confidential-build-pool" `
+    "RootDefinitionName=root-application" `
+    "RootYamlPath=azure-pipelines.yml" `
+    "ContosoDefinitionName=contoso-application" `
+    "ContosoYamlPath=usecase-ado-server-iaas/pipelines/visual-attestation-demo/azure-pipelines.yml" `
+    "QueueDefinitions=true" `
+  --query "value[0].message" -o tsv
+```
+
+The introducing push may occur before usable definitions exist, so it may not trigger them.
+`QueueDefinitions=true` explicitly queues both definitions after the YAML is available. Omit
+it on later reconciliation-only runs. The root and Contoso YAML files have independent path
+filters, both run on `confidential-build-pool`, and both use the agents' user-assigned
+identity rather than an ARM service connection.
+
 #### See the runners in the Azure DevOps web UI
 
 With the Bastion tunnel from Step 5 still open (`https://localhost:8443`), you can
@@ -807,18 +867,21 @@ az network bastion tunnel `
 $env:AZP_TOKEN = Read-Host "ADO PAT" -AsSecureString | ConvertFrom-SecureString -AsPlainText
 ```
 
-**3. Clone through the tunnel.** The tunnel presents the server's self-signed cert, so disable TLS verification for this repo only:
+**3. Clone through the tunnel.** Install a certificate trusted by developer workstations in
+production. For recovery with the sample's self-signed certificate, disable verification
+for this one command only:
 
 ```powershell
 $remote = "https://user:$env:AZP_TOKEN@localhost:8443/<collection>/<project>/_git/<repo>"
 git -c http.sslVerify=false clone $remote
 cd <repo>
-git config http.sslVerify false      # persist per-repo so plain git push works
 git config user.name  "<name>"
 git config user.email "<email>"
 ```
 
-The origin URL embeds the PAT, so `git pull` / `git push` work with no further prompts.
+Do not persist `http.sslVerify=false`; configure certificate trust before normal pull/push
+use. Also avoid embedding PATs in remotes outside a disposable recovery clone because the
+credential remains in `.git/config`.
 
 **4. Edit, push, and watch it redeploy.** Work in a **separate VS Code window** from the one managing the Azure/ADO infrastructure:
 

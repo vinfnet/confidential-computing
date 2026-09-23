@@ -28,8 +28,8 @@
 # ("the confcom extension CLI tool attempts to fetch the image remotely if it
 #  is not locally available").
 #
-# No secrets are hardcoded here. Set the values below as pipeline variables
-# (Pipeline > Edit > Variables) or override them at queue time.
+# Azure authentication uses the user-assigned managed identity attached to the
+# confidential build agents. No ARM service connection is required.
 # =============================================================================
 
 trigger:
@@ -52,12 +52,11 @@ parameters:
       - Confidential
 
 variables:
-  # --- Set these as pipeline variables in the ADO UI (Pipeline > Edit > Variables) ---
-  # azureServiceConnection : name of the ARM service connection
-  # acrName                : name of your Azure Container Registry (no .azurecr.io)
-  # resourceGroup          : resource group that holds the ACR and will hold the ACI
-  # location               : Azure region, e.g. northeurope
-  # -----------------------------------------------------------------------------------
+  subscriptionId: '68432aaa-6eba-435c-bc7c-1d998d835e80'
+  acrName: 'sgallacr74016'
+  resourceGroup: 'sgallhyglz'
+  location: 'westus2'
+  miClientId: '8a8ed6b8-1a16-4f8d-b6ee-1ab828546456'
   imageName: 'cc-attest'
   imageTag: '$(Build.BuildId)'
   # Microsoft Azure Attestation endpoint for the Confidential mode. Match your
@@ -82,21 +81,21 @@ stages:
         displayName: Server-side container build
         steps:
           - checkout: self
-          - task: AzureCLI@2
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
+              az account set --subscription "$(subscriptionId)" --only-show-errors
+              echo "Building $(imageName):$(imageTag) in registry $(acrName)..."
+              az acr build \
+                --registry "$(acrName)" \
+                --image "$(imageName):$(imageTag)" \
+                --image "$(imageName):latest" \
+                --file "$(sourceDir)/Dockerfile" \
+                "$(sourceDir)"
             displayName: 'az acr build'
-            inputs:
-              azureSubscription: '$(azureServiceConnection)'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-                echo "Building $(imageName):$(imageTag) in registry $(acrName)..."
-                az acr build \
-                  --registry "$(acrName)" \
-                  --image "$(imageName):$(imageTag)" \
-                  --image "$(imageName):latest" \
-                  --file "$(sourceDir)/Dockerfile" \
-                  "$(sourceDir)"
 
   # ---------------------------------------------------------------------------
   # STANDARD: deploy plain ACI. Attestation fails by design (educational).
@@ -111,59 +110,54 @@ stages:
         displayName: Deploy container group
         steps:
           - checkout: self
-          - task: AzureCLI@2
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
+              az account set --subscription "$(subscriptionId)" --only-show-errors
+              LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+              ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+              ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+              echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+
+              STAMP=$(date +%m%d%H%M)
+              CG_NAME="cc-attest-$STAMP"
+              DNS_LABEL="cc-attest-$STAMP"
+              IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+
+              echo "Deploying container group $CG_NAME (image: $IMAGE)..."
+              FQDN=$(az deployment group create \
+                --resource-group "$(resourceGroup)" \
+                --template-file "$(deployDir)/aci-visual-attestation.json" \
+                --parameters \
+                    containerGroupName="$CG_NAME" \
+                    location="$(location)" \
+                    appImage="$IMAGE" \
+                    registryServer="$LOGIN_SERVER" \
+                    registryUsername="$ACR_USER" \
+                    registryPassword="$ACR_PASS" \
+                    dnsNameLabel="$DNS_LABEL" \
+                --query "properties.outputs.fqdn.value" -o tsv)
+
+              echo "Deployed. App URL: http://$FQDN"
+              echo "##vso[task.setvariable variable=cgName]$CG_NAME"
+              echo "##vso[task.setvariable variable=appFqdn]$FQDN"
             displayName: 'az deployment group create -> ACI (Standard)'
-            inputs:
-              azureSubscription: '$(azureServiceConnection)'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-                LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
-                ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
-                ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
-                echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
 
-                STAMP=$(date +%m%d%H%M)
-                CG_NAME="cc-attest-$STAMP"
-                DNS_LABEL="cc-attest-$STAMP"
-                IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
-
-                echo "Deploying container group $CG_NAME (image: $IMAGE)..."
-                FQDN=$(az deployment group create \
-                  --resource-group "$(resourceGroup)" \
-                  --template-file "$(deployDir)/aci-visual-attestation.json" \
-                  --parameters \
-                      containerGroupName="$CG_NAME" \
-                      location="$(location)" \
-                      appImage="$IMAGE" \
-                      registryServer="$LOGIN_SERVER" \
-                      registryUsername="$ACR_USER" \
-                      registryPassword="$ACR_PASS" \
-                      dnsNameLabel="$DNS_LABEL" \
-                  --query "properties.outputs.fqdn.value" -o tsv)
-
-                echo "Deployed. App URL: http://$FQDN"
-                echo "##vso[task.setvariable variable=cgName]$CG_NAME"
-                echo "##vso[task.setvariable variable=appFqdn]$FQDN"
-
-          - task: AzureCLI@2
+          - bash: |
+              set -euo pipefail
+              URL="http://$(appFqdn)"
+              echo "Waiting for $URL ..."
+              for i in $(seq 1 24); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                if [ "$CODE" = "200" ]; then echo "OK - $URL returned 200"; exit 0; fi
+                echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                sleep 5
+              done
+              echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
             displayName: 'Smoke test (HTTP 200)'
-            inputs:
-              azureSubscription: '$(azureServiceConnection)'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-                URL="http://$(appFqdn)"
-                echo "Waiting for $URL ..."
-                for i in $(seq 1 24); do
-                  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-                  if [ "$CODE" = "200" ]; then echo "OK - $URL returned 200"; exit 0; fi
-                  echo "  attempt $i: HTTP $CODE, retrying in 5s..."
-                  sleep 5
-                done
-                echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; the image may still be pulling."
 
           - bash: |
               set -euo pipefail
@@ -202,104 +196,89 @@ stages:
         timeoutInMinutes: 30
         steps:
           - checkout: self
-          - task: AzureCLI@2
-            displayName: 'Generate CCE policy (dockerless) + deploy'
-            inputs:
-              azureSubscription: '$(azureServiceConnection)'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
+          - bash: |
+              set -euo pipefail
+              if ! command -v az >/dev/null 2>&1; then
+                curl -sL https://aka.ms/InstallAzureCLIDeb | bash
+              fi
+              az login --identity --client-id "$(miClientId)" --allow-no-subscriptions --only-show-errors -o none
+              az account set --subscription "$(subscriptionId)" --only-show-errors
 
-                # confcom extension is what turns the image + ARM template into a
-                # CCE policy. It ships a static dmverity-vhd binary, so no Docker.
-                az extension add --name confcom --only-show-errors --yes 2>/dev/null || \
-                  az extension update --name confcom --only-show-errors 2>/dev/null || true
+              az extension add --name confcom --only-show-errors --yes 2>/dev/null || \
+                az extension update --name confcom --only-show-errors 2>/dev/null || true
 
-                LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
-                ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
-                ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
-                echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
+              LOGIN_SERVER=$(az acr show -n "$(acrName)" --query loginServer -o tsv)
+              ACR_USER=$(az acr credential show -n "$(acrName)" --query username -o tsv)
+              ACR_PASS=$(az acr credential show -n "$(acrName)" --query "passwords[0].value" -o tsv)
+              echo "##vso[task.setvariable variable=acrPass;issecret=true]$ACR_PASS"
 
-                # --- The Docker workaround -------------------------------------
-                # acipolicygen needs to READ the image layers to hash them. With
-                # no Docker daemon it fetches them straight from ACR over HTTPS -
-                # it just needs registry credentials, which we hand it via a
-                # standard docker config.json (base64 user:pass). No daemon runs.
-                mkdir -p "$HOME/.docker"
-                AUTH=$(printf '%s:%s' "$ACR_USER" "$ACR_PASS" | base64 -w0)
-                cat > "$HOME/.docker/config.json" <<EOF
-                { "auths": { "$LOGIN_SERVER": { "auth": "$AUTH" } } }
-                EOF
-                # ---------------------------------------------------------------
+              mkdir -p "$HOME/.docker"
+              AUTH=$(printf '%s:%s' "$ACR_USER" "$ACR_PASS" | base64 -w0)
+              cat > "$HOME/.docker/config.json" <<EOF
+              { "auths": { "$LOGIN_SERVER": { "auth": "$AUTH" } } }
+              EOF
 
-                STAMP=$(date +%m%d%H%M)
-                CG_NAME="cc-attest-conf-$STAMP"
-                DNS_LABEL="cc-attest-conf-$STAMP"
-                IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
+              STAMP=$(date +%m%d%H%M)
+              CG_NAME="cc-attest-conf-$STAMP"
+              DNS_LABEL="cc-attest-conf-$STAMP"
+              IMAGE="$LOGIN_SERVER/$(imageName):$(imageTag)"
 
-                TEMPLATE="$(deployDir)/aci-visual-attestation-confidential.json"
-                WORK_TEMPLATE="$(Agent.TempDirectory)/aci-conf.json"
-                PARAMS="$(Agent.TempDirectory)/aci-conf.params.json"
-                cp "$TEMPLATE" "$WORK_TEMPLATE"
+              TEMPLATE="$(deployDir)/aci-visual-attestation-confidential.json"
+              WORK_TEMPLATE="$(Agent.TempDirectory)/aci-conf.json"
+              PARAMS="$(Agent.TempDirectory)/aci-conf.params.json"
+              cp "$TEMPLATE" "$WORK_TEMPLATE"
 
-                # Parameters file for confcom (it resolves the image reference
-                # from here) and for the deployment.
-                cat > "$PARAMS" <<EOF
-                {
-                  "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-                  "contentVersion": "1.0.0.0",
-                  "parameters": {
-                    "containerGroupName": { "value": "$CG_NAME" },
-                    "location":           { "value": "$(location)" },
-                    "appImage":           { "value": "$IMAGE" },
-                    "registryServer":     { "value": "$LOGIN_SERVER" },
-                    "registryUsername":   { "value": "$ACR_USER" },
-                    "registryPassword":   { "value": "$ACR_PASS" },
-                    "dnsNameLabel":       { "value": "$DNS_LABEL" },
-                    "maaEndpoint":        { "value": "$(maaEndpoint)" }
-                  }
+              cat > "$PARAMS" <<EOF
+              {
+                "\$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                "contentVersion": "1.0.0.0",
+                "parameters": {
+                  "containerGroupName": { "value": "$CG_NAME" },
+                  "location":           { "value": "$(location)" },
+                  "appImage":           { "value": "$IMAGE" },
+                  "registryServer":     { "value": "$LOGIN_SERVER" },
+                  "registryUsername":   { "value": "$ACR_USER" },
+                  "registryPassword":   { "value": "$ACR_PASS" },
+                  "dnsNameLabel":       { "value": "$DNS_LABEL" },
+                  "maaEndpoint":        { "value": "$(maaEndpoint)" }
                 }
-                EOF
+              }
+              EOF
 
-                echo "Generating CCE policy for $IMAGE (pulling layers from ACR, no Docker)..."
-                az confcom acipolicygen \
-                  -a "$WORK_TEMPLATE" \
-                  --parameters "$PARAMS" \
-                  --disable-stdio \
-                  --approve-wildcards
+              echo "Generating CCE policy for $IMAGE (pulling layers from ACR, no Docker)..."
+              az confcom acipolicygen \
+                -a "$WORK_TEMPLATE" \
+                --parameters "$PARAMS" \
+                --disable-stdio \
+                --approve-wildcards
 
-                echo "Deploying confidential container group $CG_NAME..."
-                FQDN=$(az deployment group create \
-                  --resource-group "$(resourceGroup)" \
-                  --template-file "$WORK_TEMPLATE" \
-                  --parameters "$PARAMS" \
-                  --query "properties.outputs.fqdn.value" -o tsv)
+              echo "Deploying confidential container group $CG_NAME..."
+              FQDN=$(az deployment group create \
+                --resource-group "$(resourceGroup)" \
+                --template-file "$WORK_TEMPLATE" \
+                --parameters "$PARAMS" \
+                --query "properties.outputs.fqdn.value" -o tsv)
 
-                echo "Deployed. App URL: http://$FQDN"
-                echo "##vso[task.setvariable variable=cgName]$CG_NAME"
-                echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+              echo "Deployed. App URL: http://$FQDN"
+              echo "##vso[task.setvariable variable=cgName]$CG_NAME"
+              echo "##vso[task.setvariable variable=appFqdn]$FQDN"
+            displayName: 'Generate CCE policy (dockerless) + deploy'
 
-          - task: AzureCLI@2
+          - bash: |
+              set -euo pipefail
+              URL="http://$(appFqdn)"
+              echo "Waiting for $URL ..."
+              for i in $(seq 1 36); do
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
+                if [ "$CODE" = "200" ]; then
+                  echo "OK - $URL returned 200. Click Attest in the UI for a live SEV-SNP token."
+                  exit 0
+                fi
+                echo "  attempt $i: HTTP $CODE, retrying in 5s..."
+                sleep 5
+              done
+              echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; a confidential container group can take a few minutes to boot the UVM."
             displayName: 'Smoke test (HTTP 200)'
-            inputs:
-              azureSubscription: '$(azureServiceConnection)'
-              scriptType: bash
-              scriptLocation: inlineScript
-              inlineScript: |
-                set -euo pipefail
-                URL="http://$(appFqdn)"
-                echo "Waiting for $URL ..."
-                for i in $(seq 1 36); do
-                  CODE=$(curl -s -o /dev/null -w "%{http_code}" "$URL" || echo "000")
-                  if [ "$CODE" = "200" ]; then
-                    echo "OK - $URL returned 200. Click Attest in the UI for a live SEV-SNP token."
-                    exit 0
-                  fi
-                  echo "  attempt $i: HTTP $CODE, retrying in 5s..."
-                  sleep 5
-                done
-                echo "##vso[task.logissue type=warning]$URL did not return 200 within timeout; a confidential container group can take a few minutes to boot the UVM."
 
           - bash: |
               set -euo pipefail

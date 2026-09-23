@@ -30,6 +30,11 @@ trigger:
   branches:
     include:
       - main
+  paths:
+    include:
+      - app/**
+      - deploy/**
+      - azure-pipelines.yml
 
 parameters:
   - name: aciSku
@@ -46,8 +51,8 @@ variables:
   resourceGroup:  'sgallhyglz'
   location:       'westus2'
   # User-assigned MI attached to the confidential ACI build agent
-  # (sgall-caci-pipeline-mi: AcrPush on the ACR + Contributor on the RG).
-  miClientId:     'e6bfbc53-a576-4ef1-ac3f-11fef3520a77'
+  # (AcrPush on the ACR + Contributor on the workload resource group).
+  miClientId:     '8a8ed6b8-1a16-4f8d-b6ee-1ab828546456'
   imageName:      'hello-world'
   imageTag:       '$(Build.BuildId)'
   sourceDir:      'app'

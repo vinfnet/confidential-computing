@@ -393,3 +393,6 @@ sov-examples/deploy.log
 cvm-build*.txt
 cvm-build*.log
 *-cvm-build*.txt
+
+# Local demo scripts
+usecase-ado-server-iaas/__simondemo.ps1

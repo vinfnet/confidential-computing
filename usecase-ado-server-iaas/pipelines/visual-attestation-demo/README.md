@@ -55,13 +55,19 @@ here — the pipeline uses `checkout: self` and builds straight from
 
 ```mermaid
 flowchart LR
-    A[Commit] --> B[Pipeline queued on\nconfidential-build-pool]
-    B --> C[az acr build\nserver-side image build]
-    C --> D[ACR: cc-attest:BuildId]
-    D --> E{aciSku?}
+    A["Commit to Contoso app paths"] --> DEF["contoso-application<br/>YAML definition"]
+    DEF --> B["confidential-build-pool<br/>Confidential ACI agent"]
+    MI["Shared agent UAMI<br/>attached at initial deployment"] -.-> B
+    B -->|"az login --identity"| C["az acr build<br/>server-side image build"]
+    MI -->|"AcrPush"| REG["Workload ACR"]
+    MI -->|"Contributor"| RG["Workload resource group"]
+    C --> REG
+    REG --> E{aciSku?}
     E -->|Standard| F[az deployment group create\nStandard ARM -> ACI]
     E -->|Confidential| P[acipolicygen\npull layers from ACR, no Docker]
     P --> Q[az deployment group create\nConfidential ARM -> SEV-SNP ACI]
+    F --> RG
+    Q --> RG
     F --> G[Smoke test: HTTP 200]
     Q --> G
 ```
@@ -72,27 +78,27 @@ flowchart LR
    online confidential ACI agent (provisioned by the parent
    [`usecase-ado-server-iaas` guide](../../README.md)).
 
-   > **The agent image must include the Azure CLI.** The pipeline calls `az`
-   > directly (`az acr build`, `az deployment group create`). Bake `azure-cli`
-   > into the agent image before first use — see *Agent image prerequisites* in
-   > the parent guide.
+  The pipeline calls `az` directly and installs it only if the agent image does
+  not already provide it.
 
 2. **Azure Container Registry** — a Basic (or higher) ACR with the admin user
    enabled: `az acr update -n <acr-name> --admin-enabled true`.
 
-3. **ARM service connection** — Project Settings → Service connections → New →
-   **Azure Resource Manager**, with Contributor on the resource group that holds
-   the ACR and will hold the ACI. Note its **name**.
+3. **Managed identity** — attach the shared agent user-assigned identity during
+  the confidential ACI agent deployment. Grant it persistent `Contributor` on
+  the workload resource group and `AcrPush` on the workload ACR. No ARM service
+  connection is required, and pipeline execution must not depend on PIM.
 
-4. **Create the pipeline** — Pipelines → New pipeline → Azure Repos Git →
-   Existing Azure Pipelines YAML file →
-   `usecase-ado-server-iaas/pipelines/visual-attestation-demo/azure-pipelines.yml`.
+4. **Create the pipeline** — run `Create-HelloWorldPipeline.ps1` from the parent
+  guide. It creates or updates this Contoso definition, exposes the confidential
+  pool to the project, and grants the required pool and repository permissions.
 
 5. **Pipeline variables** — Edit → Variables, add:
 
    | Variable | Example | Notes |
    | --- | --- | --- |
-   | `azureServiceConnection` | `vad-arm` | Name from step 3. |
+  | `subscriptionId` | `<subscription-id>` | Subscription used by the managed identity login. |
+  | `miClientId` | `<client-id>` | Client ID of the identity attached to the agents. |
    | `acrName` | `<acr-name>` | Registry name, no `.azurecr.io`. |
    | `resourceGroup` | `<resource-group>` | Holds the ACR + ACI. |
    | `location` | `northeurope` | Any ACI-capable region. Use one with **Confidential ACI** capacity for the Confidential SKU (e.g. `eastus`, `northeurope`, `westeurope`). |
@@ -102,11 +108,12 @@ flowchart LR
    it in the `variables:` block (e.g. `sharedneu.neu.attest.azure.net` for
    northeurope).
 
-6. **Run it.** Queue the pipeline and pick the **ACI SKU** (`Standard` or
-   `Confidential`) at queue time. On the first run ADO pauses to authorize the
-   agent pool — open the run → **View** → **Permit**. When it finishes, the
-   deploy stage log prints `App URL: http://<dns>.<region>.azurecontainer.io`.
-   On the Confidential SKU, click **Attest** in the UI for a live SEV-SNP token.
+6. **Run it.** The introducing push may not trigger a definition that did not
+  exist yet, so let the provisioning helper queue newly created definitions once
+  or manually queue the first run. Pick the **ACI SKU** (`Standard` or
+  `Confidential`) at queue time. When it finishes, the deploy stage log prints
+  `App URL: http://<dns>.<region>.azurecontainer.io`. On the Confidential SKU,
+  click **Attest** in the UI for a live SEV-SNP token.
 
 ## Onboarding a developer (edit → push → redeploy)
 
@@ -143,18 +150,21 @@ az network bastion tunnel `
 $env:AZP_TOKEN = Read-Host "ADO PAT" -AsSecureString | ConvertFrom-SecureString -AsPlainText
 ```
 
-**3. Clone through the tunnel.** The tunnel presents the server's self-signed cert, so disable TLS verification for this repo only:
+**3. Clone through the tunnel.** Prefer a server certificate trusted by developer
+workstations. For recovery with the sample's self-signed certificate, disable TLS
+verification for this one clone command only:
 
 ```powershell
 $remote = "https://user:$env:AZP_TOKEN@localhost:8443/<collection>/<project>/_git/<repo>"
 git -c http.sslVerify=false clone $remote
 cd <repo>
-git config http.sslVerify false      # persist per-repo so plain git push works
 git config user.name  "<name>"
 git config user.email "<email>"
 ```
 
-The origin URL embeds the PAT, so `git pull` / `git push` work with no further prompts.
+Configure certificate trust before normal pull/push use. Do not persist
+`http.sslVerify=false`, and avoid keeping a PAT in a remote URL outside a disposable
+recovery clone because it remains in `.git/config`.
 
 **4. Edit, push, and watch it redeploy.** Work in a **separate VS Code window** from the one managing the Azure/ADO infrastructure:
 

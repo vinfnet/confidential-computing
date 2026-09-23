@@ -51,6 +51,18 @@ param(
     [string]$UserAssignedIdentityResourceId = "",
 
     [Parameter(Mandatory = $false)]
+    [string]$UserAssignedIdentityName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$WorkloadResourceGroupName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$WorkloadAcrName = "",
+
+    [Parameter(Mandatory = $false)]
+    [string]$WorkloadAcrResourceGroupName = "",
+
+    [Parameter(Mandatory = $false)]
     [string]$KeyVaultName = "",
 
     [Parameter(Mandatory = $false)]
@@ -88,6 +100,21 @@ function Invoke-AzCli {
         throw "Azure CLI command failed: $CommandText"
     }
     return $result
+}
+
+function Ensure-AzRoleAssignment {
+    param(
+        [string]$PrincipalId,
+        [string]$RoleName,
+        [string]$Scope
+    )
+
+    $existing = (Invoke-AzCli "az role assignment list --assignee-object-id $PrincipalId --scope `"$Scope`" --role `"$RoleName`" --query `"[0].id`" --output tsv").Trim()
+    if ([string]::IsNullOrWhiteSpace($existing)) {
+        Invoke-AzCli "az role assignment create --assignee-object-id $PrincipalId --assignee-principal-type ServicePrincipal --role `"$RoleName`" --scope `"$Scope`" --output none"
+    } else {
+        Write-Host "Role '$RoleName' already assigned at '$Scope'." -ForegroundColor DarkGray
+    }
 }
 
 function New-SafeName {
@@ -233,6 +260,20 @@ if ($useSkr -or (-not $useKeyVault) -or $StorePatInKeyVault) {
 
 Set-AzContext -SubscriptionId $SubscriptionId | Out-Null
 
+az group show --name $ResourceGroupName --only-show-errors --output none 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Invoke-AzCli "az group create --name $ResourceGroupName --location $Location --output none"
+}
+
+if ([string]::IsNullOrWhiteSpace($UserAssignedIdentityResourceId) -and
+    -not [string]::IsNullOrWhiteSpace($UserAssignedIdentityName)) {
+    $UserAssignedIdentityResourceId = (Invoke-AzCli "az identity list --resource-group $ResourceGroupName --query `"[?name=='$UserAssignedIdentityName'] | [0].id`" --output tsv").Trim()
+    if ([string]::IsNullOrWhiteSpace($UserAssignedIdentityResourceId)) {
+        Write-Host "Creating user-assigned identity '$UserAssignedIdentityName'..." -ForegroundColor DarkGray
+        $UserAssignedIdentityResourceId = (Invoke-AzCli "az identity create --resource-group $ResourceGroupName --name $UserAssignedIdentityName --location $Location --query id --output tsv").Trim()
+    }
+}
+
 $prefixSafe = New-SafeName -Raw $Prefix -MaxLength 18 -Fallback "adocaci"
 if ($AgentCount -lt 1) { throw "-AgentCount must be at least 1." }
 
@@ -240,23 +281,45 @@ $useVnet = -not [string]::IsNullOrWhiteSpace($VnetName)
 if ($useVnet -and [string]::IsNullOrWhiteSpace($VnetResourceGroup)) { $VnetResourceGroup = $ResourceGroupName }
 $subnetResourceId = ""
 $useIdentity = -not [string]::IsNullOrWhiteSpace($UserAssignedIdentityResourceId)
+$miClientId = ""
+$miPrincipalId = ""
+
+if ($useIdentity) {
+    $identity = Invoke-AzCli "az identity show --ids $UserAssignedIdentityResourceId --output json" | ConvertFrom-Json
+    $miClientId = $identity.clientId
+    $miPrincipalId = $identity.principalId
+    Write-Host "Managed identity clientId=$miClientId principalId=$miPrincipalId" -ForegroundColor DarkGray
+} elseif (-not [string]::IsNullOrWhiteSpace($WorkloadResourceGroupName) -or
+          -not [string]::IsNullOrWhiteSpace($WorkloadAcrName)) {
+    throw "Workload RBAC requires -UserAssignedIdentityResourceId or -UserAssignedIdentityName."
+}
+
+if (-not [string]::IsNullOrWhiteSpace($WorkloadResourceGroupName)) {
+    $workloadRgId = (Invoke-AzCli "az group show --name $WorkloadResourceGroupName --query id --output tsv").Trim()
+    Ensure-AzRoleAssignment -PrincipalId $miPrincipalId -RoleName "Contributor" -Scope $workloadRgId
+}
+
+if (-not [string]::IsNullOrWhiteSpace($WorkloadAcrName)) {
+    if ([string]::IsNullOrWhiteSpace($WorkloadAcrResourceGroupName)) {
+        $WorkloadAcrResourceGroupName = $WorkloadResourceGroupName
+    }
+    if ([string]::IsNullOrWhiteSpace($WorkloadAcrResourceGroupName)) {
+        throw "-WorkloadAcrName requires -WorkloadAcrResourceGroupName or -WorkloadResourceGroupName."
+    }
+    $workloadAcrId = (Invoke-AzCli "az acr show --name $WorkloadAcrName --resource-group $WorkloadAcrResourceGroupName --query id --output tsv").Trim()
+    Ensure-AzRoleAssignment -PrincipalId $miPrincipalId -RoleName "AcrPush" -Scope $workloadAcrId
+}
 
 # --- Key Vault-backed PAT retrieval (PAT never enters the ARM template or container env) ---
 # When -KeyVaultName is supplied, the agent fetches the PAT at runtime from Key Vault using
 # its user-assigned managed identity, so the token only ever exists in-memory inside the
 # confidential (SEV-SNP) TEE. This requires the managed identity to be attached to the ACI.
-$miClientId = ""
 if ($useKeyVault) {
     if (-not $useIdentity) {
         throw "Key Vault PAT retrieval (-KeyVaultName) requires -UserAssignedIdentityResourceId so the confidential agent can authenticate to Key Vault via managed identity."
     }
 
     Write-Host "=== Step 0/7: Configure Key Vault-backed PAT retrieval ===" -ForegroundColor Cyan
-
-    $identity = Invoke-AzCli "az identity show --ids $UserAssignedIdentityResourceId --output json" | ConvertFrom-Json
-    $miClientId = $identity.clientId
-    $miPrincipalId = $identity.principalId
-    Write-Host "Managed identity clientId=$miClientId principalId=$miPrincipalId" -ForegroundColor DarkGray
 
     $kv = Invoke-AzCli "az keyvault show --name $KeyVaultName --output json" | ConvertFrom-Json
     $kvId = $kv.id
@@ -290,11 +353,6 @@ $wrapPrivPem = ""
 $akvEndpoint = ""
 if ($useSkr) {
     Write-Host "=== Step 0/7: Configure Secure Key Release (attestation-gated PAT) ===" -ForegroundColor Cyan
-
-    $identity = Invoke-AzCli "az identity show --ids $UserAssignedIdentityResourceId --output json" | ConvertFrom-Json
-    $miClientId = $identity.clientId
-    $miPrincipalId = $identity.principalId
-    Write-Host "Managed identity clientId=$miClientId principalId=$miPrincipalId" -ForegroundColor DarkGray
 
     az keyvault show --name $KeyVaultName --only-show-errors --output none 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -331,11 +389,6 @@ if ([string]::IsNullOrWhiteSpace($AcrName)) {
 }
 
 Write-Host "=== Step 1/7: Ensure resource group and ACR exist ===" -ForegroundColor Cyan
-
-az group show --name $ResourceGroupName --only-show-errors --output none 2>$null
-if ($LASTEXITCODE -ne 0) {
-    Invoke-AzCli "az group create --name $ResourceGroupName --location $Location --output none"
-}
 
 az acr show --name $AcrName --resource-group $ResourceGroupName --only-show-errors --output none 2>$null
 if ($LASTEXITCODE -ne 0) {
