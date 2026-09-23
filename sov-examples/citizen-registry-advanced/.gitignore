@@ -70,6 +70,9 @@ tmp/
 temp/
 *.tmp
 
+# Local presenter material
+citizen-registry-sovereignty-demo-script.md
+
 # Bicep Build Output
 bicep/**/*.json.bak
 bicep/**/*.bicep.bak
