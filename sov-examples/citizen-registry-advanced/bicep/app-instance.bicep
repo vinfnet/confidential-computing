@@ -125,8 +125,10 @@ var appSubnetPrefix = '10.${networkSecondOctet}.3.0/24'
 var bastionSubnetPrefix = '10.${networkSecondOctet}.2.0/24'
 var dbSubnetPrefix = '10.${sqlNetworkSecondOctet}.4.0/24'
 var vmOsPublisher = 'Canonical'
-var vmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
-var vmOsSku = '22_04-lts-cvm'
+var appVmOsOffer = '0001-com-ubuntu-pro-confidential-vm-jammy'
+var appVmOsSku = 'pro-22_04-lts-cvm'
+var sqlVmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
+var sqlVmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
 var vmDataDiskSize = 128
 var appPrivateIp = '10.${networkSecondOctet}.3.4'
@@ -637,8 +639,8 @@ resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     storageProfile: {
       imageReference: {
         publisher: vmOsPublisher
-        offer: vmOsOffer
-        sku: vmOsSku
+        offer: appVmOsOffer
+        sku: appVmOsSku
         version: vmOsVersion
       }
       osDisk: {
@@ -739,8 +741,8 @@ resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
     storageProfile: {
       imageReference: {
         publisher: vmOsPublisher
-        offer: vmOsOffer
-        sku: vmOsSku
+        offer: sqlVmOsOffer
+        sku: sqlVmOsSku
         version: vmOsVersion
       }
       osDisk: {
