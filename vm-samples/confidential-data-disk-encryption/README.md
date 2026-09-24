@@ -1,5 +1,7 @@
 # Confidential Data Disk Encryption CVM sample
 
+**Last Updated:** September 2026
+
 This sample deploys a Linux or Windows Azure confidential virtual machine (CVM) with confidential encryption for both the operating system disk and an attached data disk.
 
 > [!IMPORTANT]
@@ -65,12 +67,14 @@ The script also provides three CVM profiles that select a matching SKU. All prof
 
 Pass `-Location` with a profile to use another CDDE-enabled region. Do not combine profiles or combine a profile with `-VmSize`. CDDE preview and SKU availability must still be confirmed for the selected region.
 
-## Regional test matrix
+## Regions tested (September 2026)
 
 > [!CAUTION]
 > **Microsoft internal use only.** This table is a point-in-time view from tests run from September 2 through September 11, 2026, in one Microsoft subscription. Regional capacity, quota, SKU restrictions, and CDDE preview availability can vary by subscription and can change without notice. Do not treat these results as a public availability statement or deployment guarantee.
 
 `Passed end to end` means that VM deployment, confidential data-disk attachment, the guest CDDE extension, and guest encryption verification all succeeded. `CVM passed` confirms only confidential VM deployment and attestation, not CDDE availability.
+
+Full CDDE validation passed in Central US EUAP with `Standard_DC2ads_v5` on Ubuntu 22.04, RHEL 10.2, and Windows Server 2022. Tests in the other regions below validated the underlying CVM, identified a confidential data-disk attachment failure, or were limited by quota; they do not establish CDDE preview availability in those regions.
 
 | Region | OS | SKU and isolation | CVM result | CDDE result |
 |---|---|---|---|---|

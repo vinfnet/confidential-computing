@@ -1,6 +1,6 @@
 # Confidential Virtual Machines
 
-**Last Updated:** June 2026
+**Last Updated:** September 2026
 
 ## Overview
 
@@ -424,9 +424,25 @@ New-AzResourceGroupDeployment -Name DeployLocalTemplate -ResourceGroupName "<YOU
 
 A successful run prints the JWT plus parsed claims and ends with `Attested Platform Successfully!!` and `x-ms-compliance-status: azure-compliant-cvm`.
 
-### Validation Matrix (June 2026)
+### Regions Tested (September 2026)
 
-The following end-to-end deployments were validated with successful in-VM attestation:
+The following regions and SKUs were tested on September 2, 2026. A passing result means the CVM deployed and in-VM attestation returned `x-ms-compliance-status=azure-compliant-cvm`.
+
+| Region | VM SKU | Isolation | Result | Notes |
+|---|---|---|---|---|
+| North Europe (`northeurope`) | `Standard_DC2as_v5` | AMD SEV-SNP | ✅ Passed | Deployment and attestation succeeded. |
+| West US 2 (`westus2`) | `Standard_DC2as_v6` | AMD SEV-SNP | ✅ Passed | Deployment and attestation succeeded. |
+| West Europe (`westeurope`) | `Standard_DC2es_v6` | Intel TDX | ✅ Passed | Deployment and attestation succeeded. |
+| East US 2 EUAP (`eastus2euap`) | `Standard_DC2as_v6` | AMD SEV-SNP | ✅ Passed | Deployment and attestation succeeded. |
+| Korea Central (`koreacentral`) | `Standard_DC2as_v6` | AMD SEV-SNP | ✅ Passed | Required `-SkipSkuPreflight` because `Get-AzComputeResourceSku` incorrectly reported `NotAvailableForSubscription`. |
+| Central US EUAP (`centraluseuap`) | `Standard_DC2ads_v5` | AMD SEV-SNP | ⚠️ Retry required | Deployment failed after 30 minutes with `InternalDiskManagementError`; retry before treating the region as unavailable. |
+| Central US EUAP (`centraluseuap`) | `Standard_DC2as_v6` | AMD SEV-SNP | ❌ Blocked by quota | The subscription had a `standardDCasv6Family` quota of 0; deployment requires at least 2 vCPUs. |
+
+Regional SKU availability and quota are subscription-specific and can change. Run the pre-flight checks before deployment; use `-SkipSkuPreflight` only when Azure's SKU APIs are known to report a false negative and ARM deployment has been independently validated.
+
+#### OS Validation Matrix
+
+The following operating-system combinations were also validated end to end with successful in-VM attestation:
 
 | Isolation | OS | VM SKU | Region | Result | Key claims |
 |---|---|---|---|---|---|
