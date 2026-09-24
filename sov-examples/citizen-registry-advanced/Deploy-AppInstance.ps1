@@ -685,7 +685,18 @@ $sqlBootstrap = @"
 runcmd:
     - echo '$sqlBootstrapScriptBase64' | base64 -d | bash
 "@
-$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrap))
+$appBootstrapBytes = [Text.Encoding]::UTF8.GetBytes($appBootstrap)
+$compressedStream = [IO.MemoryStream]::new()
+$gzipStream = [IO.Compression.GzipStream]::new($compressedStream, [IO.Compression.CompressionMode]::Compress)
+$gzipStream.Write($appBootstrapBytes, 0, $appBootstrapBytes.Length)
+$gzipStream.Dispose()
+$compressedBootstrapBase64 = [Convert]::ToBase64String($compressedStream.ToArray())
+$compressedStream.Dispose()
+$appBootstrapStub = @"
+#!/bin/bash
+echo '$compressedBootstrapBase64' | base64 -d | gzip -d | bash
+"@
+$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrapStub))
 $sqlCustomData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sqlBootstrap))
 if ($customData.Length -gt 87380) {
     throw "Application custom data is $($customData.Length) characters; Azure allows at most 87380."
