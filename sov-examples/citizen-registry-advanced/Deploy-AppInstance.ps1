@@ -468,8 +468,8 @@ try {
 if (-not $hsmBootstrapComplete) { throw 'Managed HSM CMK bootstrap did not complete; no CVM was deployed.' }
 
 # Embed the local application source in cloud-init so the app VM is usable after deployment.
-$archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.gz"
-tar --exclude='app-src/__pycache__' --exclude='app-src/test_*.py' -czf $archivePath -C "./app-instance" app-src
+$archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.xz"
+tar --exclude='app-src/__pycache__' --exclude='app-src/test_*.py' -cJf $archivePath -C "./app-instance" app-src
 $archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
 $appBootstrapScript = @"
 #!/bin/bash
@@ -486,7 +486,7 @@ for _ in `$(seq 1 120); do
     fi
 done
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
-echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
+echo '$archiveBase64' | base64 -d | tar -xJf - -C /opt/citizen-registry
 mkdir -p /opt/citizen-registry/app-src/static/vendor
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
@@ -1049,7 +1049,7 @@ cloud-init status --wait
 systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
 systemctl stop citizenhelp-llm.service 2>/dev/null || true
 mkdir -p /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
-echo '$archiveBase64' | base64 -d | tar -xzf - -C /opt/citizen-registry
+echo '$archiveBase64' | base64 -d | tar -xJf - -C /opt/citizen-registry
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
 CCTV_VIDEO=/var/lib/citizen-registry/dvr-cache/$dvrBlobName
