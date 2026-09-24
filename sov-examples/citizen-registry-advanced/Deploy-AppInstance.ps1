@@ -83,6 +83,8 @@ param(
 
     [string]$SqlLocation = "northeurope",
 
+    [string]$SourceArchiveUrl = '',
+
     [ValidateRange(0, 255)]
     [int]$NetworkSecondOctet = 20,
 
@@ -467,10 +469,12 @@ try {
 }
 if (-not $hsmBootstrapComplete) { throw 'Managed HSM CMK bootstrap did not complete; no CVM was deployed.' }
 
-# Embed the local application source in cloud-init so the app VM is usable after deployment.
-$archivePath = Join-Path $env:TEMP "citizen-registry-$Prefix.tar.xz"
-tar --exclude='app-src/__pycache__' --exclude='app-src/test_*.py' -cJf $archivePath -C "./app-instance" app-src
-$archiveBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($archivePath))
+# Fetch the committed application source during first boot so the full bootstrap
+# remains below Azure's custom-data limit. Override this URL for a fork or mirror.
+if ([string]::IsNullOrWhiteSpace($SourceArchiveUrl)) {
+    $sourceCommit = (git rev-parse HEAD).Trim()
+    $SourceArchiveUrl = "https://github.com/vinfnet/confidential-computing/archive/$sourceCommit.tar.gz"
+}
 $appBootstrapScript = @"
 #!/bin/bash
 set -e
@@ -486,7 +490,14 @@ for _ in `$(seq 1 120); do
     fi
 done
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
-echo '$archiveBase64' | base64 -d | tar -xJf - -C /opt/citizen-registry
+SOURCE_ARCHIVE=/tmp/citizen-registry-source.tar.gz
+curl -fL --retry 5 --retry-delay 5 '$SourceArchiveUrl' -o "`$SOURCE_ARCHIVE"
+tar -xzf "`$SOURCE_ARCHIVE" -C /tmp
+SOURCE_DIR=`$(find /tmp -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' | head -1)
+test -n "`$SOURCE_DIR"
+cp -a "`$SOURCE_DIR/." /opt/citizen-registry/app-src/
+rm -rf "`$SOURCE_ARCHIVE"
+find /tmp -maxdepth 1 -type d -name 'confidential-computing-*' -exec rm -rf {} +
 mkdir -p /opt/citizen-registry/app-src/static/vendor
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
@@ -685,18 +696,7 @@ $sqlBootstrap = @"
 runcmd:
     - echo '$sqlBootstrapScriptBase64' | base64 -d | bash
 "@
-$appBootstrapBytes = [Text.Encoding]::UTF8.GetBytes($appBootstrap)
-$compressedStream = [IO.MemoryStream]::new()
-$gzipStream = [IO.Compression.GzipStream]::new($compressedStream, [IO.Compression.CompressionMode]::Compress)
-$gzipStream.Write($appBootstrapBytes, 0, $appBootstrapBytes.Length)
-$gzipStream.Dispose()
-$compressedBootstrapBase64 = [Convert]::ToBase64String($compressedStream.ToArray())
-$compressedStream.Dispose()
-$appBootstrapStub = @"
-#!/bin/bash
-echo '$compressedBootstrapBase64' | base64 -d | gzip -d | bash
-"@
-$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrapStub))
+$customData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($appBootstrap))
 $sqlCustomData = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sqlBootstrap))
 if ($customData.Length -gt 87380) {
     throw "Application custom data is $($customData.Length) characters; Azure allows at most 87380."
@@ -1060,7 +1060,14 @@ cloud-init status --wait
 systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
 systemctl stop citizenhelp-llm.service 2>/dev/null || true
 mkdir -p /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
-echo '$archiveBase64' | base64 -d | tar -xJf - -C /opt/citizen-registry
+SOURCE_ARCHIVE=/tmp/citizen-registry-source.tar.gz
+curl -fL --retry 5 --retry-delay 5 '$SourceArchiveUrl' -o "`$SOURCE_ARCHIVE"
+tar -xzf "`$SOURCE_ARCHIVE" -C /tmp
+SOURCE_DIR=`$(find /tmp -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' | head -1)
+test -n "`$SOURCE_DIR"
+cp -a "`$SOURCE_DIR/." /opt/citizen-registry/app-src/
+rm -rf "`$SOURCE_ARCHIVE"
+find /tmp -maxdepth 1 -type d -name 'confidential-computing-*' -exec rm -rf {} +
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
 CCTV_VIDEO=/var/lib/citizen-registry/dvr-cache/$dvrBlobName
