@@ -1584,6 +1584,51 @@ echo 'GPU_ATTEST_EXIT=0'
         }
         Write-Host "Confidential H100 onboarding and attestation succeeded" -ForegroundColor Green
 
+        Write-Host "Verifying Citizen Help end to end..." -ForegroundColor Magenta
+        $citizenHelpValidationScript = @'
+#!/bin/bash
+set -euo pipefail
+started_at=$(date --iso-8601=seconds)
+response_file=$(mktemp)
+trap 'rm -f "$response_file"; systemctl status citizenhelp-llm.service citizen-registry.service --no-pager || true; journalctl -u citizenhelp-llm.service -u citizen-registry.service -n 100 --no-pager || true' ERR
+systemctl is-active --quiet citizenhelp-llm.service
+systemctl is-active --quiet citizen-registry.service
+for attempt in $(seq 1 90); do
+    if curl -fsS http://127.0.0.1:8010/health | python3 -c "import json,sys; assert json.load(sys.stdin)['status'] == 'ready'"; then
+        break
+    fi
+    if [ "$attempt" -eq 90 ]; then exit 1; fi
+    sleep 10
+done
+http_status=$(curl -sS -o "$response_file" -w '%{http_code}' \
+    --connect-timeout 10 --max-time 210 \
+    -H 'Content-Type: application/json' \
+    --data '{"question":"what is the average amount of tax paid by men in their 40s"}' \
+    http://127.0.0.1:8000/api/citizenhelp)
+test "$http_status" = '200'
+python3 - "$response_file" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert isinstance(payload.get('answer'), str) and payload['answer'].strip()
+assert payload.get('model', {}).get('device') == 'cuda:0'
+assert payload.get('model', {}).get('fallback', '').startswith('disabled')
+PY
+if journalctl -u citizenhelp-llm.service --since "$started_at" --no-pager | grep -Eq 'OutOfMemoryError|mha_graph|BrokenPipeError|generation failed|timed out'; then
+    exit 1
+fi
+test "$(curl -sS -o /dev/null -w '%{http_code}' \
+    -H 'Content-Type: application/json' --data '{}' \
+    http://127.0.0.1:8000/api/citizen)" = '401'
+rm -f "$response_file"
+trap - ERR
+echo 'CITIZEN_HELP_READY=1'
+'@
+        Invoke-GpuRunCommand -Label 'Citizen Help end-to-end validation' -Script $citizenHelpValidationScript -SuccessMarker 'CITIZEN_HELP_READY=1' | Out-Null
+        Write-Host "Citizen Help H100 inference is live" -ForegroundColor Green
+
         Write-Host "Verifying the live confidential CCTV pipeline..." -ForegroundColor Magenta
         $cctvValidationScript = @'
 #!/bin/bash
