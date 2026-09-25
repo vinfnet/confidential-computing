@@ -56,6 +56,18 @@ __pycache__/
 # Node/npm
 app-instance/app-src/node_modules/
 app-instance/app-src/npm-debug.log
+demo-video/node_modules/
+
+# Demo video generated and local artifacts
+demo-video/output/
+demo-video/.env
+demo-video/playwright-report/
+demo-video/test-results/
+demo-video/**/*.webm
+demo-video/**/*.mp4
+demo-video/**/*.wav
+demo-video/**/*.vtt
+demo-video/**/*.trace.zip
 
 # IDE and Editor
 .vscode/

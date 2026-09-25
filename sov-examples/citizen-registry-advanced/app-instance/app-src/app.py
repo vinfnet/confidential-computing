@@ -1586,6 +1586,12 @@ def data_explorer():
     return render_template('data_explorer.html', current_page='data_explorer')
 
 
+@app.route('/architecture', methods=['GET'])
+def architecture():
+    """Render the logical deployment and trust-boundary overview."""
+    return render_template('architecture.html', current_page='architecture')
+
+
 @app.route('/api/data-explorer/schema', methods=['GET'])
 def data_explorer_schema():
     """Return the allowlisted fictional database tree and column metadata."""

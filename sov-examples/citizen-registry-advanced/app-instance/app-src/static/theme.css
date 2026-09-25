@@ -327,3 +327,238 @@ select:focus-visible {
         margin-left: 0;
     }
 }
+
+.architecture-page {
+    min-height: 100vh;
+    margin: 0;
+    padding: 20px;
+    font-family: Georgia, "Times New Roman", serif;
+}
+
+.architecture-page *,
+.architecture-page *::before,
+.architecture-page *::after {
+    box-sizing: border-box;
+}
+
+.architecture-main {
+    width: min(1520px, 100%);
+    min-height: calc(100vh - 40px);
+    margin: 0 auto;
+    padding: 24px 32px 30px;
+    border-top: 6px solid var(--accent);
+    background: var(--panel);
+    box-shadow: 0 12px 40px var(--shadow);
+}
+
+.architecture-header {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 18px;
+}
+
+.architecture-header h1 {
+    margin: 0;
+    color: var(--ink);
+    font-size: 42px;
+    letter-spacing: 0;
+}
+
+.architecture-header > p {
+    max-width: 560px;
+    margin: 0 0 4px;
+    text-align: right;
+    font: 15px/1.45 "Trebuchet MS", sans-serif;
+}
+
+.architecture-eyebrow {
+    margin: 0 0 8px;
+    color: var(--accent) !important;
+    font: 700 12px/1.3 "Trebuchet MS", sans-serif;
+    text-transform: uppercase;
+}
+
+.architecture-figure {
+    margin: 0;
+    border: 1px solid var(--line);
+    background: var(--panel-soft);
+}
+
+.architecture-svg {
+    display: block;
+    width: 100%;
+    height: auto;
+    min-width: 980px;
+}
+
+.architecture-figure {
+    overflow-x: auto;
+}
+
+.architecture-cloud-boundary {
+    fill: color-mix(in srgb, var(--accent) 3%, var(--panel));
+    stroke: var(--accent);
+    stroke-width: 2;
+}
+
+.architecture-boundary-label,
+.architecture-region-title,
+.architecture-node-title,
+.architecture-capability-label {
+    fill: var(--ink);
+    font: 700 15px/1.2 "Trebuchet MS", sans-serif;
+}
+
+.architecture-boundary-label {
+    fill: var(--accent);
+    font-size: 13px;
+}
+
+.architecture-policy rect {
+    fill: color-mix(in srgb, #0078d4 9%, var(--panel));
+    stroke: #0078d4;
+    stroke-width: 2;
+}
+
+.architecture-policy .architecture-node-title {
+    font-size: 18px;
+}
+
+.architecture-capability-label {
+    fill: var(--muted);
+    font-size: 11px;
+}
+
+.architecture-region > rect,
+.architecture-services-region > rect {
+    fill: var(--panel);
+    stroke: var(--line);
+    stroke-width: 2;
+    stroke-dasharray: 8 6;
+}
+
+.architecture-app-region > rect { stroke: #0078d4; }
+.architecture-db-region > rect { stroke: #008272; }
+.architecture-services-region > rect { stroke: #8661c5; }
+
+.architecture-region-detail,
+.architecture-node-detail,
+.architecture-policy .architecture-node-detail {
+    fill: var(--muted);
+    font: 12px/1.2 "Trebuchet MS", sans-serif;
+}
+
+.architecture-node > rect {
+    fill: var(--panel-soft);
+    stroke: var(--line);
+    stroke-width: 2;
+}
+
+.architecture-node[data-architecture-node="app"] > rect { stroke: #0078d4; }
+.architecture-node[data-architecture-node="database"] > rect { stroke: #008272; }
+.architecture-node[data-architecture-node="hsm"] > rect { stroke: #8661c5; }
+.architecture-node[data-architecture-node="attestation"] > rect { stroke: #d83b01; }
+.architecture-node[data-architecture-node="gpu"] > rect { stroke: var(--good); }
+
+.architecture-path {
+    fill: none;
+    stroke-width: 4;
+    stroke-linecap: round;
+    marker-end: url(#architecture-arrow);
+}
+
+.architecture-ingress { stroke: #0078d4; }
+.architecture-local { stroke: var(--good); }
+.architecture-peering {
+    stroke: #008272;
+    marker-start: url(#architecture-arrow-back);
+}
+.architecture-private-link {
+    stroke: #8661c5;
+    stroke-dasharray: 12 7;
+}
+.architecture-attestation {
+    stroke: #d83b01;
+    stroke-dasharray: 3 8;
+}
+
+.architecture-connection-labels text {
+    fill: var(--muted);
+    font: 700 11px/1.2 "Trebuchet MS", sans-serif;
+}
+
+.architecture-caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--line);
+    font: 12px/1.4 "Trebuchet MS", sans-serif;
+}
+
+.architecture-legend {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px 16px;
+    margin: 0;
+    padding: 0;
+    color: var(--muted);
+    list-style: none;
+}
+
+.architecture-legend li {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+.legend-line {
+    display: inline-block;
+    width: 30px;
+    border-top: 3px solid #0078d4;
+}
+.legend-peering { border-color: #008272; }
+.legend-private-link { border-color: #8661c5; border-top-style: dashed; }
+.legend-attestation { border-color: #d83b01; border-top-style: dotted; }
+
+.architecture-policy-note {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 16px;
+    margin-top: 16px;
+    padding: 16px 18px;
+    border-left: 4px solid #0078d4;
+    background: var(--panel-soft);
+}
+
+.architecture-policy-note h2 {
+    margin: 0 0 5px;
+    color: var(--ink);
+    font-size: 19px;
+}
+
+.architecture-policy-note p {
+    margin: 0;
+    font: 14px/1.5 "Trebuchet MS", sans-serif;
+}
+
+@media (max-width: 900px) {
+    .architecture-page { padding: 0; }
+    .architecture-main { min-height: 100vh; padding: 20px; }
+    .architecture-header { display: block; }
+    .architecture-header h1 { font-size: 34px; }
+    .architecture-header > p { margin-top: 10px; text-align: left; }
+    .architecture-caption { align-items: flex-start; flex-direction: column; }
+    .architecture-legend { justify-content: flex-start; }
+}
+
+@media (max-width: 560px) {
+    .architecture-main { padding: 16px; }
+    .architecture-header h1 { font-size: 29px; }
+    .architecture-policy-note { grid-template-columns: 1fr; }
+}

@@ -21,14 +21,14 @@
         <path id="{{ diagram_id }}-app-db" data-path="app-db" d="M610 210 H700 V120 H790" />
         <path id="{{ diagram_id }}-app-hsm" data-path="app-hsm" d="M610 300 H700 V410 H790" />
         <path id="{{ diagram_id }}-app-gpu" data-path="app-gpu" d="M610 240 H1090" />
-        <path id="{{ diagram_id }}-gpu-browser" data-path="gpu-browser" d="M1240 300 V555 H125 V300" />
+        <path id="{{ diagram_id }}-gpu-app" data-path="gpu-app" d="M1090 270 H610" />
+        <path id="{{ diagram_id }}-app-browser" data-path="app-browser" d="M350 270 H250" />
         <path id="{{ diagram_id }}-browser-source" data-path="browser-source" d="M250 240 H350" />
         <path id="{{ diagram_id }}-source-app" data-path="source-app" d="M610 210 H700 V120 H790" />
         <path id="{{ diagram_id }}-app-gpu-cctv" data-path="app-gpu-cctv" d="M610 240 H1090" />
-        <path id="{{ diagram_id }}-gpu-browser-cctv" data-path="gpu-browser-cctv" d="M1240 300 V555 H125 V300" />
       </g>
       <g class="diagram-pulses" aria-hidden="true">
-        {% for path_name in ['browser-app', 'app-db', 'app-hsm', 'app-gpu', 'gpu-browser', 'browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] %}
+        {% for path_name in ['browser-app', 'app-db', 'app-hsm', 'app-gpu', 'gpu-app', 'app-browser', 'browser-source', 'source-app', 'app-gpu-cctv'] %}
         <circle class="data-pulse" data-pulse-for="{{ path_name }}" r="7"><animateMotion dur="1.25s" repeatCount="indefinite" rotate="auto"><mpath href="#{{ diagram_id }}-{{ path_name }}" /></animateMotion></circle>
         {% endfor %}
       </g>

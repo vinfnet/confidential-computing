@@ -1,4 +1,5 @@
 <nav class="top-nav" aria-label="Demo applications">
+    <a href="{{ url_for('architecture') }}" {% if current_page == 'architecture' %}aria-current="page"{% endif %}>Architecture</a>
     <a href="{{ url_for('citizens') }}" {% if current_page == 'citizens' %}aria-current="page"{% endif %}>Citizen Registry</a>
     <a href="{{ url_for('cctv') }}" {% if current_page == 'cctv' %}aria-current="page"{% endif %}>Confidential CCTV</a>
     <a href="{{ url_for('citizen_help') }}" {% if current_page == 'citizen_help' %}aria-current="page"{% endif %}>Citizen Help</a>

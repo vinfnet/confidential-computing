@@ -5,8 +5,8 @@
     database: { text: 'Retrieving records', nodes: { browser: 'Waiting', app: 'Querying', database: 'Reading records', hsm: 'Available', gpu: 'CC ON · attested' }, paths: ['browser-app', 'app-db'] },
     'hsm-evidence': { text: 'Checking key evidence', nodes: { browser: 'Waiting', app: 'Reading evidence', database: 'Protected', hsm: 'Key evidence', gpu: 'CC ON · attested' }, paths: ['app-hsm'] },
     'gpu-processing': { text: 'Confidential GPU processing', nodes: { browser: 'Waiting', app: 'Bounded context', database: 'Protected', hsm: 'Available', gpu: 'H100 · inference' }, paths: ['app-gpu'] },
-    response: { text: 'Response returning', nodes: { browser: 'Answer received', app: 'Returning answer', database: 'Protected', hsm: 'Available', gpu: 'H100 · complete' }, paths: ['gpu-browser'] },
-    'cctv-processing': { text: 'CCTV anonymization', nodes: { browser: 'Monitoring', app: 'Streaming HLS', database: 'Protected', hsm: 'Key evidence', gpu: 'Anonymizing faces' }, paths: ['browser-source', 'source-app', 'app-gpu-cctv', 'gpu-browser-cctv'] },
+    response: { text: 'Response returning', nodes: { browser: 'Answer received', app: 'Returning answer', database: 'Protected', hsm: 'Available', gpu: 'H100 · complete' }, paths: ['gpu-app', 'app-browser'] },
+    'cctv-processing': { text: 'CCTV anonymization', nodes: { browser: 'Monitoring', app: 'Streaming HLS', database: 'Protected', hsm: 'Key evidence', gpu: 'Anonymizing faces' }, paths: ['browser-source', 'source-app', 'app-gpu-cctv', 'gpu-app', 'app-browser'] },
     unavailable: { text: 'Unavailable', nodes: { browser: 'Unavailable', app: 'Unavailable', database: 'Unknown', hsm: 'Unknown', gpu: 'Unavailable' }, paths: [] },
   };
 

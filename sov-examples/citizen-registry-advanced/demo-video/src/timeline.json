@@ -1,0 +1,29 @@
+{
+  "durationSeconds": 210,
+  "viewport": { "width": 1920, "height": 1080 },
+  "sections": [
+    { "id": "opening", "start": 0, "end": 40 },
+    { "id": "data-sovereignty", "start": 40, "end": 70 },
+    { "id": "operational-sovereignty", "start": 70, "end": 115 },
+    { "id": "digital-sovereignty", "start": 115, "end": 180 },
+    { "id": "boundary", "start": 180, "end": 200 },
+    { "id": "close", "start": 200, "end": 210 }
+  ],
+  "actions": [
+    { "at": 0, "handler": "openingArchitecture", "checkpoint": "00-architecture" },
+    { "at": 40, "handler": "opening" },
+    { "at": 42, "handler": "showRegistry" },
+    { "at": 44, "handler": "openPassport", "checkpoint": "44-fictional-passport" },
+    { "at": 52, "handler": "closePassport" },
+    { "at": 54, "handler": "openHistory", "checkpoint": "54-history" },
+    { "at": 65, "handler": "closeHistory" },
+    { "at": 70, "handler": "openSecurityEvidence", "checkpoint": "70-security-evidence" },
+    { "at": 82, "handler": "showGpuEvidence" },
+    { "at": 94, "handler": "showEncryptionEvidence" },
+    { "at": 115, "handler": "openCitizenHelp", "checkpoint": "115-citizen-help" },
+    { "at": 119, "handler": "askAverageAge" },
+    { "at": 145, "handler": "askSalaryBands", "checkpoint": "145-grounded-answers" },
+    { "at": 180, "handler": "showBoundary", "checkpoint": "180-boundary" },
+    { "at": 200, "handler": "closingFrame", "checkpoint": "200-close" }
+  ]
+}

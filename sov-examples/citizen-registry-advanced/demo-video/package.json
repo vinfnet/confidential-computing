@@ -1,0 +1,19 @@
+{
+  "name": "citizen-registry-demo-video",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "analyze": "node src/narration.mjs --analyze",
+    "narrate": "node src/narration.mjs --synthesize",
+    "rehearse": "node src/record.mjs --rehearsal",
+    "record": "node src/record.mjs --record",
+    "render": "node src/render.mjs",
+    "verify": "node src/verify.mjs"
+  },
+  "dependencies": {
+    "@azure/identity": "4.13.3",
+    "microsoft-cognitiveservices-speech-sdk": "1.51.0",
+    "playwright": "1.63.0"
+  }
+}
