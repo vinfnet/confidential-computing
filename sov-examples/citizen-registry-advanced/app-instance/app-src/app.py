@@ -48,12 +48,13 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = secrets.token_hex(32)
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024
 media_generator = MediaGenerator()
+MTLS_PROTECTED_ENDPOINTS = frozenset({'create_citizen', 'update_citizen', 'delete_citizen'})
 
 
 @app.before_request
 def enforce_mtls_for_api():
-    """Require nginx to verify a client certificate for registry mutations/reads."""
-    if MTLS_ENABLED and request.path.startswith('/api') and request.headers.get('X-Client-Verify') != 'SUCCESS':
+    """Require nginx to verify a client certificate for registry mutations."""
+    if MTLS_ENABLED and request.endpoint in MTLS_PROTECTED_ENDPOINTS and request.headers.get('X-Client-Verify') != 'SUCCESS':
         return jsonify({'error': 'Valid client certificate required'}), 401
 
 
@@ -1134,7 +1135,7 @@ def _citizen_help_context(question):
                   WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
                       CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 50 AND 59 THEN '50s'
                 END AS age_band,
-                c.sex, AVG(t.gross_salary_n), COUNT(DISTINCT c.id)
+                c.sex, AVG(t.gross_salary_n), AVG(t.tax_paid_n), COUNT(DISTINCT c.id)
            FROM citizen_registry c
            JOIN citizen_tax_history t ON t.citizen_id = c.id AND t.tax_year = 2025
            GROUP BY CASE
@@ -1207,7 +1208,9 @@ def _citizen_help_context(question):
         'average_salary_by_age_band_and_gender_2025': [
             {
                 'age_band': row[0], 'gender': row[1],
-                'average_salary_n£': round(float(row[2]), 2), 'citizens': int(row[3]),
+                'average_salary_n£': round(float(row[2]), 2),
+                'average_tax_paid_n£': round(float(row[3]), 2),
+                'citizens': int(row[4]),
             }
             for row in salary_age_gender_rows if row[0] is not None
         ],
@@ -1249,21 +1252,39 @@ def _citizen_help_context(question):
                 f"to {requested_year}; average tax paid increased by "
                 f"N£{float(current[2] - previous[2]):,.2f} per citizen."
             )
-    if 'tax' in question_lower and any(word in question_lower for word in ('total', 'revenue', 'sum')):
+    age_band_match = re.search(r'\b(20|30|40|50)s\b', question_lower)
+    gender_code = None
+    if re.search(r'\b(women|woman|female)\b', question_lower):
+        gender_code = 'F'
+    elif re.search(r'\b(men|man|male)\b', question_lower):
+        gender_code = 'M'
+    elif re.search(r'\b(nonbinary|non-binary|gender-neutral)\b', question_lower):
+        gender_code = 'X'
+    age_gender_fact = next((
+        item for item in analytics['average_salary_by_age_band_and_gender_2025']
+        if age_band_match and item['age_band'] == f'{age_band_match.group(1)}s' and item['gender'] == gender_code
+    ), None)
+    if 'tax' in question_lower and age_gender_fact and any(word in question_lower for word in ('average', 'mean', 'amount')):
+        gender_label = {'F': 'women', 'M': 'men', 'X': 'gender-neutral citizens'}[gender_code]
+        analytics['answer_hint'] = (
+            f"The average fictional 2025 tax paid by {gender_label} in their {age_gender_fact['age_band']} was "
+            f"N£{age_gender_fact['average_tax_paid_n£']:,.2f} across {age_gender_fact['citizens']} citizens."
+        )
+    elif 'tax' in question_lower and any(word in question_lower for word in ('total', 'revenue', 'sum')):
         analytics['answer_hint'] = (
             f"Total tax revenue across all {total_count} fictional citizens is "
             f"N£{float(total_tax):,.2f}."
         )
+    elif 'salary' in question_lower and age_gender_fact:
+        analytics['answer_hint'] = 'Average 2025 fictional salary by age band and gender: ' + '; '.join(
+            f"{item['age_band']} {item['gender']}: N£{item['average_salary_n£']:,.2f} across {item['citizens']} citizens"
+            for item in analytics['average_salary_by_age_band_and_gender_2025']
+        ) + '.'
     elif 'salary' in question_lower and any(word in question_lower for word in ('average', 'mean')):
         analytics['answer_hint'] = (
             f"The average fictional gross salary in 2025 was "
             f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
         )
-    elif 'salary' in question_lower and 'gender' in question_lower and any(word in question_lower for word in ('age', 'band', '20', '30', '40', '50')):
-        analytics['answer_hint'] = 'Average 2025 fictional salary by age band and gender: ' + '; '.join(
-            f"{item['age_band']} {item['gender']}: N£{item['average_salary_n£']:,.2f} across {item['citizens']} citizens"
-            for item in analytics['average_salary_by_age_band_and_gender_2025']
-        ) + '.'
     elif 'age' in question_lower and any(word in question_lower for word in ('average', 'mean', 'calculate')):
         analytics['answer_hint'] = (
             f"The average age is {analytics['average_age_years']:.2f} years, calculated from "
@@ -1628,29 +1649,30 @@ def citizen_help_chat():
         payload = request.get_json(silent=True) or {}
         question = validate_question(payload.get('question'))
         records, analytics = _citizen_help_context(question)
-        try:
-            planner_response = requests.post(
-                'http://127.0.0.1:8010/plan',
-                json={'question': question},
-                timeout=90,
-            )
-            planner_response.raise_for_status()
-            proposed_plan = planner_response.json().get('query_plan')
-            valid, reason = validate_query_plan(proposed_plan)
-            if valid:
-                plan_conn = _get_db_conn()
-                try:
-                    analytics['llm_query_result'] = execute_validated_plan(
-                        plan_conn, proposed_plan, {}, sql_server=bool(DB_HOST)
-                    )
-                finally:
-                    plan_conn.close()
-            else:
-                analytics['llm_query_rejected'] = reason
-                logger.info('H100 query plan rejected by CVM validator: %s', reason)
-        except Exception as planner_error:
-            logger.warning('Structured H100 query planning fell back: %s', type(planner_error).__name__)
-            analytics['llm_query_fallback'] = True
+        if 'answer_hint' not in analytics:
+            try:
+                planner_response = requests.post(
+                    'http://127.0.0.1:8010/plan',
+                    json={'question': question},
+                    timeout=90,
+                )
+                planner_response.raise_for_status()
+                proposed_plan = planner_response.json().get('query_plan')
+                valid, reason = validate_query_plan(proposed_plan)
+                if valid:
+                    plan_conn = _get_db_conn()
+                    try:
+                        analytics['llm_query_result'] = execute_validated_plan(
+                            plan_conn, proposed_plan, {}, sql_server=bool(DB_HOST)
+                        )
+                    finally:
+                        plan_conn.close()
+                else:
+                    analytics['llm_query_rejected'] = reason
+                    logger.info('H100 query plan rejected by CVM validator: %s', reason)
+            except Exception as planner_error:
+                logger.warning('Structured H100 query planning fell back: %s', type(planner_error).__name__)
+                analytics['llm_query_fallback'] = True
         response = requests.post(
             'http://127.0.0.1:8010/generate',
             json={'question': question, 'records': records, 'analytics': analytics},

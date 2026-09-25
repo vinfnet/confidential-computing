@@ -37,6 +37,7 @@ def load_model() -> None:
     device_name = torch.cuda.get_device_name(0)
     if 'H100' not in device_name.upper():
         raise RuntimeError(f'Citizen Help requires an NVIDIA H100; found {device_name}.')
+    torch.backends.cuda.enable_cudnn_sdp(False)
     _tokenizer = AutoTokenizer.from_pretrained(
         MODEL_PATH,
         local_files_only=True,
@@ -45,6 +46,7 @@ def load_model() -> None:
     _model = AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
         torch_dtype=torch.bfloat16,
+        attn_implementation='sdpa',
         device_map={'': 'cuda:0'},
         local_files_only=True,
         revision=os.environ.get('CITIZENHELP_MODEL_REVISION'),
@@ -71,7 +73,7 @@ def generate_answer(
     with _torch.inference_mode():
         output_ids = _model.generate(
             **inputs,
-            max_new_tokens=240,
+            max_new_tokens=160,
             do_sample=False,
             repetition_penalty=1.05,
             pad_token_id=_tokenizer.eos_token_id,

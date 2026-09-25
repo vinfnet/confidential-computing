@@ -108,6 +108,10 @@
     const modelPanel = document.getElementById('model-panel');
     const modelDetails = document.getElementById('model-details');
     const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const readJsonResponse = async response => {
+      if (!response.headers.get('content-type')?.includes('application/json')) throw new Error(`Citizen Help request failed (${response.status}).`);
+      return response.json();
+    };
     const renderModel = data => {
       modelDetails.innerHTML = Object.entries(data).map(([key, value]) => `<dt>${escapeHtml(key.replaceAll('_',' '))}</dt><dd>${escapeHtml(Array.isArray(value) ? value.join('; ') : value)}</dd>`).join('');
     };
@@ -116,7 +120,7 @@
       modelPanel.hidden = !open;
       modelTab.setAttribute('aria-selected', String(open));
       if (open && modelDetails.dataset.loaded !== 'true') {
-        try { renderModel(await (await fetch('/api/citizenhelp/model')).json()); modelDetails.dataset.loaded = 'true'; }
+        try { renderModel(await readJsonResponse(await fetch('/api/citizenhelp/model'))); modelDetails.dataset.loaded = 'true'; }
         catch { modelDetails.innerHTML = '<dt>Status</dt><dd>Model metadata unavailable</dd>'; }
       }
     });
@@ -134,7 +138,7 @@
       window.setTimeout(() => diagram.setState('gpu-processing'), 700);
       try {
         const response = await fetch('/api/citizenhelp', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:submittedQuestion}) });
-        const data = await response.json();
+        const data = await readJsonResponse(response);
         if (!response.ok && !data.answer) throw new Error(data.error || 'Request failed');
         addMessage('assistant', data.answer || data.error || 'No answer returned.', data.blocked ? 'blocked' : '');
         if (data.matches?.length) addMessage('assistant', `Matched fictional records: ${data.matches.map(item => item.name).join(', ')}`);
