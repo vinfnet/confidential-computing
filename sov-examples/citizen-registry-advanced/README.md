@@ -468,8 +468,11 @@ service. Startup fails closed unless CUDA is available and the device name conta
 the systemd unit requires successful current-boot GPU attestation before loading the model.
 
 Deployment is repeatable: `Deploy-AppInstance.ps1` and the app-instance Bicep template target a
-128 GB model data disk, grow an existing ext4 filesystem when needed, download the pinned model
-revision only when the local revision marker is missing or changed, and rewrite the model
+Canonical Ubuntu 24.04 LTS confidential image for the H100 app VM while retaining Ubuntu 22.04 LTS
+for the SQL confidential VM. The app bootstrap selects the FDE kernel required by the current
+NVIDIA driver packages instead of pinning an older kernel. The deployment also targets a
+128 GB model data disk, grows an existing ext4 filesystem when needed, downloads the pinned model
+revision only when the local revision marker is missing or changed, and rewrites the model
 environment consistently before restarting the localhost-only H100 service. Re-running the
 deployment therefore preserves the 32B model choice instead of silently reverting to the earlier
 7B configuration.
@@ -716,10 +719,12 @@ Creates resource group: **`{prefix}{random5digit}app`** (e.g., `yourprefix18447a
 **Resources:**
 - **Confidential GPU VM** — `Standard_NCC40ads_H100_v5`
   - AMD SEV-SNP CPU memory protection and one NVIDIA H100 in production CC mode
+  - Canonical Ubuntu 24.04 LTS confidential image with dynamically selected NVIDIA FDE kernel
   - Confidential OS disk encryption with customer-managed key release
   - Connected to shared Managed HSM over Private Link and VNet peering
 - **SQL Server Confidential VM** — `Standard_DC2as_v5`
   - AMD SEV-SNP CPU memory protection, confidential guest-state protection, and encryption at host
+  - Canonical Ubuntu 22.04 LTS confidential image
   - Separate North Europe VNet and private DB subnet
   - Private TLS connection from the app VM
 - **Bastion Host** — Private access gateway

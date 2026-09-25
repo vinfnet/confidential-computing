@@ -362,6 +362,27 @@ if (-not $dvrIdentity.clientId -or -not $storageEncryptionIdentity.principalId) 
     throw 'Failed to provision the DVR storage managed identities.'
 }
 
+$dvrStorageId = "/subscriptions/$subscriptionId/resourceGroups/$RgName/providers/Microsoft.Storage/storageAccounts/$dvrStorageAccountName"
+$deployDvrDataPlaneRoleAssignments = $true
+$existingDvrContributor = az role assignment list `
+    --assignee-object-id $dvrIdentity.principalId `
+    --scope $dvrStorageId `
+    --role 'Storage Blob Data Contributor' `
+    --query '[0].id' `
+    --output tsv `
+    --only-show-errors
+$existingAppReader = az role assignment list `
+    --assignee-object-id $appIdentity.principalId `
+    --scope $dvrStorageId `
+    --role 'Storage Blob Data Reader' `
+    --query '[0].id' `
+    --output tsv `
+    --only-show-errors
+if ($existingDvrContributor -and $existingAppReader) {
+    $deployDvrDataPlaneRoleAssignments = $false
+    Write-Host 'DVR Blob data-plane roles already exist; preserving them.' -ForegroundColor Green
+}
+
 # Generate a temporary key for the deployment if one is not already available.
 $sshKeyPath = Join-Path $env:TEMP "citizen-registry-$Prefix"
 if (-not (Test-Path "$sshKeyPath.pub")) {
@@ -414,7 +435,15 @@ function Set-HsmNetworkAccess {
         $currentAccess = az resource show --ids $hsmId --query 'properties.publicNetworkAccess' -o tsv --only-show-errors
         $currentDefaultAction = az resource show --ids $hsmId --query 'properties.networkAcls.defaultAction' -o tsv --only-show-errors
         $aclSatisfied = if ($Access -eq 'Disabled') { $currentAccess -eq 'Disabled' } else { $currentDefaultAction -eq $DefaultAction }
-        if ($state -eq 'Succeeded' -and $currentAccess -eq $Access -and $aclSatisfied) { return }
+        if ($state -eq 'Succeeded' -and $currentAccess -eq $Access -and $aclSatisfied) {
+            if ($Access -eq 'Disabled') { return }
+            $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+            $PSNativeCommandUseErrorActionPreference = $false
+            az keyvault key list --hsm-name $hsmName --maxresults 1 --output none --only-show-errors 2>$null
+            $dataPlaneReady = $LASTEXITCODE -eq 0
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+            if ($dataPlaneReady) { return }
+        }
         if ($attempt -eq 60) { throw "Managed HSM network update timed out: state=$state access=$currentAccess defaultAction=$currentDefaultAction" }
         Start-Sleep -Seconds 10
     }
@@ -522,6 +551,7 @@ if [ '$UbuntuProEnabled' = 'True' ]; then
         DEBIAN_FRONTEND=noninteractive apt-get install -y ubuntu-advantage-tools
     fi
     if ! pro status --format json 2>/dev/null | grep -q 'attached'; then
+        :
         $UbuntuProAttachCommand
     fi
     pro enable esm-infra
@@ -543,31 +573,31 @@ if ! blkid `$DATA_DEVICE >/dev/null 2>&1; then mkfs.ext4 `$DATA_DEVICE; fi
 mkdir -p /var/lib/citizen-registry
 DATA_UUID=`$(blkid -s UUID -o value `$DATA_DEVICE)
 grep -q "UUID=`$DATA_UUID" /etc/fstab || printf 'UUID=%s /var/lib/citizen-registry ext4 defaults,nofail 0 2\n' "`$DATA_UUID" >> /etc/fstab
-mount /var/lib/citizen-registry
+mountpoint -q /var/lib/citizen-registry || mount /var/lib/citizen-registry
 resize2fs `$DATA_DEVICE
 mkdir -p /var/lib/citizen-registry/media /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 chmod 755 /var/lib/citizen-registry/cctv /var/lib/citizen-registry/cctv/hls
 printf '%s\n' 'msodbcsql18 msodbcsql/ACCEPT_EULA boolean true' | debconf-set-selections
 export ACCEPT_EULA=Y
-curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
+curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb -o /tmp/packages-microsoft-prod.deb
 DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/packages-microsoft-prod.deb
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
 python3 -c "import urllib.request; urllib.request.urlretrieve('https://bootstrap.pypa.io/get-pip.py', '/tmp/get-pip.py')"
 python3 /tmp/get-pip.py --break-system-packages
-pip3 install --break-system-packages --no-cache-dir azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors huggingface_hub 'jinja2>=3.1.0'
-pip3 install --break-system-packages --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip3 install --break-system-packages --no-cache-dir torch==2.10.0+cu128 torchvision==0.25.0+cu128 --index-url https://download.pytorch.org/whl/cu128
+pip3 install --break-system-packages --no-cache-dir --ignore-installed azure-identity azure-storage-blob pyodbc gunicorn Pillow diffusers transformers accelerate safetensors huggingface_hub 'jinja2>=3.1.0' pyOpenSSL boto3
 pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
 MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
 MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
-MODEL_MARKER="$MODEL_PATH/.revision"
-mkdir -p "$MODEL_PATH"
-if [ ! -f "$MODEL_PATH/config.json" ] || [ "`$(cat "$MODEL_MARKER" 2>/dev/null || true)" != "$MODEL_REVISION" ]; then
-    rm -rf "$MODEL_PATH"
-    mkdir -p "$MODEL_PATH"
-    MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
-    printf '%s\n' "$MODEL_REVISION" > "$MODEL_MARKER"
+MODEL_MARKER="`$MODEL_PATH/.revision"
+mkdir -p "`$MODEL_PATH"
+if [ ! -f "`$MODEL_PATH/config.json" ] || [ "`$(cat "`$MODEL_MARKER" 2>/dev/null || true)" != "`$MODEL_REVISION" ]; then
+    rm -rf "`$MODEL_PATH"
+    mkdir -p "`$MODEL_PATH"
+    MODEL_ID="`$MODEL_ID" MODEL_REVISION="`$MODEL_REVISION" MODEL_PATH="`$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+    printf '%s\n' "`$MODEL_REVISION" > "`$MODEL_MARKER"
 fi
 for attempt in `$(seq 1 30); do
     python3 /opt/citizen-registry/app-src/dvr_storage.py upload --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --path "`$CCTV_VIDEO_INGEST" --recipe "`$CCTV_VIDEO_RECIPE" && break
@@ -641,7 +671,7 @@ ProtectSystem=full
 WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
-systemctl enable --now citizenhelp-llm
+systemctl enable citizenhelp-llm
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
     systemctl enable nginx
     systemctl restart nginx
@@ -702,6 +732,37 @@ if ($customData.Length -gt 87380) {
     throw "Application custom data is $($customData.Length) characters; Azure allows at most 87380."
 }
 
+$sqlVmIdentity = @{}
+$sqlVmPreservedTags = @{}
+$appVmPreservedTags = @{}
+$existingAppVmTags = az vm show --resource-group $RgName --name $CvmName --query tags --output json --only-show-errors 2>$null
+if ($LASTEXITCODE -eq 0 -and $existingAppVmTags) {
+    $appVmTags = $existingAppVmTags | ConvertFrom-Json
+    if ($appVmTags) {
+        foreach ($tag in $appVmTags.PSObject.Properties) {
+            $appVmPreservedTags[$tag.Name] = $tag.Value
+        }
+    }
+}
+$existingSqlVm = az vm show --resource-group $RgName --name $sqlVmName --query '{identity:identity,tags:tags}' --output json --only-show-errors 2>$null
+if ($LASTEXITCODE -eq 0 -and $existingSqlVm) {
+    $sqlVmState = $existingSqlVm | ConvertFrom-Json
+    if ($sqlVmState.identity.type) {
+        $sqlVmIdentity.type = $sqlVmState.identity.type
+        if ($sqlVmState.identity.userAssignedIdentities) {
+            $sqlVmIdentity.userAssignedIdentities = @{}
+            foreach ($identity in $sqlVmState.identity.userAssignedIdentities.PSObject.Properties) {
+                $sqlVmIdentity.userAssignedIdentities[$identity.Name] = @{}
+            }
+        }
+    }
+    if ($sqlVmState.tags) {
+        foreach ($tag in $sqlVmState.tags.PSObject.Properties) {
+            $sqlVmPreservedTags[$tag.Name] = $tag.Value
+        }
+    }
+}
+
 # Prepare Bicep parameters in a file to avoid Windows command-line length limits.
 $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
 @{
@@ -732,13 +793,16 @@ $parametersFile = Join-Path $env:TEMP "citizen-registry-$Prefix.parameters.json"
         # DVR Blob data-plane roles are created by ARM in the one-shot deploy.
         # Requires the caller to hold Owner or User Access Administrator
         # (roleAssignments/write); activate via PIM before running.
-        deployDvrDataPlaneRoleAssignments = @{ value = $true }
+        deployDvrDataPlaneRoleAssignments = @{ value = $deployDvrDataPlaneRoleAssignments }
         confidentialOsDisk = @{ value = $true }
         attestationEnabled = @{ value = $true }
         sshPublicKey = @{ value = $sshPublicKey }
         customData = @{ value = $customData }
         sqlVmName = @{ value = $sqlVmName }
         sqlCustomData = @{ value = $sqlCustomData }
+        sqlVmIdentity = @{ value = $sqlVmIdentity }
+        sqlVmPreservedTags = @{ value = $sqlVmPreservedTags }
+        appVmPreservedTags = @{ value = $appVmPreservedTags }
     }
 } | ConvertTo-Json -Depth 20 | Set-Content -Encoding utf8 $parametersFile
 
@@ -1097,21 +1161,24 @@ if ! command -v ffmpeg >/dev/null; then
 fi
 CCTV_VIDEO_RECIPE='close-faces-v3|source=9b2463093a0769414234137a31b70d3dd919179a66d37576b77fce283379e655|start=85|end=118.5|1280x720|24fps|h264-crf18-faststart'
 if ! python3 -c 'import torchvision, facenet_pytorch' >/dev/null 2>&1; then
-    pip3 install --break-system-packages --no-cache-dir torchvision --index-url https://download.pytorch.org/whl/cu128
+    pip3 uninstall -y torch torchvision || true
+    rm -rf /usr/local/lib/python3.12/dist-packages/torch /usr/local/lib/python3.12/dist-packages/torch-*.dist-info /usr/local/lib/python3.12/dist-packages/torchvision /usr/local/lib/python3.12/dist-packages/torchvision-*.dist-info
+    pip3 install --break-system-packages --no-cache-dir torch==2.10.0+cu128 torchvision==0.25.0+cu128 --index-url https://download.pytorch.org/whl/cu128
     pip3 install --break-system-packages --no-cache-dir --no-deps facenet-pytorch==2.6.0
 fi
 python3 -c 'import azure.storage.blob' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir azure-storage-blob
 python3 -c 'import huggingface_hub, transformers, jinja2; assert tuple(map(int, jinja2.__version__.split(".")[:2])) >= (3, 1)' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir huggingface_hub transformers accelerate safetensors 'jinja2>=3.1.0'
+python3 -c 'import OpenSSL, boto3' >/dev/null 2>&1 || pip3 install --break-system-packages --no-cache-dir --ignore-installed pyOpenSSL boto3
 MODEL_ID='Qwen/Qwen2.5-32B-Instruct'
 MODEL_REVISION='5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
 MODEL_PATH=/var/lib/citizen-registry/models/qwen2.5-32b-instruct
-MODEL_MARKER="$MODEL_PATH/.revision"
-mkdir -p "$MODEL_PATH"
-if [ ! -f "$MODEL_PATH/config.json" ] || [ "`$(cat "$MODEL_MARKER" 2>/dev/null || true)" != "$MODEL_REVISION" ]; then
-    rm -rf "$MODEL_PATH"
-    mkdir -p "$MODEL_PATH"
-    MODEL_ID="$MODEL_ID" MODEL_REVISION="$MODEL_REVISION" MODEL_PATH="$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
-    printf '%s\n' "$MODEL_REVISION" > "$MODEL_MARKER"
+MODEL_MARKER="`$MODEL_PATH/.revision"
+mkdir -p "`$MODEL_PATH"
+if [ ! -f "`$MODEL_PATH/config.json" ] || [ "`$(cat "`$MODEL_MARKER" 2>/dev/null || true)" != "`$MODEL_REVISION" ]; then
+    rm -rf "`$MODEL_PATH"
+    mkdir -p "`$MODEL_PATH"
+    MODEL_ID="`$MODEL_ID" MODEL_REVISION="`$MODEL_REVISION" MODEL_PATH="`$MODEL_PATH" python3 -c "import os; from huggingface_hub import snapshot_download; snapshot_download(repo_id=os.environ['MODEL_ID'], revision=os.environ['MODEL_REVISION'], local_dir=os.environ['MODEL_PATH'], allow_patterns=['*.json','*.safetensors','*.model','*.txt','*.py'])"
+    printf '%s\n' "`$MODEL_REVISION" > "`$MODEL_MARKER"
 fi
 if ! python3 /opt/citizen-registry/app-src/dvr_storage.py matches --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$($dvrIdentity.clientId)' --recipe "`$CCTV_VIDEO_RECIPE"; then
     ffmpeg -hide_banner -loglevel warning -ss 85 -to 118.5 -i "`$CCTV_VIDEO_SOURCE" -an -vf 'scale=1280:720:flags=lanczos,fps=24,format=yuv420p' -c:v libx264 -preset medium -crf 18 -movflags +faststart -map_metadata -1 -f mp4 -y "`$CCTV_VIDEO_INGEST"
@@ -1169,7 +1236,7 @@ ProtectSystem=full
 WantedBy=multi-user.target
 SERVICE
 systemctl daemon-reload
-systemctl enable --now citizenhelp-llm.service
+systemctl enable citizenhelp-llm.service
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
     nginx -t
     systemctl restart nginx
@@ -1304,6 +1371,18 @@ cd "$INSTALL_DIR/cgpu-onboarding-package"
 test -f step-0-prepare-kernel.sh
 sed '/^[[:space:]]*sudo reboot[[:space:]]*$/d' step-0-prepare-kernel.sh > step-0-prepare-kernel-no-reboot.sh
 bash ./step-0-prepare-kernel-no-reboot.sh --enable-snapshot 20260827T120000Z
+TARGET_KERNEL=$(apt-cache depends linux-modules-nvidia-595-server-open-azure-fde | sed -n 's/.*linux-modules-nvidia-595-server-open-\(.*-azure-fde\)$/\1/p' | head -n 1)
+test -n "$TARGET_KERNEL"
+test -f "/boot/efi/EFI/ubuntu/kernel.efi-$TARGET_KERNEL"
+BOOT_ENTRY=$(efibootmgr | sed -n "s/^Boot\([0-9A-Fa-f]\{4\}\).*kernel $TARGET_KERNEL.*/\1/p" | head -n 1)
+test -n "$BOOT_ENTRY"
+BOOT_ORDER=$(efibootmgr | sed -n 's/^BootOrder: //p')
+NEW_BOOT_ORDER="$BOOT_ENTRY"
+IFS=',' read -ra BOOT_ENTRIES <<< "$BOOT_ORDER"
+for entry in "${BOOT_ENTRIES[@]}"; do
+    if [ "$entry" != "$BOOT_ENTRY" ]; then NEW_BOOT_ORDER="$NEW_BOOT_ORDER,$entry"; fi
+done
+efibootmgr -o "$NEW_BOOT_ORDER"
 echo 'GPU_KERNEL_PREPARED=1'
 '@
             Invoke-GpuRunCommand -Label 'GPU kernel preparation' -Script $gpuKernelScript -SuccessMarker 'GPU_KERNEL_PREPARED=1' | Out-Null
@@ -1388,6 +1467,7 @@ systemctl daemon-reload
 systemctl enable citizen-gpu-attestation.service
 systemctl restart citizen-gpu-attestation.service
 systemctl restart citizen-registry.service
+systemctl restart citizenhelp-llm.service
 test -s /var/lib/citizen-registry/gpu-attestation.json
 systemctl enable citizen-cctv-anonymizer.service
 systemctl restart citizen-cctv-anonymizer.service

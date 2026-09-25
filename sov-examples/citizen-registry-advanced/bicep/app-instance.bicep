@@ -113,6 +113,15 @@ param sqlVmName string
 @description('Base64-encoded cloud-init script for SQL Server bootstrap')
 param sqlCustomData string = ''
 
+@description('Existing SQL VM identity configuration to preserve during incremental deployments')
+param sqlVmIdentity object = {}
+
+@description('Existing SQL VM tags to preserve during incremental deployments')
+param sqlVmPreservedTags object = {}
+
+@description('Existing app VM tags to preserve during incremental deployments')
+param appVmPreservedTags object = {}
+
 // Variables
 var appSubnetName = 'app-subnet'
 var bastionSubnetName = 'AzureBastionSubnet'
@@ -125,8 +134,8 @@ var appSubnetPrefix = '10.${networkSecondOctet}.3.0/24'
 var bastionSubnetPrefix = '10.${networkSecondOctet}.2.0/24'
 var dbSubnetPrefix = '10.${sqlNetworkSecondOctet}.4.0/24'
 var vmOsPublisher = 'Canonical'
-var appVmOsOffer = '0001-com-ubuntu-pro-confidential-vm-jammy'
-var appVmOsSku = 'pro-22_04-lts-cvm'
+var appVmOsOffer = 'ubuntu-24_04-lts'
+var appVmOsSku = 'cvm'
 var sqlVmOsOffer = '0001-com-ubuntu-confidential-vm-jammy'
 var sqlVmOsSku = '22_04-lts-cvm'
 var vmOsVersion = 'latest'
@@ -603,9 +612,14 @@ resource cvmNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
 resource confidentialVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: cvmName
   location: location
-  tags: commonTags
+  tags: union(commonTags, appVmPreservedTags)
+  plan: startsWith(appVmOsOffer, '0001-com-ubuntu-pro-') ? {
+    name: appVmOsSku
+    product: appVmOsOffer
+    publisher: vmOsPublisher
+  } : null
   identity: {
-    type: 'UserAssigned'
+    type: 'SystemAssigned, UserAssigned'
     userAssignedIdentities: union(
       {
         '${cvmIdentity.id}': {}
@@ -717,7 +731,8 @@ resource sqlNic 'Microsoft.Network/networkInterfaces@2023-09-01' = {
 resource sqlVm 'Microsoft.Compute/virtualMachines@2023-09-01' = {
   name: sqlVmName
   location: sqlLocation
-  tags: commonTags
+  tags: union(commonTags, sqlVmPreservedTags)
+  identity: empty(sqlVmIdentity) ? null : sqlVmIdentity
   properties: {
     hardwareProfile: {
       vmSize: sqlCvmSize

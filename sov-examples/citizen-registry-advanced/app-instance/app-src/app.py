@@ -644,6 +644,10 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
+        try:
+            admin_conn.execute("EXEC sys.sp_releaseapplock @Resource = N'citizen-registry-seed-v106', @LockOwner = N'Session'")
+        except pyodbc.Error:
+            logger.exception('Failed to release database seed lock')
         admin_conn.close()
 
 
