@@ -483,6 +483,29 @@ README examples, or returned by telemetry. ESM services and unattended security 
 configured with automatic reboot disabled; kernel reboots require an explicit maintenance action.
 The `/security/evidence` response reports only the non-secret Pro state and reboot policy.
 
+#### Post-Deployment Security Maintenance
+
+Use the standalone maintenance utility after deployment and during planned patch windows:
+
+```powershell
+.\Update-DemoSecurity.ps1 `
+  -Prefix "yourprefix" `
+  -ResourceGroupName "yourprefix12345app" `
+  -SubscriptionId "00000000-0000-0000-0000-000000000000" `
+  -EnableUbuntuPro
+```
+
+`-EnableUbuntuPro` converts the application VM license and enables ESM access; this can add Azure
+licensing cost. The utility applies non-kernel security updates to the H100 application CVM and
+rejects any transaction that would alter its validated FDE kernel or NVIDIA driver pairing. On the
+SQL CVM it validates the Microsoft repository signing key, applies all available package and SQL
+Server updates, permits only `azure-fde` kernel packages, restarts the VM, and validates the SQL
+listener after boot. Add `-ShutdownAfterUpdate` to deallocate both CVMs after successful validation.
+
+This script is the interim repeatable post-deployment patch path. Its guarded maintenance stages
+are planned for integration into the main build scripts so future deployments apply the same policy
+without a separate command.
+
 Citizen Help applies defense in depth: bounded input length, parameterized retrieval, a strict
 registry-only system policy, refusal of prompt injection and jailbreak instructions, refusal of
 harmful/illegal/security-breach/credential-extraction requests, no tool or code execution, output
