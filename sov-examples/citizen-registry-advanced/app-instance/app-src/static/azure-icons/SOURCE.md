@@ -16,5 +16,6 @@ The SVG files listed below were copied without modification from the Microsoft A
 | `private-link.svg` | `Icons/networking/00427-icon-service-Private-Link.svg` |
 | `virtual-network.svg` | `Icons/networking/10061-icon-service-Virtual-Networks.svg` |
 | `browser.svg` | `Icons/general/10783-icon-service-Browser.svg` |
+| `storage-accounts.svg` | `Icons/storage/10086-icon-service-Storage-Accounts.svg` |
 
 Microsoft permits these icons in architecture diagrams, training materials, and documentation. Product names are displayed next to the icons, and the icon shapes are not cropped, flipped, rotated, distorted, or repurposed as application branding.

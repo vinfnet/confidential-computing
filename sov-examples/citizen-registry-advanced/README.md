@@ -2,7 +2,7 @@
 
 **Topology:** Customer Managed HSM ↔ private DVR Blob Storage ↔ App Confidential H100 GPU VM ↔ SQL Server Confidential VM
 
-> **Implementation status:** Stage 2 provisions separate RSA-HSM customer-managed keys for the app CVM OS disk and private DVR Blob Storage. Azure Confidential VM secure key release binds the OS-disk key to the app VM's attested vTPM/platform state. The DVR account is ZRS, infrastructure-encrypted, private-endpoint-only, and uses separate writer, analyzer reader, and Storage encryption identities. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Norland IT, but is not publicly trusted.
+> **Implementation status:** Stage 2 provisions separate RSA-HSM customer-managed keys for the app CVM OS disk and private DVR Blob Storage. Azure Confidential VM secure key release binds the OS-disk key to the app VM's attested vTPM/platform state. The DVR account is ZRS, infrastructure-encrypted, private-endpoint-only, and uses separate writer, analyzer reader, and Storage encryption identities. The SQL CVM uses `VMGuestStateOnly` confidential guest-state protection and encryption at host, not the app disk's HSM-backed DES. Azure Attestation is also deployed for the demo's explicit attestation endpoint; the Flask health check reports endpoint reachability, not a full quote-verification result. The demo certificate chain is CA-signed and PKI-shaped for Contoso IT, but is not publicly trusted.
 **Author:** Autonomous AI-Assisted Development  
 **Deployment validated end to end:** September 15, 2026
 
@@ -27,7 +27,7 @@ Your question
 ```
 
 This means questions about the fictional citizens, health, companies, employment, salaries, taxes,
-history, and generated Norland policies can be answered from the data held in SQL without placing
+history, and generated Contoso policies can be answered from the data held in SQL without placing
 the entire database into the model prompt. The application query planner records the relevant
 tables, columns, joins, policy topics, and confidential boundary for each request. For supported
 structured plans, the application validates the requested tables, columns, joins, filters,
@@ -335,14 +335,14 @@ Validation also confirmed:
 
 ### Citizen Registry Data and CRUD UI
 
-The demo generates 1,000 deterministic, entirely fictional Republic of Norland records. Each
+The demo generates 1,000 deterministic, entirely fictional Republic of Contoso records. Each
 record includes an alphanumeric national ID, date of birth, street address, town, state,
 socio-economic group, and tax paid in the prior year. Names, locations, identifiers, and
 financial values are synthetic and must not be treated as real personal data. The registry
 also exposes read-only fictional health conditions and hospital visits, clearly marked as
 non-medical demo data and excluded from Citizen Help LLM context.
 
-![Republic of Norland Citizen Registry showing confidential-computing status and fictional citizen records](docs/images/confidential-citizen-registry.png)
+![Republic of Contoso Citizen Registry showing confidential-computing status and fictional citizen records](docs/images/confidential-citizen-registry.png)
 
 *Registry view with current security status, synthetic portraits, `F`, `M`, and `X` gender
 markers, government-style fields, and mTLS-protected Add, Edit, and Delete controls.*
@@ -369,13 +369,13 @@ Portrait model tensors and inference execute on `cuda:0` only after the app veri
 `CC status: ON`, `CC Environment: PRODUCTION`, and successful GPU attestation from the current
 VM boot. Prompt preparation and final JPEG/credential composition occur in SEV-SNP-protected
 CPU memory; the sample does not claim that all processing stays exclusively in GPU memory.
-Credentials use an invented Norland layout, omit valid MRZ data and real-country emblems, and
+Credentials use an invented Contoso layout, omit valid MRZ data and real-country emblems, and
 carry a permanent `NOT A REAL PASSPORT` label.
 The app service requires a boot-time `citizen-gpu-attestation` systemd unit, so nvtrust
 attestation and the boot-bound evidence marker are renewed after every VM restart.
 
 Create, update, and delete requests use the existing `/api/citizen` endpoints and remain
-protected by nginx client-certificate verification. A browser without the Norland demo client
+protected by nginx client-certificate verification. A browser without the Contoso demo client
 certificate can view the registry but receives HTTP `401` for protected CRUD requests.
 
 Live validation confirmed 100 unique national IDs and all requested fields. An mTLS-authenticated
@@ -445,7 +445,7 @@ utilization. Decode, box tracking, blur, and H.264 encoding remain in SEV-SNP-pr
 ### Citizen Help LLM
 
 Open `https://localhost:9443/citizenhelp` through the Bastion tunnel. This third demo is a
-narrowly scoped chatbot for the fictional Republic of Norland citizen registry. It retrieves a
+narrowly scoped chatbot for the fictional Republic of Contoso citizen registry. It retrieves a
 bounded set of matching synthetic records in Flask and sends only that context to a localhost-only
 GPU service; the model has no database connection, tools, shell, network, or record-mutation path.
 
@@ -511,12 +511,12 @@ registry-only system policy, refusal of prompt injection and jailbreak instructi
 harmful/illegal/security-breach/credential-extraction requests, no tool or code execution, output
 leakage checks, and fail-closed service errors. These controls reduce risk but do not turn a small
 open model into a general-purpose safety classifier; the assistant must remain limited to the
-synthetic Norland dataset and supervised demo use.
+synthetic Contoso dataset and supervised demo use.
 
 Citizen Help can answer questions about each matched citizen's complete registry row, fictional
 employment history, company changes, annual salary, and annual tax calculations. The fictional
-Norland tax code is progressive: `NR-00` is 0% up to N£11,999.99, `NR-10` is 10% from N£12,000
-to N£29,999.99, `NR-20` is 20% from N£30,000 to N£59,999.99, and `NR-30` is 30% above N£60,000.
+Contoso tax code is progressive: `CT-00` is 0% up to C$11,999.99, `CT-10` is 10% from C$12,000
+to C$29,999.99, `CT-20` is 20% from C$30,000 to C$59,999.99, and `CT-30` is 30% above C$60,000.
 Each annual tax row is calculated from that year's synthetic salary, not copied from a fixed value.
 The registry History action calls `GET /api/citizen/<id>/history` and displays read-only fictional
 employment and tax records. The Citizen Help conversation is retained only in the open browser tab.
@@ -1240,7 +1240,7 @@ az network bastion tunnel `
 ```
 
 Open `https://localhost:9443/citizens`. Read-only pages work without a client certificate.
-Add, edit, and delete operations require the Norland demo mTLS client certificate. Open
+Add, edit, and delete operations require the Contoso demo mTLS client certificate. Open
 `https://localhost:9443/cctv` and select **Start comparison** to view the source and confidential
 H100 face-anonymized streams. The processed pane reports unavailable rather than displaying
 unprocessed fallback footage when the worker or attestation evidence is not healthy.
@@ -1269,7 +1269,7 @@ az vm run-command invoke `
   --resource-group <app-resource-group> `
   --name <app-cvm-name> `
   --command-id RunShellScript `
-  --scripts "umask 077; openssl pkcs12 -export -out /home/azureuser/norland-client.pfx -inkey /etc/citizen-registry/certs/citizen.key -in /etc/citizen-registry/certs/citizen.crt -certfile /etc/citizen-registry/certs/client-ca.crt -passout pass:; chown azureuser:azureuser /home/azureuser/norland-client.pfx; chmod 600 /home/azureuser/norland-client.pfx"
+  --scripts "umask 077; openssl pkcs12 -export -out /home/azureuser/contoso-client.pfx -inkey /etc/citizen-registry/certs/citizen.key -in /etc/citizen-registry/certs/citizen.crt -certfile /etc/citizen-registry/certs/client-ca.crt -passout pass:; chown azureuser:azureuser /home/azureuser/contoso-client.pfx; chmod 600 /home/azureuser/contoso-client.pfx"
 ```
 
 In Terminal 2, transfer and install the client identity and public demo CA. Windows displays
@@ -1277,17 +1277,17 @@ an explicit confirmation before trusting the CA; review and accept it for this d
 
 ```powershell
 $sshKey = Join-Path $env:TEMP "citizen-registry-$Prefix"
-$pfx = Join-Path $env:TEMP "norland-client.pfx"
-$ca = Join-Path $env:TEMP "norland-demo-ca.crt"
+$pfx = Join-Path $env:TEMP "contoso-client.pfx"
+$ca = Join-Path $env:TEMP "contoso-demo-ca.crt"
 
-scp -P 2222 -i $sshKey azureuser@127.0.0.1:/home/azureuser/norland-client.pfx $pfx
+scp -P 2222 -i $sshKey azureuser@127.0.0.1:/home/azureuser/contoso-client.pfx $pfx
 scp -P 2222 -i $sshKey azureuser@127.0.0.1:/etc/citizen-registry/certs/client-ca.crt $ca
 
 Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Exportable:$false
 Import-Certificate -FilePath $ca -CertStoreLocation Cert:\CurrentUser\Root
 
 Remove-Item $pfx, $ca -Force
-ssh -p 2222 -i $sshKey azureuser@127.0.0.1 "rm -f /home/azureuser/norland-client.pfx"
+ssh -p 2222 -i $sshKey azureuser@127.0.0.1 "rm -f /home/azureuser/contoso-client.pfx"
 ```
 
 Close all browser windows and reopen the browser so it reloads the Windows certificate
@@ -1302,7 +1302,7 @@ Get-ChildItem Cert:\CurrentUser\My |
   Select-Object Subject, Issuer, Thumbprint, HasPrivateKey, NotAfter
 ```
 
-> The Norland Registry Demo CA is private and fictional, not publicly trusted. Remove its
+> The Contoso Registry Demo CA is private and fictional, not publicly trusted. Remove its
 > client certificate and trusted-root entry when the demo is no longer needed.
 
 ### Step 5: Verify mTLS and Attestation Evidence
@@ -1312,7 +1312,7 @@ Get-ChildItem Cert:\CurrentUser\My |
 curl -k --cert citizen.crt --key citizen.key https://localhost/health
 
 # Output shows:
-# - Norland demo mTLS certificate configuration
+# - Contoso demo mTLS certificate configuration
 # - Azure Attestation provider metadata reachability
 # - Managed HSM CMK and decoded Secure Key Release policy evidence
 # - Private DVR Blob source and non-secret Storage CMK identifiers
@@ -1649,7 +1649,7 @@ curl -sk --cert /path/to/client.crt --key /path/to/client.key `
 # Inspect the separately generated demo server certificate
 openssl x509 -in /etc/citizen-registry/certs/citizen-registry.crt `
   -noout -issuer -subject -dates
-# Expected issuer: Norland Registry Demo CA, not Azure Attestation
+# Expected issuer: Contoso Registry Demo CA, not Azure Attestation
 ```
 
 ---

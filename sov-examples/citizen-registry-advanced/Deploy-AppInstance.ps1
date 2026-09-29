@@ -45,6 +45,17 @@
 .PARAMETER Deploy
     Execute the deployment.
 
+.PARAMETER ResumePostDeploy
+    Refresh and validate an existing deployment without reprovisioning its VMs.
+
+.PARAMETER RotateDemoPki
+    With ResumePostDeploy, replace the private demo CA and issued certificates. Existing browser
+    client certificates stop working and must be replaced.
+
+.PARAMETER ResetSyntheticData
+    With ResumePostDeploy, create and verify a copy-only SQL backup, then replace all fictional
+    registry tables so the application can recreate and seed the current data contract.
+
 .PARAMETER ValidateOnly
     Validate Bicep templates without deployment.
 
@@ -109,6 +120,8 @@ param(
 
     [switch]$Deploy,
     [switch]$ResumePostDeploy,
+    [switch]$RotateDemoPki,
+    [switch]$ResetSyntheticData,
     [switch]$ValidateOnly,
     [switch]$Cleanup
 )
@@ -118,6 +131,18 @@ $PSNativeCommandUseErrorActionPreference = $true
 
 if ($UbuntuProEnabled -and [string]::IsNullOrWhiteSpace($UbuntuProAttachCommand)) {
     throw 'Ubuntu Pro was requested, but -UbuntuProAttachCommand was not supplied. Pass a secret-safe external attach command; never commit a Pro token.'
+}
+if ($RotateDemoPki -and -not $ResumePostDeploy) {
+    throw '-RotateDemoPki requires -ResumePostDeploy so existing infrastructure is validated before certificate replacement.'
+}
+if ($RotateDemoPki -and $Cleanup) {
+    throw '-RotateDemoPki cannot be combined with -Cleanup.'
+}
+if ($ResetSyntheticData -and -not $ResumePostDeploy) {
+    throw '-ResetSyntheticData requires -ResumePostDeploy because it deletes and recreates the fictional demo dataset.'
+}
+if ($ResetSyntheticData -and $Cleanup) {
+    throw '-ResetSyntheticData cannot be combined with -Cleanup.'
 }
 
 # Generate a 5-digit suffix, or reuse one to repair an existing deployment.
@@ -520,13 +545,17 @@ for _ in `$(seq 1 120); do
 done
 mkdir -p /opt/citizen-registry /etc/citizen-registry/certs /var/log/citizen-registry
 SOURCE_ARCHIVE=/tmp/citizen-registry-source.tar.gz
+SOURCE_ROOT=`$(mktemp -d /tmp/citizen-registry-source.XXXXXX)
 curl -fL --retry 5 --retry-delay 5 '$SourceArchiveUrl' -o "`$SOURCE_ARCHIVE"
-tar -xzf "`$SOURCE_ARCHIVE" -C /tmp
-SOURCE_DIR=`$(find /tmp -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' | head -1)
+tar -xzf "`$SOURCE_ARCHIVE" -C "`$SOURCE_ROOT"
+if [ -f "`$SOURCE_ROOT/app.py" ]; then
+    SOURCE_DIR="`$SOURCE_ROOT"
+else
+    SOURCE_DIR=`$(find "`$SOURCE_ROOT" -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' -print -quit)
+fi
 test -n "`$SOURCE_DIR"
 cp -a "`$SOURCE_DIR/." /opt/citizen-registry/app-src/
-rm -rf "`$SOURCE_ARCHIVE"
-find /tmp -maxdepth 1 -type d -name 'confidential-computing-*' -exec rm -rf {} +
+rm -rf "`$SOURCE_ARCHIVE" "`$SOURCE_ROOT"
 mkdir -p /opt/citizen-registry/app-src/static/vendor
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
@@ -606,13 +635,13 @@ for attempt in `$(seq 1 30); do
 done
 python3 /opt/citizen-registry/app-src/dvr_storage.py download --blob-uri "`$CCTV_VIDEO_BLOB_URI" --client-id '$appIdentityClientId' --path "`$CCTV_VIDEO"
 rm -f "`$CCTV_VIDEO_SOURCE" "`$CCTV_VIDEO_INGEST"
-openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/C=NL/O=Norland IT Department/OU=Registry PKI/CN=Norland Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
+openssl req -x509 -nodes -newkey rsa:3072 -days 365 -keyout /etc/citizen-registry/certs/client-ca.key -out /etc/citizen-registry/certs/client-ca.crt -subj '/O=Contoso IT Department/OU=Registry PKI/CN=Contoso Registry Demo CA' -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' -addext 'keyUsage=critical,keyCertSign,cRLSign'
 if [ '$PkiMode' = 'FileBackedDemo' ]; then
-    openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
+    openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen-registry.key -out /tmp/citizen-registry.csr -subj '/O=Contoso IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
     printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' 'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' > /tmp/server-ext.cnf
     openssl x509 -req -in /tmp/citizen-registry.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen-registry.crt -days 365 -sha256 -extfile /tmp/server-ext.cnf
 fi
-openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen.key -out /tmp/citizen.csr -subj '/C=NL/O=Norland IT Department/OU=Registry Clients/CN=citizen-registry-demo-client'
+openssl req -nodes -newkey rsa:2048 -keyout /etc/citizen-registry/certs/citizen.key -out /tmp/citizen.csr -subj '/O=Contoso IT Department/OU=Registry Clients/CN=citizen-registry-demo-client'
 printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' 'extendedKeyUsage=clientAuth' > /tmp/client-ext.cnf
 openssl x509 -req -in /tmp/citizen.csr -CA /etc/citizen-registry/certs/client-ca.crt -CAkey /etc/citizen-registry/certs/client-ca.key -CAcreateserial -out /etc/citizen-registry/certs/citizen.crt -days 365 -sha256 -extfile /tmp/client-ext.cnf
 chmod 600 /etc/citizen-registry/certs/*.key
@@ -650,7 +679,7 @@ systemctl daemon-reload
 systemctl enable --now citizen-registry
 cat > /etc/systemd/system/citizenhelp-llm.service <<'SERVICE'
 [Unit]
-Description=Norland Citizen Help local H100 LLM
+Description=Contoso Citizen Help local H100 LLM
 After=network-online.target citizen-gpu-attestation.service
 Requires=citizen-gpu-attestation.service
 RequiresMountsFor=/var/lib/citizen-registry
@@ -994,11 +1023,15 @@ if ($Deploy -or $ResumePostDeploy) {
             if (-not $diskId) {
                 throw "Cannot locate the app CVM model data disk."
             }
-            $currentSize = [int](az disk show `
+            $currentSizeText = az disk show `
                 --ids $diskId `
-                --query diskSizeGb `
+                --query diskSizeGB `
                 --output tsv `
-                --only-show-errors)
+                --only-show-errors
+            if ($LASTEXITCODE -ne 0 -or $currentSizeText -notmatch '^\d+$') {
+                throw "Cannot read the app CVM model data disk size."
+            }
+            $currentSize = [int]$currentSizeText
             if ($currentSize -ge $ModelDiskSizeGb) {
                 Write-Host "✓ Model disk is $currentSize GB (target $ModelDiskSizeGb GB)" -ForegroundColor Green
                 return
@@ -1120,18 +1153,125 @@ if ($Deploy -or $ResumePostDeploy) {
         $appRefreshScript = @"
 #!/bin/bash
 set -euo pipefail
-cloud-init status --wait
+if [ ! -f /etc/citizen-registry/environment ]; then
+    cloud-init status --wait
+fi
+systemctl stop citizen-registry.service 2>/dev/null || true
 systemctl stop citizen-cctv-anonymizer.service 2>/dev/null || true
 systemctl stop citizenhelp-llm.service 2>/dev/null || true
 mkdir -p /opt/citizen-registry/app-src/static/vendor /var/lib/citizen-registry/cctv/hls /var/lib/citizen-registry/dvr-cache
 SOURCE_ARCHIVE=/tmp/citizen-registry-source.tar.gz
+SOURCE_ROOT=`$(mktemp -d /tmp/citizen-registry-source.XXXXXX)
 curl -fL --retry 5 --retry-delay 5 '$SourceArchiveUrl' -o "`$SOURCE_ARCHIVE"
-tar -xzf "`$SOURCE_ARCHIVE" -C /tmp
-SOURCE_DIR=`$(find /tmp -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' | head -1)
+tar -xzf "`$SOURCE_ARCHIVE" -C "`$SOURCE_ROOT"
+if [ -f "`$SOURCE_ROOT/app.py" ]; then
+    SOURCE_DIR="`$SOURCE_ROOT"
+else
+    SOURCE_DIR=`$(find "`$SOURCE_ROOT" -type d -path '*/sov-examples/citizen-registry-advanced/app-instance/app-src' -print -quit)
+fi
 test -n "`$SOURCE_DIR"
 cp -a "`$SOURCE_DIR/." /opt/citizen-registry/app-src/
-rm -rf "`$SOURCE_ARCHIVE"
-find /tmp -maxdepth 1 -type d -name 'confidential-computing-*' -exec rm -rf {} +
+rm -rf "`$SOURCE_ARCHIVE" "`$SOURCE_ROOT"
+if [ '$ResetSyntheticData' = 'True' ]; then
+    python3 <<'PY'
+import os
+import re
+from datetime import datetime, timezone
+
+import pyodbc
+
+with open('/etc/citizen-registry/environment', encoding='utf-8') as environment_file:
+    for raw_line in environment_file:
+        key, separator, value = raw_line.strip().partition('=')
+        if separator and key:
+            os.environ[key] = value
+
+connection = pyodbc.connect(
+    'DRIVER={ODBC Driver 18 for SQL Server};'
+    f"SERVER={os.environ['DB_HOST']};DATABASE={os.environ['DB_NAME']};"
+    f"UID=sa;PWD={os.environ['DB_SA_PASSWORD']};Encrypt=yes;TrustServerCertificate=yes;",
+    autocommit=True,
+)
+try:
+    database_name = os.environ['DB_NAME']
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', database_name):
+        raise ValueError('DB_NAME contains unsupported characters')
+    backup_stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup_path = f'/var/opt/mssql/data/{database_name}-pre-contoso-{backup_stamp}.bak'
+    connection.timeout = 900
+    cursor = connection.cursor()
+    cursor.execute(
+        f"BACKUP DATABASE [{database_name}] TO DISK = N'{backup_path}' "
+        'WITH COPY_ONLY, INIT, CHECKSUM'
+    )
+    cursor.execute(f"RESTORE VERIFYONLY FROM DISK = N'{backup_path}' WITH CHECKSUM")
+    cursor.execute('''
+        DROP TABLE IF EXISTS dbo.citizen_tax_history;
+        DROP TABLE IF EXISTS dbo.citizen_employment_history;
+        DROP TABLE IF EXISTS dbo.citizen_health_records;
+        DROP TABLE IF EXISTS dbo.citizen_hospital_visits;
+        DROP TABLE IF EXISTS dbo.contoso_companies;
+        DROP TABLE IF EXISTS dbo.norland_companies;
+        DROP TABLE IF EXISTS dbo.demo_metadata;
+        DROP TABLE IF EXISTS dbo.citizen_registry;
+    ''')
+finally:
+    connection.close()
+print(f'CONTOSO_PRE_MIGRATION_BACKUP={backup_path}')
+print('CONTOSO_SYNTHETIC_SCHEMA_RESET=1')
+PY
+fi
+if [ '$RotateDemoPki' = 'True' ]; then
+    CERT_DIR=/etc/citizen-registry/certs
+    STAGING_DIR=`$(mktemp -d /tmp/contoso-demo-pki.XXXXXX)
+    BACKUP_DIR="/etc/citizen-registry/certs.backup.`$(date -u +%Y%m%dT%H%M%SZ)"
+    trap 'rm -rf "`$STAGING_DIR"' EXIT
+    openssl req -x509 -nodes -newkey rsa:3072 -days 365 \
+        -keyout "`$STAGING_DIR/client-ca.key" -out "`$STAGING_DIR/client-ca.crt" \
+        -subj '/O=Contoso IT Department/OU=Registry PKI/CN=Contoso Registry Demo CA' \
+        -addext 'basicConstraints=critical,CA:TRUE,pathlen:1' \
+        -addext 'keyUsage=critical,keyCertSign,cRLSign'
+    if [ '$PkiMode' = 'FileBackedDemo' ]; then
+        openssl req -nodes -newkey rsa:2048 -keyout "`$STAGING_DIR/citizen-registry.key" \
+            -out "`$STAGING_DIR/citizen-registry.csr" \
+            -subj '/O=Contoso IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
+        printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature,keyEncipherment' \
+            'extendedKeyUsage=serverAuth' 'subjectAltName=DNS:citizen-registry.internal,IP:$appPrivateIp' \
+            > "`$STAGING_DIR/server-ext.cnf"
+        openssl x509 -req -in "`$STAGING_DIR/citizen-registry.csr" \
+            -CA "`$STAGING_DIR/client-ca.crt" -CAkey "`$STAGING_DIR/client-ca.key" -CAcreateserial \
+            -out "`$STAGING_DIR/citizen-registry.crt" -days 365 -sha256 -extfile "`$STAGING_DIR/server-ext.cnf"
+        openssl verify -CAfile "`$STAGING_DIR/client-ca.crt" "`$STAGING_DIR/citizen-registry.crt"
+        test "`$(openssl x509 -noout -modulus -in "`$STAGING_DIR/citizen-registry.crt" | openssl sha256)" = \
+             "`$(openssl rsa -noout -modulus -in "`$STAGING_DIR/citizen-registry.key" | openssl sha256)"
+    fi
+    openssl req -nodes -newkey rsa:2048 -keyout "`$STAGING_DIR/citizen.key" \
+        -out "`$STAGING_DIR/citizen.csr" \
+        -subj '/O=Contoso IT Department/OU=Registry Clients/CN=citizen-registry-demo-client'
+    printf '%s\n' 'basicConstraints=critical,CA:FALSE' 'keyUsage=critical,digitalSignature' \
+        'extendedKeyUsage=clientAuth' > "`$STAGING_DIR/client-ext.cnf"
+    openssl x509 -req -in "`$STAGING_DIR/citizen.csr" \
+        -CA "`$STAGING_DIR/client-ca.crt" -CAkey "`$STAGING_DIR/client-ca.key" -CAcreateserial \
+        -out "`$STAGING_DIR/citizen.crt" -days 365 -sha256 -extfile "`$STAGING_DIR/client-ext.cnf"
+    openssl verify -CAfile "`$STAGING_DIR/client-ca.crt" "`$STAGING_DIR/citizen.crt"
+    test "`$(openssl x509 -noout -modulus -in "`$STAGING_DIR/citizen.crt" | openssl sha256)" = \
+         "`$(openssl rsa -noout -modulus -in "`$STAGING_DIR/citizen.key" | openssl sha256)"
+    mkdir -p "`$BACKUP_DIR"
+    cp -a "`$CERT_DIR/." "`$BACKUP_DIR/"
+    install -m 600 "`$STAGING_DIR/client-ca.key" "`$CERT_DIR/client-ca.key"
+    install -m 644 "`$STAGING_DIR/client-ca.crt" "`$CERT_DIR/client-ca.crt"
+    install -m 600 "`$STAGING_DIR/citizen.key" "`$CERT_DIR/citizen.key"
+    install -m 644 "`$STAGING_DIR/citizen.crt" "`$CERT_DIR/citizen.crt"
+    if [ '$PkiMode' = 'FileBackedDemo' ]; then
+        install -m 600 "`$STAGING_DIR/citizen-registry.key" "`$CERT_DIR/citizen-registry.key"
+        install -m 644 "`$STAGING_DIR/citizen-registry.crt" "`$CERT_DIR/citizen-registry.crt"
+    fi
+    openssl x509 -in "`$CERT_DIR/client-ca.crt" -noout -subject -fingerprint -sha256
+    openssl x509 -in "`$CERT_DIR/citizen.crt" -noout -subject -fingerprint -sha256
+    rm -rf "`$STAGING_DIR"
+    trap - EXIT
+    echo 'CONTOSO_DEMO_PKI_ROTATED=1'
+fi
 CCTV_VIDEO_SOURCE=/tmp/london-marathon-2026-upper-thames-street.webm
 CCTV_VIDEO_INGEST=/tmp/london-marathon-2026-close-faces.mp4
 CCTV_VIDEO=/var/lib/citizen-registry/dvr-cache/$dvrBlobName
@@ -1217,7 +1357,7 @@ SERVICE
 systemctl daemon-reload
 cat > /etc/systemd/system/citizenhelp-llm.service <<'SERVICE'
 [Unit]
-Description=Norland Citizen Help local H100 LLM
+Description=Contoso Citizen Help local H100 LLM
 After=network-online.target citizen-gpu-attestation.service
 Requires=citizen-gpu-attestation.service
 RequiresMountsFor=/var/lib/citizen-registry
@@ -1470,7 +1610,7 @@ systemctl restart citizen-registry.service
 systemctl restart citizenhelp-llm.service
 test -s /var/lib/citizen-registry/gpu-attestation.json
 systemctl enable citizen-cctv-anonymizer.service
-systemctl restart citizen-cctv-anonymizer.service
+systemctl restart --no-block citizen-cctv-anonymizer.service
 cat > /usr/local/sbin/attest-confidential-cpu <<'CPUATTEST'
 #!/bin/bash
 set -euo pipefail

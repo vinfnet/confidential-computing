@@ -89,7 +89,7 @@ def generate_query_plan(question: str) -> dict[str, Any]:
     schema = json.dumps(DATASET_SCHEMA, ensure_ascii=True, sort_keys=True)
     messages = [
         {'role': 'system', 'content': (
-            'You are a read-only SQL query planner for a fictional Norland registry. '
+            'You are a read-only SQL query planner for a fictional Contoso registry. '
             'Return JSON only, never SQL. Use only the supplied tables and columns. '
             'The application CVM validates and executes your plan. '
             'Schema JSON=' + schema + '\n'

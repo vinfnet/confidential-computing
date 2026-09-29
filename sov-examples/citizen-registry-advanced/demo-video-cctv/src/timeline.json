@@ -1,0 +1,20 @@
+{
+  "durationSeconds": 120,
+  "viewport": { "width": 1920, "height": 1080 },
+  "sections": [
+    { "id": "privacy-gap", "start": 0, "end": 25 },
+    { "id": "raw-evidence", "start": 25, "end": 45 },
+    { "id": "confidential-anonymization", "start": 45, "end": 70 },
+    { "id": "anonymous-review", "start": 70, "end": 105 },
+    { "id": "close", "start": 105, "end": 120 }
+  ],
+  "actions": [
+    { "at": 0, "handler": "openingCctvArchitecture", "checkpoint": "00-cctv-architecture" },
+    { "at": 25, "handler": "showRawEvidencePath", "checkpoint": "25-raw-evidence" },
+    { "at": 45, "handler": "openCctv" },
+    { "at": 50, "handler": "startComparison", "checkpoint": "50-comparison" },
+    { "at": 70, "handler": "showLiveMetrics", "checkpoint": "70-live-metrics" },
+    { "at": 92, "handler": "showTechnicalDetails", "checkpoint": "92-technical-details" },
+    { "at": 105, "handler": "closingFrame", "checkpoint": "105-close" }
+  ]
+}

@@ -4,7 +4,7 @@
 
 **Audience:** Microsoft sovereignty, confidential computing, Azure security, and public-sector stakeholders
 
-**Demo:** Republic of Norland Citizen Registry Advanced
+**Demo:** Republic of Contoso Citizen Registry Advanced
 
 ## 0:00-0:40 | Architecture Opening
 
@@ -12,7 +12,7 @@
 
 **Say:**
 
-> This is the Republic of Norland citizen registry on Azure Confidential Computing. We begin with its trust boundaries.
+> This is the Republic of Contoso citizen registry on Azure Confidential Computing. We begin with its trust boundaries.
 >
 > Browser traffic reaches the Application Confidential VM through private ExpressRoute or site-to-site VPN connectivity. The H100 is local to that tier. SQL runs in a separate Database Confidential VM over private VNet peering and TLS. Managed HSM uses Private Link, while Azure Attestation supplies runtime evidence.
 >
@@ -82,7 +82,7 @@ Then ask:
 
 ## Presenter Notes
 
-- Keep all questions within the fictional Norland dataset.
+- Keep all questions within the fictional Contoso dataset.
 - Use the live security evidence only as evidence of the deployed demo state; do not claim it is a full legal or regulatory certification.
 - If the H100 is still loading, use the registry and security evidence first, then ask Citizen Help after the model reports ready.
 - Do not display raw SQL, prompts, credentials, tokens, HSM key material, or unredacted logs.

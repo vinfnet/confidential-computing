@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     Connects to the SQL Server database on ACC and seeds it with
-    fictional Republic of Norland citizen records.
+    fictional Republic of Contoso citizen records.
 
 .PARAMETER DbServer
     SQL Server connection string or IP address.
@@ -56,11 +56,11 @@ if (-not (Test-Path $DataFile)) {
     $firstNames = @('Aisha', 'Alex', 'Amara', 'Daniel', 'Elena', 'Elias', 'Freya', 'Grace', 'Hana', 'Idris', 'Jonas', 'Leila', 'Mateo', 'Maya', 'Nora', 'Omar', 'Priya', 'Samuel', 'Sofia', 'Tomas')
     $lastNames = @('Bennett', 'Berg', 'Chen', 'Costa', 'Dubois', 'Garcia', 'Haddad', 'Ivanov', 'Johnson', 'Khan', 'Larsen', 'Mensah', 'Novak', 'Okafor', 'Petrova', 'Rossi', 'Silva', 'Smith', 'Tanaka', 'Williams')
     $locations = @(
-        @('Central', 'Alderwick', 'Cedar Avenue', 'NR1'), @('Central', 'Kingshaven', 'Parliament Street', 'NR2'),
-        @('North', 'Riverside', 'Mill Lane', 'NR3'), @('North', 'Harbor', 'Seafarer Road', 'NR4'),
-        @('South', 'Lakeside', 'Willow Crescent', 'NR5'), @('South', 'Meadowfield', 'Orchard Way', 'NR6'),
-        @('East', 'Hillview', 'Beacon Street', 'NR7'), @('East', 'Stonebridge', 'Foundry Road', 'NR8'),
-        @('West', 'Oakridge', 'Maple Drive', 'NR9'), @('West', 'Westport', 'Quayside Avenue', 'NR10')
+        @('Central', 'Alderwick', 'Cedar Avenue', 'CT1'), @('Central', 'Kingshaven', 'Parliament Street', 'CT2'),
+        @('North', 'Riverside', 'Mill Lane', 'CT3'), @('North', 'Harbor', 'Seafarer Road', 'CT4'),
+        @('South', 'Lakeside', 'Willow Crescent', 'CT5'), @('South', 'Meadowfield', 'Orchard Way', 'CT6'),
+        @('East', 'Hillview', 'Beacon Street', 'CT7'), @('East', 'Stonebridge', 'Foundry Road', 'CT8'),
+        @('West', 'Oakridge', 'Maple Drive', 'CT9'), @('West', 'Westport', 'Quayside Avenue', 'CT10')
     )
     $groups = @('A1 - Professional', 'A2 - Managerial', 'B1 - Skilled', 'B2 - Intermediate', 'C1 - Service', 'C2 - Supported')
     $citizens = for ($index = 1; $index -le 100; $index++) {
@@ -69,7 +69,7 @@ if (-not (Test-Path $DataFile)) {
         $month = 1 + (($index * 5) % 12)
         $day = 1 + (($index * 11) % 27)
         [pscustomobject]@{
-            idNumber = 'NLD-{0:D4}X' -f $index
+            idNumber = 'CTSO-{0:D4}X' -f $index
             firstName = $firstNames[($index * 3) % $firstNames.Count]
             lastName = $lastNames[($index * 7) % $lastNames.Count]
             dateOfBirth = '{0:D4}-{1:D2}-{2:D2}' -f $year, $month, $day
@@ -101,7 +101,7 @@ $valuesSql = ($demoData.citizens | ForEach-Object {
 
 $sqlScript = @"
 -- Citizen Registry Database Initialization
--- Republic of Norland
+-- Republic of Contoso
 
 IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'$DbName')
 BEGIN

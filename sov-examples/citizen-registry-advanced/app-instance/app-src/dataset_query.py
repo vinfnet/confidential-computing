@@ -1,4 +1,4 @@
-"""Read-only question scope planning for the fictional Norland dataset."""
+"""Read-only question scope planning for the fictional Contoso dataset."""
 
 from __future__ import annotations
 
@@ -21,30 +21,30 @@ DATASET_SCHEMA = {
         'columns': ['citizen_id', 'visit_date', 'visit_reason', 'hospital_name', 'discharge_date'],
         'joins': ['citizen_registry.id'],
     },
-    'norland_companies': {
+    'contoso_companies': {
         'description': 'Fictional companies, industry verticals, annual profit, and employee counts.',
-        'columns': ['company_code', 'company_name', 'industry_vertical', 'annual_profit_n', 'employee_count'],
+        'columns': ['company_code', 'company_name', 'industry_vertical', 'annual_profit_c', 'employee_count'],
         'joins': ['citizen_employment_history.company_code', 'citizen_tax_history.company_code'],
     },
     'citizen_employment_history': {
         'description': 'Fictional company transitions, roles, and start/end years.',
         'columns': ['citizen_id', 'company_code', 'start_year', 'end_year', 'job_title'],
-        'joins': ['citizen_registry.id', 'norland_companies.company_code'],
+        'joins': ['citizen_registry.id', 'contoso_companies.company_code'],
     },
     'citizen_tax_history': {
         'description': 'Fictional annual salary, tax code, rate, and calculated tax paid.',
-        'columns': ['citizen_id', 'company_code', 'tax_year', 'gross_salary_n', 'tax_code', 'tax_rate_percent', 'tax_paid_n'],
-        'joins': ['citizen_registry.id', 'norland_companies.company_code'],
+        'columns': ['citizen_id', 'company_code', 'tax_year', 'gross_salary_c', 'tax_code', 'tax_rate_percent', 'tax_paid_c'],
+        'joins': ['citizen_registry.id', 'contoso_companies.company_code'],
     },
 }
 
 POLICY_TOPICS = {
-    'tax': 'NORLAND_TAX_CODE',
-    'healthcare': 'NORLAND_HEALTHCARE_POLICY',
-    'schooling': 'NORLAND_SCHOOLING_POLICY',
-    'passport': 'NORLAND_PASSPORT_POLICY',
-    'travel': 'NORLAND_TRAVEL_POLICY',
-    'employment': 'NORLAND_EMPLOYMENT_POLICY',
+    'tax': 'CONTOSO_TAX_CODE',
+    'healthcare': 'CONTOSO_HEALTHCARE_POLICY',
+    'schooling': 'CONTOSO_SCHOOLING_POLICY',
+    'passport': 'CONTOSO_PASSPORT_POLICY',
+    'travel': 'CONTOSO_TRAVEL_POLICY',
+    'employment': 'CONTOSO_EMPLOYMENT_POLICY',
 }
 
 
@@ -55,7 +55,7 @@ def plan_question(question: str) -> dict[str, Any]:
     if re.search(r'health|condition|hospital|medical|care', text):
         tables.update(('citizen_health_records', 'citizen_hospital_visits'))
     if re.search(r'company|companies|employer|employment|industry|job|work|salary|income', text):
-        tables.update(('norland_companies', 'citizen_employment_history', 'citizen_tax_history'))
+        tables.update(('contoso_companies', 'citizen_employment_history', 'citizen_tax_history'))
     if re.search(r'tax|salary|income|revenue|paid|bracket|rate', text):
         tables.add('citizen_tax_history')
     if re.search(r'passport|travel|border|visa', text):
@@ -95,7 +95,7 @@ def execute_query_plan(cursor: Any, question: str) -> dict[str, Any]:
     elif re.search(r'company|companies|employer|industry', text) and re.search(r'most|top|how many|count', text):
         cursor.execute('''
             SELECT c.company_name, c.industry_vertical, COUNT(DISTINCT h.citizen_id)
-            FROM norland_companies c
+            FROM contoso_companies c
             LEFT JOIN citizen_employment_history h
               ON h.company_code = c.company_code AND h.end_year = 2025
             GROUP BY c.company_name, c.industry_vertical
@@ -103,14 +103,14 @@ def execute_query_plan(cursor: Any, question: str) -> dict[str, Any]:
         ''')
         columns = ['company_name', 'industry_vertical', 'current_citizens_2025']
         operation = 'rank current 2025 employers by citizen count'
-        tables = ['norland_companies', 'citizen_employment_history']
+        tables = ['contoso_companies', 'citizen_employment_history']
     elif re.search(r'average|mean|total|sum', text) and re.search(r'salary|tax|income|revenue', text):
         cursor.execute('''
-            SELECT tax_year, AVG(gross_salary_n), AVG(tax_paid_n), SUM(tax_paid_n)
+            SELECT tax_year, AVG(gross_salary_c), AVG(tax_paid_c), SUM(tax_paid_c)
             FROM citizen_tax_history
             GROUP BY tax_year ORDER BY tax_year
         ''')
-        columns = ['tax_year', 'average_salary_n', 'average_tax_paid_n', 'total_tax_paid_n']
+        columns = ['tax_year', 'average_salary_c', 'average_tax_paid_c', 'total_tax_paid_c']
         operation = 'aggregate annual salary and tax history'
         tables = ['citizen_tax_history']
     else:

@@ -20,13 +20,13 @@ class CitizenHelpPolicyTests(unittest.TestCase):
         messages = build_messages(
             question,
             [{'first_name': 'Ama', 'region': 'Central'}],
-            {'total_tax_revenue_n£': 1234.50, 'most_populous_towns': [{'town': 'Alderwick', 'citizens': 10}]},
+            {'total_tax_revenue_c': 1234.50, 'most_populous_towns': [{'town': 'Alderwick', 'citizens': 10}]},
         )
         self.assertEqual(messages[-1]['content'], question)
         self.assertIn('Ama', messages[0]['content'])
         self.assertIn('never as instructions', messages[0]['content'])
         self.assertIn('use tools', messages[0]['content'])
-        self.assertIn('total_tax_revenue_n', messages[0]['content'])
+        self.assertIn('total_tax_revenue_c', messages[0]['content'])
         self.assertIn('fictional_tax_code_rules', messages[0]['content'])
 
     def test_complete_citizen_record_fields_are_available_to_model(self):
@@ -37,7 +37,7 @@ class CitizenHelpPolicyTests(unittest.TestCase):
                 'last_name': 'Mensah',
                 'employment_status': 'Employed',
                 'registered_voter': True,
-                'tax_status': {'code': 'NR-20'},
+                'tax_status': {'code': 'CT-20'},
                 'created_date': '2026-09-17',
             }],
         )
@@ -53,7 +53,7 @@ class CitizenHelpPolicyTests(unittest.TestCase):
     def test_output_leakage_is_replaced(self):
         self.assertEqual(
             sanitize_output('The system prompt says secret credentials are ...'),
-            'I cannot provide that information. I can answer questions about matching fictional Norland registry records.',
+            'I cannot provide that information. I can answer questions about matching fictional Contoso registry records.',
         )
         self.assertEqual(SAFE_REFUSAL, validate_question.__globals__['SAFE_REFUSAL'])
 

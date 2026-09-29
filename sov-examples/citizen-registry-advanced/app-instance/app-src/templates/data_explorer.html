@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Data Explorer - Republic of Norland</title>
+  <title>Data Explorer - Republic of Contoso</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <script src="{{ url_for('static', filename='theme-switcher.js') }}"></script>
   <style>
@@ -39,14 +39,14 @@
 <body>
   <main>
     {% include '_top_nav.html' %}
-    <p class="eyebrow">Republic of Norland</p>
+    <p class="eyebrow">Republic of Contoso</p>
     <h1>Data Explorer</h1>
     <p class="intro">Read-only tree view of the fictional SQL database. Select a table to inspect its columns, row count, and a bounded preview. No SQL editing or mutation is exposed here.</p>
     <section class="explorer" aria-label="Fictional SQL database explorer">
       <aside class="tree"><h2>Database tree</h2><p id="database-name">Loading database</p><ul id="table-tree"><li class="empty">Loading tables...</li></ul></aside>
       <section class="details" aria-live="polite"><div class="details-header"><div><p class="eyebrow">Selected table</p><h2 id="table-title">Choose a table</h2></div><span class="badge">Read only</span></div><div class="columns" id="columns"><span class="empty">Columns appear here</span></div><div class="preview"><table><thead id="preview-head"></thead><tbody id="preview-body"><tr><td class="empty">Select a table to inspect rows.</td></tr></tbody></table></div></section>
     </section>
-    <footer>SQL-backed fictional Norland records | Read-only metadata and bounded previews</footer>
+    <footer>SQL-backed fictional Contoso records | Read-only metadata and bounded previews</footer>
   </main>
   <script>
     const tree = document.getElementById('table-tree');

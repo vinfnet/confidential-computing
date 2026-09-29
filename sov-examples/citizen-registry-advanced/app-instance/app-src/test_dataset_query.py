@@ -10,11 +10,11 @@ class DatasetQueryPlanTests(unittest.TestCase):
         self.connection.executescript('''
             CREATE TABLE citizen_health_records (condition_name TEXT, condition_code TEXT, citizen_id INTEGER, is_active INTEGER);
             INSERT INTO citizen_health_records VALUES ('Fictional allergy', 'DEMO-A', 1, 1), ('Fictional allergy', 'DEMO-A', 2, 1);
-            CREATE TABLE norland_companies (company_code TEXT, company_name TEXT, industry_vertical TEXT);
+            CREATE TABLE contoso_companies (company_code TEXT, company_name TEXT, industry_vertical TEXT);
             CREATE TABLE citizen_employment_history (company_code TEXT, citizen_id INTEGER, end_year INTEGER);
-            INSERT INTO norland_companies VALUES ('NOR-001', 'Example Works', 'Example industry');
-            INSERT INTO citizen_employment_history VALUES ('NOR-001', 1, 2025);
-            CREATE TABLE citizen_tax_history (tax_year INTEGER, gross_salary_n NUMERIC, tax_paid_n NUMERIC);
+            INSERT INTO contoso_companies VALUES ('CTSO-001', 'Example Works', 'Example industry');
+            INSERT INTO citizen_employment_history VALUES ('CTSO-001', 1, 2025);
+            CREATE TABLE citizen_tax_history (tax_year INTEGER, gross_salary_c NUMERIC, tax_paid_c NUMERIC);
             INSERT INTO citizen_tax_history VALUES (2025, 50000, 7000), (2025, 60000, 9000);
         ''')
 
@@ -26,7 +26,7 @@ class DatasetQueryPlanTests(unittest.TestCase):
         self.assertTrue(plan['read_only'])
         self.assertIn('citizen_tax_history', plan['tables'])
         self.assertIn('citizen_employment_history', plan['tables'])
-        self.assertIn('norland_companies', plan['tables'])
+        self.assertIn('contoso_companies', plan['tables'])
 
     def test_health_scope_includes_condition_and_visit_tables(self):
         plan = plan_question('How many citizens had a hospital visit for each condition?')
@@ -34,7 +34,7 @@ class DatasetQueryPlanTests(unittest.TestCase):
         self.assertIn('citizen_hospital_visits', plan['tables'])
 
     def test_policy_scope_is_explicit(self):
-        plan = plan_question('What are the Norland passport and travel rules?')
+        plan = plan_question('What are the Contoso passport and travel rules?')
         self.assertIn('passport', plan['policy_topics'])
         self.assertIn('travel', plan['policy_topics'])
 
@@ -46,7 +46,7 @@ class DatasetQueryPlanTests(unittest.TestCase):
     def test_salary_question_executes_fixed_aggregate_query(self):
         result = execute_query_plan(self.connection.cursor(), 'What is the average salary?')
         self.assertEqual(result['operation'], 'aggregate annual salary and tax history')
-        self.assertEqual(result['rows'][0]['average_salary_n'], 55000.0)
+        self.assertEqual(result['rows'][0]['average_salary_c'], 55000.0)
 
 
 if __name__ == '__main__':

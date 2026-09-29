@@ -185,16 +185,16 @@ PERSONA_GROUPS = [
     ]),
 ]
 LOCATIONS = [
-    ('Central', 'Alderwick', 'Cedar Avenue', 'NR1'),
-    ('Central', 'Kingshaven', 'Parliament Street', 'NR2'),
-    ('North', 'Riverside', 'Mill Lane', 'NR3'),
-    ('North', 'Harbor', 'Seafarer Road', 'NR4'),
-    ('South', 'Lakeside', 'Willow Crescent', 'NR5'),
-    ('South', 'Meadowfield', 'Orchard Way', 'NR6'),
-    ('East', 'Hillview', 'Beacon Street', 'NR7'),
-    ('East', 'Stonebridge', 'Foundry Road', 'NR8'),
-    ('West', 'Oakridge', 'Maple Drive', 'NR9'),
-    ('West', 'Westport', 'Quayside Avenue', 'NR10'),
+    ('Central', 'Alderwick', 'Cedar Avenue', 'CT1'),
+    ('Central', 'Kingshaven', 'Parliament Street', 'CT2'),
+    ('North', 'Riverside', 'Mill Lane', 'CT3'),
+    ('North', 'Harbor', 'Seafarer Road', 'CT4'),
+    ('South', 'Lakeside', 'Willow Crescent', 'CT5'),
+    ('South', 'Meadowfield', 'Orchard Way', 'CT6'),
+    ('East', 'Hillview', 'Beacon Street', 'CT7'),
+    ('East', 'Stonebridge', 'Foundry Road', 'CT8'),
+    ('West', 'Oakridge', 'Maple Drive', 'CT9'),
+    ('West', 'Westport', 'Quayside Avenue', 'CT10'),
 ]
 SOCIOECONOMIC_GROUPS = [
     'A1 - Professional', 'A2 - Managerial', 'B1 - Skilled',
@@ -222,39 +222,39 @@ HEALTH_VISIT_REASONS = [
     'Physiotherapy review', 'Vaccination appointment',
     'Dietary consultation', 'Follow-up appointment',
 ]
-NORLAND_TAX_CODE = [
-    {'code': 'NR-00', 'label': 'Civic exemption band', 'lower_salary': 0, 'upper_salary': 11999.99, 'rate_percent': 0},
-    {'code': 'NR-10', 'label': 'Foundational band', 'lower_salary': 12000, 'upper_salary': 29999.99, 'rate_percent': 10},
-    {'code': 'NR-20', 'label': 'General band', 'lower_salary': 30000, 'upper_salary': 59999.99, 'rate_percent': 20},
-    {'code': 'NR-30', 'label': 'Stewardship band', 'lower_salary': 60000, 'upper_salary': None, 'rate_percent': 30},
+CONTOSO_TAX_CODE = [
+    {'code': 'CT-00', 'label': 'Civic exemption band', 'lower_salary': 0, 'upper_salary': 11999.99, 'rate_percent': 0},
+    {'code': 'CT-10', 'label': 'Foundational band', 'lower_salary': 12000, 'upper_salary': 29999.99, 'rate_percent': 10},
+    {'code': 'CT-20', 'label': 'General band', 'lower_salary': 30000, 'upper_salary': 59999.99, 'rate_percent': 20},
+    {'code': 'CT-30', 'label': 'Stewardship band', 'lower_salary': 60000, 'upper_salary': None, 'rate_percent': 30},
 ]
 
 
-NORLAND_COMPANIES = [
-    ('NOR-001', 'Alderwick Gridworks', 'Energy and utilities', 184000000, 4200),
-    ('NOR-002', 'Blue Harbor Systems', 'Software and communications', 96000000, 1850),
-    ('NOR-003', 'Cedarline Foods', 'Food manufacturing', 71000000, 2300),
-    ('NOR-004', 'Civic Transit Works', 'Transport and infrastructure', 128000000, 5100),
-    ('NOR-005', 'Lakeside Biologics', 'Biotechnology and health research', 152000000, 1250),
-    ('NOR-006', 'Northstar Learning Cooperative', 'Education services', 43000000, 1700),
-    ('NOR-007', 'Stonebridge Finance', 'Financial services', 205000000, 2900),
-    ('NOR-008', 'Westport Circular Materials', 'Recycling and advanced materials', 68000000, 1450),
+CONTOSO_COMPANIES = [
+    ('CTSO-001', 'Alderwick Gridworks', 'Energy and utilities', 184000000, 4200),
+    ('CTSO-002', 'Blue Harbor Systems', 'Software and communications', 96000000, 1850),
+    ('CTSO-003', 'Cedarline Foods', 'Food manufacturing', 71000000, 2300),
+    ('CTSO-004', 'Civic Transit Works', 'Transport and infrastructure', 128000000, 5100),
+    ('CTSO-005', 'Lakeside Biologics', 'Biotechnology and health research', 152000000, 1250),
+    ('CTSO-006', 'Northstar Learning Cooperative', 'Education services', 43000000, 1700),
+    ('CTSO-007', 'Stonebridge Finance', 'Financial services', 205000000, 2900),
+    ('CTSO-008', 'Westport Circular Materials', 'Recycling and advanced materials', 68000000, 1450),
 ]
-NORLAND_JOB_TITLES = (
+CONTOSO_JOB_TITLES = (
     'Apprentice', 'Coordinator', 'Analyst', 'Specialist', 'Senior specialist',
     'Team lead', 'Manager', 'Director',
 )
 
 
 def _tax_calculation(annual_salary):
-    """Calculate progressive fictional Norland tax from annual salary."""
+    """Calculate progressive fictional Contoso tax from annual salary."""
     salary = max(0.0, float(annual_salary or 0))
     tax_paid = 0.0
     remaining = salary
     previous_upper = 0.0
-    marginal_code = NORLAND_TAX_CODE[0]['code']
+    marginal_code = CONTOSO_TAX_CODE[0]['code']
     marginal_rate = 0
-    for band in NORLAND_TAX_CODE:
+    for band in CONTOSO_TAX_CODE:
         upper = band['upper_salary']
         taxable = remaining if upper is None else min(remaining, upper - previous_upper)
         if taxable > 0:
@@ -268,27 +268,27 @@ def _tax_calculation(annual_salary):
     return {
         'code': marginal_code,
         'rate_percent': marginal_rate,
-        'gross_salary_n£': round(salary, 2),
-        'tax_paid_n£': round(tax_paid, 2),
+        'gross_salary_c': round(salary, 2),
+        'tax_paid_c': round(tax_paid, 2),
         'status': 'fictional demonstration calculation',
     }
 
 
 def _tax_status(tax_paid, annual_salary=None):
-    """Return the fictional Norland tax status for a salary or legacy record."""
+    """Return the fictional Contoso tax status for a salary or legacy record."""
     if annual_salary is not None:
         return _tax_calculation(annual_salary)
     amount = float(tax_paid or 0)
-    for band in NORLAND_TAX_CODE:
+    for band in CONTOSO_TAX_CODE:
         if band['rate_percent'] == 0 or amount <= band['upper_salary']:
             return {
                 'code': band['code'],
                 'label': band['label'],
                 'rate_percent': band['rate_percent'],
-                'annual_tax_paid_n£': round(amount, 2),
+                'annual_tax_paid_c': round(amount, 2),
                 'status': 'fictional demonstration classification',
             }
-    raise ValueError('Tax amount did not match a Norland tax band')
+    raise ValueError('Tax amount did not match a Contoso tax band')
 
 
 def _synthetic_employment_history(citizens):
@@ -302,18 +302,18 @@ def _synthetic_employment_history(citizens):
         if first_year > last_year:
             first_year = last_year
         year = first_year
-        job_index = (citizen_id * 3) % len(NORLAND_JOB_TITLES)
-        company_index = (citizen_id * 5) % len(NORLAND_COMPANIES)
+        job_index = (citizen_id * 3) % len(CONTOSO_JOB_TITLES)
+        company_index = (citizen_id * 5) % len(CONTOSO_COMPANIES)
         while year <= last_year:
             duration = 2 + ((citizen_id + year) % 5)
             end_year = min(last_year, year + duration - 1)
-            company = NORLAND_COMPANIES[company_index]
+            company = CONTOSO_COMPANIES[company_index]
             employment.append({
                 'citizen_id': citizen_id,
                 'company_code': company[0],
                 'start_year': year,
                 'end_year': end_year,
-                'job_title': NORLAND_JOB_TITLES[job_index],
+                'job_title': CONTOSO_JOB_TITLES[job_index],
             })
             for tax_year in range(year, end_year + 1):
                 experience = tax_year - first_year
@@ -323,14 +323,14 @@ def _synthetic_employment_history(citizens):
                     'citizen_id': citizen_id,
                     'company_code': company[0],
                     'tax_year': tax_year,
-                    'gross_salary_n£': calculation['gross_salary_n£'],
+                    'gross_salary_c': calculation['gross_salary_c'],
                     'tax_code': calculation['code'],
                     'tax_rate_percent': calculation['rate_percent'],
-                    'tax_paid_n£': calculation['tax_paid_n£'],
+                    'tax_paid_c': calculation['tax_paid_c'],
                 })
             year = end_year + 1
-            company_index = (company_index + 1 + citizen_id % 3) % len(NORLAND_COMPANIES)
-            job_index = min(len(NORLAND_JOB_TITLES) - 1, job_index + 1)
+            company_index = (company_index + 1 + citizen_id % 3) % len(CONTOSO_COMPANIES)
+            job_index = min(len(CONTOSO_JOB_TITLES) - 1, job_index + 1)
     return employment, tax_history
 
 
@@ -358,7 +358,7 @@ def _expanded_personas():
 
 
 def _synthetic_citizens():
-    """Build 1,000 deterministic, entirely fictional Republic of Norland records."""
+    """Build 1,000 deterministic, entirely fictional Republic of Contoso records."""
     citizens = []
     personas = _expanded_personas()
     for index, (first_name, last_name, sex, _) in enumerate(personas, start=1):
@@ -367,7 +367,7 @@ def _synthetic_citizens():
         month = 1 + ((index * 5) % 12)
         day = 1 + ((index * 11) % 27)
         citizens.append({
-            'national_id': f'NLD-{index:04d}X',
+            'national_id': f'CTSO-{index:04d}X',
             'first_name': first_name,
             'last_name': last_name,
             'date_of_birth': f'{year:04d}-{month:02d}-{day:02d}',
@@ -384,7 +384,7 @@ def _synthetic_citizens():
 
 def _portrait_profile(national_id):
     for citizen_index, (_, _, _, portrait_profile) in enumerate(_expanded_personas(), start=1):
-        expected_id = f'NLD-{citizen_index:04d}X'
+        expected_id = f'CTSO-{citizen_index:04d}X'
         if national_id == expected_id:
             return portrait_profile
     return None
@@ -467,7 +467,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
         cur.execute("""
             DECLARE @lock_result INT;
             EXEC @lock_result = sys.sp_getapplock
-                @Resource = N'citizen-registry-seed-v106',
+                @Resource = N'citizen-registry-seed-v107',
                 @LockMode = N'Exclusive',
                 @LockOwner = N'Session',
                 @LockTimeout = 30000;
@@ -539,13 +539,13 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                         REFERENCES dbo.citizen_registry(id) ON DELETE CASCADE
                 )
             END
-            IF OBJECT_ID(N'dbo.norland_companies', N'U') IS NULL
+            IF OBJECT_ID(N'dbo.contoso_companies', N'U') IS NULL
             BEGIN
-                CREATE TABLE dbo.norland_companies (
+                CREATE TABLE dbo.contoso_companies (
                     company_code NVARCHAR(20) PRIMARY KEY,
                     company_name NVARCHAR(160) NOT NULL,
                     industry_vertical NVARCHAR(120) NOT NULL,
-                    annual_profit_n DECIMAL(18,2) NOT NULL,
+                    annual_profit_c DECIMAL(18,2) NOT NULL,
                     employee_count INT NOT NULL
                 )
             END
@@ -561,7 +561,7 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                     CONSTRAINT FK_employment_citizen FOREIGN KEY (citizen_id)
                         REFERENCES dbo.citizen_registry(id) ON DELETE CASCADE,
                     CONSTRAINT FK_employment_company FOREIGN KEY (company_code)
-                        REFERENCES dbo.norland_companies(company_code)
+                        REFERENCES dbo.contoso_companies(company_code)
                 )
             END
             IF OBJECT_ID(N'dbo.citizen_tax_history', N'U') IS NULL
@@ -571,21 +571,21 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                     citizen_id INT NOT NULL,
                     company_code NVARCHAR(20) NOT NULL,
                     tax_year INT NOT NULL,
-                    gross_salary_n DECIMAL(12,2) NOT NULL,
+                    gross_salary_c DECIMAL(12,2) NOT NULL,
                     tax_code NVARCHAR(20) NOT NULL,
                     tax_rate_percent DECIMAL(5,2) NOT NULL,
-                    tax_paid_n DECIMAL(12,2) NOT NULL,
+                    tax_paid_c DECIMAL(12,2) NOT NULL,
                     CONSTRAINT FK_tax_history_citizen FOREIGN KEY (citizen_id)
                         REFERENCES dbo.citizen_registry(id) ON DELETE CASCADE,
                     CONSTRAINT FK_tax_history_company FOREIGN KEY (company_code)
-                        REFERENCES dbo.norland_companies(company_code)
+                        REFERENCES dbo.contoso_companies(company_code)
                 )
             END
         """)
 
-        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 106")
+        cur.execute("SELECT COUNT(*) FROM dbo.demo_metadata WHERE seed_version = 107")
         if cur.fetchone()[0] == 0:
-            cur.execute("DELETE FROM dbo.citizen_tax_history; DELETE FROM dbo.citizen_employment_history; DELETE FROM dbo.citizen_health_records; DELETE FROM dbo.citizen_hospital_visits; DELETE FROM dbo.norland_companies; DELETE FROM dbo.citizen_registry; DBCC CHECKIDENT ('dbo.citizen_registry', RESEED, 0)")
+            cur.execute("DELETE FROM dbo.citizen_tax_history; DELETE FROM dbo.citizen_employment_history; DELETE FROM dbo.citizen_health_records; DELETE FROM dbo.citizen_hospital_visits; DELETE FROM dbo.contoso_companies; DELETE FROM dbo.citizen_registry; DBCC CHECKIDENT ('dbo.citizen_registry', RESEED, 0)")
             insert_sql = """
                 INSERT INTO dbo.citizen_registry
                 (national_id, first_name, last_name, date_of_birth, sex, region,
@@ -606,10 +606,10 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
             employment, tax_history = _synthetic_employment_history(generated_citizens)
             cur.fast_executemany = True
             cur.executemany("""
-                INSERT INTO dbo.norland_companies
-                (company_code, company_name, industry_vertical, annual_profit_n, employee_count)
+                INSERT INTO dbo.contoso_companies
+                (company_code, company_name, industry_vertical, annual_profit_c, employee_count)
                 VALUES (?, ?, ?, ?, ?)
-            """, NORLAND_COMPANIES)
+            """, CONTOSO_COMPANIES)
             cur.executemany("""
                 INSERT INTO dbo.citizen_employment_history
                 (citizen_id, company_code, start_year, end_year, job_title)
@@ -617,12 +617,12 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
             """, [(item['citizen_id'], item['company_code'], item['start_year'], item['end_year'], item['job_title']) for item in employment])
             cur.executemany("""
                 INSERT INTO dbo.citizen_tax_history
-                (citizen_id, company_code, tax_year, gross_salary_n, tax_code, tax_rate_percent, tax_paid_n)
+                (citizen_id, company_code, tax_year, gross_salary_c, tax_code, tax_rate_percent, tax_paid_c)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, [(item['citizen_id'], item['company_code'], item['tax_year'], item['gross_salary_n£'], item['tax_code'], item['tax_rate_percent'], item['tax_paid_n£']) for item in tax_history])
+            """, [(item['citizen_id'], item['company_code'], item['tax_year'], item['gross_salary_c'], item['tax_code'], item['tax_rate_percent'], item['tax_paid_c']) for item in tax_history])
             cur.executemany(
                 "UPDATE dbo.citizen_registry SET tax_paid_last_year = ? WHERE id = ?",
-                [(item['tax_paid_n£'], item['citizen_id']) for item in tax_history if item['tax_year'] == 2025],
+                [(item['tax_paid_c'], item['citizen_id']) for item in tax_history if item['tax_year'] == 2025],
             )
             cur.executemany("""
                 INSERT INTO dbo.citizen_health_records
@@ -641,12 +641,12 @@ def _bootstrap_demo_database(server, database, db_user, db_password):
                 item['hospital_name'], item['discharge_date'],
             ) for item in visits])
             cur.execute("DELETE FROM dbo.demo_metadata")
-            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (106)")
+            cur.execute("INSERT INTO dbo.demo_metadata (seed_version) VALUES (107)")
         
         logger.info(f"Database {database} bootstrapped successfully")
     finally:
         try:
-            admin_conn.execute("EXEC sys.sp_releaseapplock @Resource = N'citizen-registry-seed-v106', @LockOwner = N'Session'")
+            admin_conn.execute("EXEC sys.sp_releaseapplock @Resource = N'citizen-registry-seed-v107', @LockOwner = N'Session'")
         except pyodbc.Error:
             logger.exception('Failed to release database seed lock')
         admin_conn.close()
@@ -735,11 +735,11 @@ def _get_db_conn():
             )
         ''')
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS norland_companies (
+            CREATE TABLE IF NOT EXISTS contoso_companies (
                 company_code TEXT PRIMARY KEY,
                 company_name TEXT NOT NULL,
                 industry_vertical TEXT NOT NULL,
-                annual_profit_n NUMERIC NOT NULL,
+                annual_profit_c NUMERIC NOT NULL,
                 employee_count INTEGER NOT NULL
             )
         ''')
@@ -759,18 +759,18 @@ def _get_db_conn():
                 citizen_id INTEGER NOT NULL,
                 company_code TEXT NOT NULL,
                 tax_year INTEGER NOT NULL,
-                gross_salary_n NUMERIC NOT NULL,
+                gross_salary_c NUMERIC NOT NULL,
                 tax_code TEXT NOT NULL,
                 tax_rate_percent NUMERIC NOT NULL,
-                tax_paid_n NUMERIC NOT NULL
+                tax_paid_c NUMERIC NOT NULL
             )
         ''')
-        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 106').fetchone()[0] == 0:
+        if conn.execute('SELECT COUNT(*) FROM demo_metadata WHERE seed_version = 107').fetchone()[0] == 0:
             conn.execute('DELETE FROM citizen_tax_history')
             conn.execute('DELETE FROM citizen_employment_history')
             conn.execute('DELETE FROM citizen_health_records')
             conn.execute('DELETE FROM citizen_hospital_visits')
-            conn.execute('DELETE FROM norland_companies')
+            conn.execute('DELETE FROM contoso_companies')
             conn.execute('DELETE FROM citizen_registry')
             conn.execute("DELETE FROM sqlite_sequence WHERE name = 'citizen_registry'")
             generated_citizens = _synthetic_citizens()
@@ -790,20 +790,20 @@ def _get_db_conn():
             conditions, visits = _synthetic_health_records(generated_citizens)
             employment, tax_history = _synthetic_employment_history(generated_citizens)
             conn.executemany(
-                'INSERT INTO norland_companies (company_code, company_name, industry_vertical, annual_profit_n, employee_count) VALUES (?, ?, ?, ?, ?)',
-                NORLAND_COMPANIES,
+                'INSERT INTO contoso_companies (company_code, company_name, industry_vertical, annual_profit_c, employee_count) VALUES (?, ?, ?, ?, ?)',
+                CONTOSO_COMPANIES,
             )
             conn.executemany(
                 'INSERT INTO citizen_employment_history (citizen_id, company_code, start_year, end_year, job_title) VALUES (?, ?, ?, ?, ?)',
                 [(item['citizen_id'], item['company_code'], item['start_year'], item['end_year'], item['job_title']) for item in employment],
             )
             conn.executemany(
-                'INSERT INTO citizen_tax_history (citizen_id, company_code, tax_year, gross_salary_n, tax_code, tax_rate_percent, tax_paid_n) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [(item['citizen_id'], item['company_code'], item['tax_year'], item['gross_salary_n£'], item['tax_code'], item['tax_rate_percent'], item['tax_paid_n£']) for item in tax_history],
+                'INSERT INTO citizen_tax_history (citizen_id, company_code, tax_year, gross_salary_c, tax_code, tax_rate_percent, tax_paid_c) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                [(item['citizen_id'], item['company_code'], item['tax_year'], item['gross_salary_c'], item['tax_code'], item['tax_rate_percent'], item['tax_paid_c']) for item in tax_history],
             )
             conn.executemany(
                 'UPDATE citizen_registry SET tax_paid_last_year = ? WHERE id = ?',
-                [(item['tax_paid_n£'], item['citizen_id']) for item in tax_history if item['tax_year'] == 2025],
+                [(item['tax_paid_c'], item['citizen_id']) for item in tax_history if item['tax_year'] == 2025],
             )
             conn.executemany(
                 """
@@ -828,7 +828,7 @@ def _get_db_conn():
                 ) for item in visits],
             )
             conn.execute('DELETE FROM demo_metadata')
-            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (106)')
+            conn.execute('INSERT INTO demo_metadata (seed_version) VALUES (107)')
             conn.commit()
         return conn
     
@@ -1044,7 +1044,7 @@ def _citizen_help_context(question):
         'registered',
         'citizen', 'citizens', 'region', 'state', 'town', 'address',
         'postal', 'code', 'status', 'employment', 'employed', 'voter',
-        'voting', 'tax', 'bracket', 'rate', 'fictional', 'norland', 'company',
+        'voting', 'tax', 'bracket', 'rate', 'fictional', 'contoso', 'company',
         'work', 'worked', 'working', 'salary', 'salaries', 'paid', 'payment',
         'payments', 'year', 'years',
     }
@@ -1073,7 +1073,7 @@ def _citizen_help_context(question):
     town_counts = Counter(row[0] for row in summary_rows)
     region_counts = Counter(row[1] for row in summary_rows)
     cursor.execute("""
-        SELECT tax_year, AVG(gross_salary_n), AVG(tax_paid_n), SUM(tax_paid_n), COUNT(*)
+        SELECT tax_year, AVG(gross_salary_c), AVG(tax_paid_c), SUM(tax_paid_c), COUNT(*)
         FROM citizen_tax_history
         GROUP BY tax_year
         ORDER BY tax_year
@@ -1087,7 +1087,7 @@ def _citizen_help_context(question):
         SELECT c.sex, COUNT(*), SUM(lifetime.total_tax), AVG(lifetime.total_tax)
         FROM citizen_registry c
         JOIN (
-            SELECT citizen_id, SUM(tax_paid_n) AS total_tax
+            SELECT citizen_id, SUM(tax_paid_c) AS total_tax
             FROM citizen_tax_history
             GROUP BY citizen_id
         ) lifetime ON lifetime.citizen_id = c.id
@@ -1097,11 +1097,11 @@ def _citizen_help_context(question):
     gender_tax_rows = cursor.fetchall()
     cursor.execute("""
         SELECT c.company_code, c.company_name, c.industry_vertical,
-               c.annual_profit_n, c.employee_count, COUNT(DISTINCT h.citizen_id)
-        FROM norland_companies c
+             c.annual_profit_c, c.employee_count, COUNT(DISTINCT h.citizen_id)
+         FROM contoso_companies c
         LEFT JOIN citizen_employment_history h ON h.company_code = c.company_code
         GROUP BY c.company_code, c.company_name, c.industry_vertical,
-                 c.annual_profit_n, c.employee_count
+                 c.annual_profit_c, c.employee_count
         ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
     """)
     company_rows = cursor.fetchall()
@@ -1115,12 +1115,12 @@ def _citizen_help_context(question):
     health_condition_rows = cursor.fetchall()
     cursor.execute("""
         SELECT c.company_code, c.company_name, c.industry_vertical,
-               c.annual_profit_n, c.employee_count, COUNT(DISTINCT h.citizen_id)
-        FROM norland_companies c
+             c.annual_profit_c, c.employee_count, COUNT(DISTINCT h.citizen_id)
+         FROM contoso_companies c
         LEFT JOIN citizen_employment_history h
           ON h.company_code = c.company_code AND h.end_year = 2025
         GROUP BY c.company_code, c.company_name, c.industry_vertical,
-                 c.annual_profit_n, c.employee_count
+                 c.annual_profit_c, c.employee_count
         ORDER BY COUNT(DISTINCT h.citizen_id) DESC, c.company_name
     """)
     current_company_rows = cursor.fetchall()
@@ -1135,7 +1135,7 @@ def _citizen_help_context(question):
                   WHEN DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()) -
                       CASE WHEN DATEADD(YEAR, DATEDIFF(YEAR, c.date_of_birth, GETUTCDATE()), c.date_of_birth) > GETUTCDATE() THEN 1 ELSE 0 END BETWEEN 50 AND 59 THEN '50s'
                 END AS age_band,
-                c.sex, AVG(t.gross_salary_n), AVG(t.tax_paid_n), COUNT(DISTINCT c.id)
+                c.sex, AVG(t.gross_salary_c), AVG(t.tax_paid_c), COUNT(DISTINCT c.id)
            FROM citizen_registry c
            JOIN citizen_tax_history t ON t.citizen_id = c.id AND t.tax_year = 2025
            GROUP BY CASE
@@ -1155,27 +1155,27 @@ def _citizen_help_context(question):
         'total_citizens': int(total_count),
         'average_age_years': round(sum(ages) / len(ages), 2) if ages else 0,
         'age_reference_date': today.isoformat(),
-        'total_tax_revenue_n£': round(float(total_tax), 2),
-        'average_tax_paid_n£': round(float(average_tax), 2),
+        'total_tax_revenue_c': round(float(total_tax), 2),
+        'average_tax_paid_c': round(float(average_tax), 2),
         'historical_tax_years': [
             {
                 'year': int(row[0]),
-                'average_salary_n£': round(float(row[1]), 2),
-                'average_tax_paid_n£': round(float(row[2]), 2),
-                'total_tax_paid_n£': round(float(row[3]), 2),
+                'average_salary_c': round(float(row[1]), 2),
+                'average_tax_paid_c': round(float(row[2]), 2),
+                'total_tax_paid_c': round(float(row[3]), 2),
                 'citizens': int(row[4]),
             }
             for row in salary_rows
         ],
-        'average_salary_2025_n£': round(float(latest_salary[1]), 2) if latest_salary else 0,
-        'average_tax_paid_2025_n£': round(float(latest_salary[2]), 2) if latest_salary else 0,
-        'total_tax_paid_all_historical_years_n£': round(sum(float(row[3]) for row in salary_rows), 2),
+        'average_salary_2025_c': round(float(latest_salary[1]), 2) if latest_salary else 0,
+        'average_tax_paid_2025_c': round(float(latest_salary[2]), 2) if latest_salary else 0,
+        'total_tax_paid_all_historical_years_c': round(sum(float(row[3]) for row in salary_rows), 2),
         'lifetime_tax_by_gender': [
             {
                 'gender': row[0],
                 'citizens': int(row[1]),
-                'total_tax_paid_n£': round(float(row[2]), 2),
-                'average_lifetime_tax_paid_n£': round(float(row[3]), 2),
+                'total_tax_paid_c': round(float(row[2]), 2),
+                'average_lifetime_tax_paid_c': round(float(row[3]), 2),
             }
             for row in gender_tax_rows
         ],
@@ -1184,7 +1184,7 @@ def _citizen_help_context(question):
                 'company_code': row[0],
                 'company_name': row[1],
                 'industry_vertical': row[2],
-                'annual_profit_n£': round(float(row[3]), 2),
+                'annual_profit_c': round(float(row[3]), 2),
                 'employee_count': int(row[4]),
                 'citizens_with_historical_employment': int(row[5]),
             }
@@ -1195,7 +1195,7 @@ def _citizen_help_context(question):
                 'company_code': row[0],
                 'company_name': row[1],
                 'industry_vertical': row[2],
-                'annual_profit_n£': round(float(row[3]), 2),
+                'annual_profit_c': round(float(row[3]), 2),
                 'employee_count': int(row[4]),
                 'current_citizens_2025': int(row[5]),
             }
@@ -1208,13 +1208,13 @@ def _citizen_help_context(question):
         'average_salary_by_age_band_and_gender_2025': [
             {
                 'age_band': row[0], 'gender': row[1],
-                'average_salary_n£': round(float(row[2]), 2),
-                'average_tax_paid_n£': round(float(row[3]), 2),
+                'average_salary_c': round(float(row[2]), 2),
+                'average_tax_paid_c': round(float(row[3]), 2),
                 'citizens': int(row[4]),
             }
             for row in salary_age_gender_rows if row[0] is not None
         ],
-        'fictional_tax_code_rules': NORLAND_TAX_CODE,
+        'fictional_tax_code_rules': CONTOSO_TAX_CODE,
         'citizens_by_tax_code': [
             {'code': code, 'citizens': count}
             for code, count in sorted(tax_code_counts.items())
@@ -1239,18 +1239,18 @@ def _citizen_help_context(question):
             analytics['tax_year_comparison'] = {
                 'year': requested_year,
                 'previous_year': requested_year - 1,
-                'total_tax_paid_n£': round(float(current[3]), 2),
-                'previous_total_tax_paid_n£': round(float(previous[3]), 2),
-                'total_increase_n£': round(float(current[3] - previous[3]), 2),
-                'average_tax_paid_n£': round(float(current[2]), 2),
-                'previous_average_tax_paid_n£': round(float(previous[2]), 2),
-                'average_increase_n£': round(float(current[2] - previous[2]), 2),
+                'total_tax_paid_c': round(float(current[3]), 2),
+                'previous_total_tax_paid_c': round(float(previous[3]), 2),
+                'total_increase_c': round(float(current[3] - previous[3]), 2),
+                'average_tax_paid_c': round(float(current[2]), 2),
+                'previous_average_tax_paid_c': round(float(previous[2]), 2),
+                'average_increase_c': round(float(current[2] - previous[2]), 2),
             }
             analytics['answer_hint'] = (
                 f"Across all citizens, total fictional tax paid increased by "
-                f"N£{float(current[3] - previous[3]):,.2f} from {requested_year - 1} "
+                f"C${float(current[3] - previous[3]):,.2f} from {requested_year - 1} "
                 f"to {requested_year}; average tax paid increased by "
-                f"N£{float(current[2] - previous[2]):,.2f} per citizen."
+                f"C${float(current[2] - previous[2]):,.2f} per citizen."
             )
     age_band_match = re.search(r'\b(20|30|40|50)s\b', question_lower)
     gender_code = None
@@ -1268,22 +1268,22 @@ def _citizen_help_context(question):
         gender_label = {'F': 'women', 'M': 'men', 'X': 'gender-neutral citizens'}[gender_code]
         analytics['answer_hint'] = (
             f"The average fictional 2025 tax paid by {gender_label} in their {age_gender_fact['age_band']} was "
-            f"N£{age_gender_fact['average_tax_paid_n£']:,.2f} across {age_gender_fact['citizens']} citizens."
+            f"C${age_gender_fact['average_tax_paid_c']:,.2f} across {age_gender_fact['citizens']} citizens."
         )
     elif 'tax' in question_lower and any(word in question_lower for word in ('total', 'revenue', 'sum')):
         analytics['answer_hint'] = (
             f"Total tax revenue across all {total_count} fictional citizens is "
-            f"N£{float(total_tax):,.2f}."
+            f"C${float(total_tax):,.2f}."
         )
     elif 'salary' in question_lower and age_gender_fact:
         analytics['answer_hint'] = 'Average 2025 fictional salary by age band and gender: ' + '; '.join(
-            f"{item['age_band']} {item['gender']}: N£{item['average_salary_n£']:,.2f} across {item['citizens']} citizens"
+            f"{item['age_band']} {item['gender']}: C${item['average_salary_c']:,.2f} across {item['citizens']} citizens"
             for item in analytics['average_salary_by_age_band_and_gender_2025']
         ) + '.'
     elif 'salary' in question_lower and any(word in question_lower for word in ('average', 'mean')):
         analytics['answer_hint'] = (
             f"The average fictional gross salary in 2025 was "
-            f"N£{analytics['average_salary_2025_n£']:,.2f} across {total_count} citizens."
+            f"C${analytics['average_salary_2025_c']:,.2f} across {total_count} citizens."
         )
     elif 'age' in question_lower and any(word in question_lower for word in ('average', 'mean', 'calculate')):
         analytics['answer_hint'] = (
@@ -1293,7 +1293,7 @@ def _citizen_help_context(question):
     elif 'tax' in question_lower and 'gender' in question_lower and any(word in question_lower for word in ('lifetime', 'total', 'average')):
         analytics['answer_hint'] = (
             'Average lifetime fictional tax paid by gender: ' + '; '.join(
-                f"{item['gender']}: N£{item['average_lifetime_tax_paid_n£']:,.2f} across {item['citizens']} citizens"
+                f"{item['gender']}: C${item['average_lifetime_tax_paid_c']:,.2f} across {item['citizens']} citizens"
                 for item in analytics['lifetime_tax_by_gender']
             ) + '.'
         )
@@ -1365,7 +1365,7 @@ def _citizen_help_context(question):
             SELECT h.company_code, c.company_name, c.industry_vertical,
                    h.start_year, h.end_year, h.job_title
             FROM citizen_employment_history h
-            JOIN norland_companies c ON c.company_code = h.company_code
+            JOIN contoso_companies c ON c.company_code = h.company_code
             WHERE h.citizen_id = ? ORDER BY h.start_year
         ''', (record['id'],))
         record['employment_history'] = [{
@@ -1373,16 +1373,16 @@ def _citizen_help_context(question):
             'start_year': row[3], 'end_year': row[4], 'job_title': row[5],
         } for row in cursor.fetchall()]
         cursor.execute('''
-            SELECT t.tax_year, t.company_code, c.company_name, t.gross_salary_n,
-                   t.tax_code, t.tax_rate_percent, t.tax_paid_n
+                 SELECT t.tax_year, t.company_code, c.company_name, t.gross_salary_c,
+                     t.tax_code, t.tax_rate_percent, t.tax_paid_c
             FROM citizen_tax_history t
-            JOIN norland_companies c ON c.company_code = t.company_code
+                 JOIN contoso_companies c ON c.company_code = t.company_code
             WHERE t.citizen_id = ? ORDER BY t.tax_year
         ''', (record['id'],))
         record['tax_history'] = [{
             'tax_year': row[0], 'company_code': row[1], 'company_name': row[2],
-            'gross_salary_n£': float(row[3]), 'tax_code': row[4],
-            'tax_rate_percent': float(row[5]), 'tax_paid_n£': float(row[6]),
+            'gross_salary_c': float(row[3]), 'tax_code': row[4],
+            'tax_rate_percent': float(row[5]), 'tax_paid_c': float(row[6]),
         } for row in cursor.fetchall()]
     conn.close()
     return records, analytics
@@ -1548,7 +1548,7 @@ def citizens():
 
 DATA_EXPLORER_TABLES = (
     'citizen_registry', 'citizen_health_records', 'citizen_hospital_visits',
-    'norland_companies', 'citizen_employment_history', 'citizen_tax_history',
+    'contoso_companies', 'citizen_employment_history', 'citizen_tax_history',
     'demo_metadata',
 )
 
@@ -1638,7 +1638,7 @@ def cctv():
 
 @app.route('/citizenhelp', methods=['GET'])
 def citizen_help():
-    """Render the GPU-only Norland Citizen Help experience."""
+    """Render the GPU-only Contoso Citizen Help experience."""
     return render_template('citizenhelp.html', current_page='citizen_help')
 
 
@@ -1737,28 +1737,28 @@ def citizen_history(citizen_id):
             conn.close()
             return jsonify({'error': 'Citizen not found'}), 404
         cursor.execute('''
-            SELECT h.company_code, c.company_name, c.industry_vertical,
-                   c.annual_profit_n, c.employee_count, h.start_year, h.end_year, h.job_title
+                 SELECT h.company_code, c.company_name, c.industry_vertical,
+                     c.annual_profit_c, c.employee_count, h.start_year, h.end_year, h.job_title
             FROM citizen_employment_history h
-            JOIN norland_companies c ON c.company_code = h.company_code
+                 JOIN contoso_companies c ON c.company_code = h.company_code
             WHERE h.citizen_id = ? ORDER BY h.start_year
         ''', (citizen_id,))
         employment = [{
             'company_code': row[0], 'company_name': row[1], 'industry_vertical': row[2],
-            'annual_profit_n£': float(row[3]), 'employee_count': row[4],
+            'annual_profit_c': float(row[3]), 'employee_count': row[4],
             'start_year': row[5], 'end_year': row[6], 'job_title': row[7],
         } for row in cursor.fetchall()]
         cursor.execute('''
-            SELECT t.tax_year, t.company_code, c.company_name, t.gross_salary_n,
-                   t.tax_code, t.tax_rate_percent, t.tax_paid_n
+                 SELECT t.tax_year, t.company_code, c.company_name, t.gross_salary_c,
+                     t.tax_code, t.tax_rate_percent, t.tax_paid_c
             FROM citizen_tax_history t
-            JOIN norland_companies c ON c.company_code = t.company_code
+                 JOIN contoso_companies c ON c.company_code = t.company_code
             WHERE t.citizen_id = ? ORDER BY t.tax_year
         ''', (citizen_id,))
         taxes = [{
             'tax_year': row[0], 'company_code': row[1], 'company_name': row[2],
-            'gross_salary_n£': float(row[3]), 'tax_code': row[4],
-            'tax_rate_percent': float(row[5]), 'tax_paid_n£': float(row[6]),
+            'gross_salary_c': float(row[3]), 'tax_code': row[4],
+            'tax_rate_percent': float(row[5]), 'tax_paid_c': float(row[6]),
         } for row in cursor.fetchall()]
         conn.close()
         return jsonify({
@@ -1766,7 +1766,7 @@ def citizen_history(citizen_id):
             'citizen_name': f'{citizen[1]} {citizen[2]}',
             'fictional_only': True,
             'read_only': True,
-            'tax_policy': NORLAND_TAX_CODE,
+            'tax_policy': CONTOSO_TAX_CODE,
             'employment_history': employment,
             'tax_history': taxes,
         })
@@ -1866,7 +1866,7 @@ def citizen_portrait(citizen_id):
 
 @app.route('/media/credential/<int:citizen_id>', methods=['GET'])
 def citizen_credential(citizen_id):
-    """Return a completed, visibly fictional Norland credential."""
+    """Return a completed, visibly fictional Contoso credential."""
     path = media_generator.credential_path(citizen_id)
     if not path.is_file():
         return jsonify({'error': 'Credential is not ready'}), 404

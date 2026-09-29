@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Citizen Help - Republic of Norland</title>
+  <title>Citizen Help - Republic of Contoso</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='theme.css') }}">
   <script src="{{ url_for('static', filename='theme-switcher.js') }}"></script>
   <style>
@@ -49,13 +49,13 @@
 <body>
   <main>
     {% include '_top_nav.html' %}
-    <p class="eyebrow">Republic of Norland</p>
+    <p class="eyebrow">Republic of Contoso</p>
     <h1>Citizen Help</h1>
-    <p class="intro">Ask about the fictional Norland citizen registry. Answers are grounded in matching registry records and generated locally on the confidential H100.</p>
+    <p class="intro">Ask about the fictional Contoso citizen registry. Answers are grounded in matching registry records and generated locally on the confidential H100.</p>
     <section class="workspace">
       <div class="panel">
         <h2>Ask the registry assistant</h2>
-        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Citizen Help conversation"><div class="chat-empty" id="chat-empty">Ask a question to begin the fictional Norland registry conversation.</div></div>
+        <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Citizen Help conversation"><div class="chat-empty" id="chat-empty">Ask a question to begin the fictional Contoso registry conversation.</div></div>
         <form id="chat-form">
           <label for="question">Question</label>
           <textarea id="question" maxlength="800" required placeholder="Example: Which region is Ama Mensah registered in? Enter sends; Shift+Enter adds a line. "></textarea>
@@ -72,7 +72,7 @@
     {% set diagram_id = 'citizen-help' %}{% set diagram_flow = 'citizen-help' %}{% include '_infrastructure_diagram.html' %}
     <button class="debug-open" type="button" data-debug-open="citizen-help">Debug diagnostics</button>
     {% set debug_id = 'citizen-help' %}{% include '_debug_panel.html' %}
-    <footer>Local open-weight inference | Qwen2.5-32B-Instruct | H100 confidential-computing boundary | Synthetic Norland data only</footer>
+    <footer>Local open-weight inference | Qwen2.5-32B-Instruct | H100 confidential-computing boundary | Synthetic Contoso data only</footer>
   </main>
   <script src="{{ url_for('static', filename='infrastructure-diagram.js') }}"></script>
   <script src="{{ url_for('static', filename='debug-panel.js') }}"></script>
@@ -93,7 +93,7 @@
       if (state) message.dataset.state = state;
       const meta = document.createElement('span');
       meta.className = 'message-meta';
-      meta.textContent = role === 'user' ? 'You' : 'Norland Citizen Help';
+      meta.textContent = role === 'user' ? 'You' : 'Contoso Citizen Help';
       message.append(meta, document.createTextNode(text));
       chatLog.appendChild(message);
       chatLog.scrollTop = chatLog.scrollHeight;

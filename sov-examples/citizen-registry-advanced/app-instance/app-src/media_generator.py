@@ -295,7 +295,7 @@ class MediaGenerator:
         watermark_font = ImageFont.load_default(size=56)
 
         draw.rectangle((0, 0, 1400, 125), fill='#153f52')
-        draw.text((55, 32), 'REPUBLIC OF NORLAND', fill='white', font=title_font)
+        draw.text((55, 32), 'REPUBLIC OF CONTOSO', fill='white', font=title_font)
         draw.text((55, 82), 'FICTIONAL CITIZEN CREDENTIAL', fill='#bce2ea', font=heading_font)
         credential.paste(portrait.resize((390, 490)), (60, 180))
 

@@ -356,7 +356,7 @@ Confidential VM (Managed Identity: cvm-identity)
    └─ Delete temporary ingest files after verified cache replacement
 
 5. Configure mTLS and attestation services
-   ├─ Cloud-init creates the file-backed Norland demo PKI and installs nginx configuration
+   ├─ Cloud-init creates the file-backed Contoso demo PKI and installs nginx configuration
    ├─ citizen-cpu-attestation verifies current-boot SEV-SNP/vTPM evidence
    └─ citizen-gpu-attestation verifies H100 production CC mode and nvtrust evidence
 

@@ -57,6 +57,7 @@ __pycache__/
 app-instance/app-src/node_modules/
 app-instance/app-src/npm-debug.log
 demo-video/node_modules/
+demo-video-cctv/node_modules/
 
 # Demo video generated and local artifacts
 demo-video/output/
@@ -68,6 +69,15 @@ demo-video/**/*.mp4
 demo-video/**/*.wav
 demo-video/**/*.vtt
 demo-video/**/*.trace.zip
+demo-video-cctv/output/
+demo-video-cctv/.env
+demo-video-cctv/playwright-report/
+demo-video-cctv/test-results/
+demo-video-cctv/**/*.webm
+demo-video-cctv/**/*.mp4
+demo-video-cctv/**/*.wav
+demo-video-cctv/**/*.vtt
+demo-video-cctv/**/*.trace.zip
 
 # IDE and Editor
 .vscode/
@@ -84,6 +94,7 @@ temp/
 
 
 # Bicep Build Output
+bicep/*.json
 bicep/**/*.json.bak
 bicep/**/*.bicep.bak
 

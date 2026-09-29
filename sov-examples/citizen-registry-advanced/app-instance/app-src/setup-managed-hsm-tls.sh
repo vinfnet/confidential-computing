@@ -116,7 +116,7 @@ mkdir -p "$CERT_DIR"
 rm -f "$CERT_DIR/citizen-registry.key" /tmp/citizen-registry.csr
 openssl req -new -engine pkcs11 -keyform engine -key "$P11_URI" \
     -out /tmp/citizen-registry.csr \
-    -subj '/C=NL/O=Norland IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
+  -subj '/O=Contoso IT Department/OU=Citizen Registry/CN=citizen-registry.internal'
 printf '%s\n' \
     'basicConstraints=critical,CA:FALSE' \
     'keyUsage=critical,digitalSignature,keyEncipherment' \
