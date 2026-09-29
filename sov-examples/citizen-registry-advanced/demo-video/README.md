@@ -1,6 +1,6 @@
 # Citizen Registry Demo Video
 
-This package records and renders the exact three-minute-thirty-second sovereignty demo at 1920x1080 and 30 fps. It opens on the logical architecture overview, then uses a clean Playwright Chromium context, Azure Speech `en-GB-RyanNeural` narration, WebVTT captions, and FFmpeg H.264/AAC composition.
+This package records and renders the exact three-minute-thirty-second sovereignty demo at 2560x1440 and 30 fps. It opens on the logical architecture overview, then uses a clean Playwright Chromium context, Azure Speech `en-GB-RyanNeural` narration, WebVTT captions, and FFmpeg H.264/AAC composition.
 
 The Data Sovereignty sequence clicks a citizen portrait, waits for the simulated passport image that is visibly marked as a fictional credential, holds it, closes it, and continues to employment and tax history. The Citizen Help sequence shows the guarded query flow through the Application CVM, Database CVM, confidential H100, and back through the Application CVM to the browser.
 

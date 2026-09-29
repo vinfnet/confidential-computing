@@ -11,6 +11,8 @@ const captions = path.join(outputDir, 'captions.vtt');
 const architectureFrame = path.join(outputDir, 'screenshots', '00-architecture.png');
 const master = path.join(outputDir, 'citizen-registry-sovereignty-demo-master.mp4');
 const presentation = path.join(outputDir, 'citizen-registry-sovereignty-demo.mp4');
+const outputWidth = 2560;
+const outputHeight = 1440;
 const timeline = JSON.parse(await readFile(path.join(root, 'src', 'timeline.json'), 'utf8'));
 const runManifest = JSON.parse(await readFile(path.join(outputDir, 'run-manifest.json'), 'utf8'));
 const architectureReadyAt = runManifest.actions.find(action => action.handler === 'openingArchitecture')?.elapsedSeconds;
@@ -28,8 +30,8 @@ function run(command, args) {
 }
 
 await mkdir(outputDir, { recursive: true });
-const videoFilter = `scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,trim=duration=${timeline.durationSeconds},setpts=PTS-STARTPTS`;
-const openingFilter = `scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black,fps=30,trim=duration=${architectureReadyAt},setpts=PTS-STARTPTS`;
+const videoFilter = `scale=${outputWidth}:${outputHeight}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${outputWidth}:${outputHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=30,trim=duration=${timeline.durationSeconds},setpts=PTS-STARTPTS`;
+const openingFilter = `scale=${outputWidth}:${outputHeight}:force_original_aspect_ratio=decrease:flags=lanczos,pad=${outputWidth}:${outputHeight}:(ow-iw)/2:(oh-ih)/2:black,fps=30,trim=duration=${architectureReadyAt},setpts=PTS-STARTPTS`;
 const audioFilter = `loudnorm=I=-16:TP=-1.5:LRA=7,apad,atrim=duration=${timeline.durationSeconds},asetpts=PTS-STARTPTS`;
 await run('ffmpeg', [
   '-y',

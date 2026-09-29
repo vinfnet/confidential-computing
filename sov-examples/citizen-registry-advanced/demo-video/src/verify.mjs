@@ -8,6 +8,8 @@ const outputDir = path.join(root, 'output');
 const master = path.join(outputDir, 'citizen-registry-sovereignty-demo-master.mp4');
 const captionsPath = path.join(outputDir, 'captions.vtt');
 const manifestPath = path.join(outputDir, 'run-manifest.json');
+const outputWidth = 2560;
+const outputHeight = 1440;
 const timeline = JSON.parse(await readFile(path.join(root, 'src', 'timeline.json'), 'utf8'));
 const failures = [];
 
@@ -30,7 +32,7 @@ const video = probe.streams.find(stream => stream.codec_type === 'video');
 const audio = probe.streams.find(stream => stream.codec_type === 'audio');
 const subtitles = probe.streams.find(stream => stream.codec_type === 'subtitle');
 if (Math.abs(duration - timeline.durationSeconds) > 0.05) failures.push(`Duration is ${duration}, expected ${timeline.durationSeconds} seconds.`);
-if (video?.codec_name !== 'h264' || video.width !== 1920 || video.height !== 1080 || video.r_frame_rate !== '30/1') failures.push('Video must be H.264, 1920x1080, 30 fps.');
+if (video?.codec_name !== 'h264' || video.width !== outputWidth || video.height !== outputHeight || video.r_frame_rate !== '30/1') failures.push(`Video must be H.264, ${outputWidth}x${outputHeight}, 30 fps.`);
 if (audio?.codec_name !== 'aac' || audio.sample_rate !== '48000') failures.push('Audio must be AAC at 48 kHz.');
 if (subtitles?.codec_name !== 'mov_text') failures.push('English soft captions are missing.');
 
@@ -53,4 +55,4 @@ for (const required of ['openingArchitecture', 'openPassport', 'closePassport', 
 }
 
 if (failures.length) throw new Error(`Media verification failed:\n- ${failures.join('\n- ')}`);
-console.log(`Media verification passed: ${duration.toFixed(3)}s, H.264 1920x1080@30, AAC 48kHz, captions, audible narration, nonblank opening.`);
+console.log(`Media verification passed: ${duration.toFixed(3)}s, H.264 ${outputWidth}x${outputHeight}@30, AAC 48kHz, captions, audible narration, nonblank opening.`);

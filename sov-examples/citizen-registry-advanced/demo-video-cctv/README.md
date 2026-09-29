@@ -1,6 +1,6 @@
 # Confidential CCTV Demo Video
 
-This independent package records and renders a two-minute privacy-preserving CCTV demonstration at 1920x1080 and 30 fps. It shows a one-camera Azure architecture, unchanged raw evidence in private storage, confidential H100 face detection, synchronized source and anonymized playback, live processing evidence, and the separate reviewer output.
+This independent package records and renders a two-minute privacy-preserving CCTV demonstration at 2560x1440 and 30 fps. It shows a one-camera Azure architecture, unchanged raw evidence in private storage, confidential H100 face detection, synchronized source and anonymized playback, live processing evidence, and the separate reviewer output.
 
 The browser recording uses the deployed Republic of Contoso sample. The source footage is a CC BY-SA 4.0 London Marathon extract credited in the application. The camera context is simulated. The privacy-gap, verifiable-trust, controlled-disclosure, and output-minimization framing is based on `The Privacy Gap in Conventional Video Analytics`.
 
