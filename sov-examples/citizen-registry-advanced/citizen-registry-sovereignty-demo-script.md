@@ -6,31 +6,37 @@
 
 **Demo:** Republic of Contoso Citizen Registry Advanced
 
-## 0:00-0:40 | Architecture Opening
+## 0:00-1:00 | Architecture Opening
 
 **Show:** Open the Architecture page and hold on the full logical diagram.
 
 **Say:**
 
-> This is the Republic of Contoso citizen registry on Azure Confidential Computing. We begin with its trust boundaries.
+> This is the Republic of Contoso citizen registry on Azure Confidential Computing. We begin with its trust boundaries, showing where processing and operational control reside.
 >
-> Browser traffic reaches the Application Confidential VM through private ExpressRoute or site-to-site VPN connectivity. The H100 is local to that tier. SQL runs in a separate Database Confidential VM over private VNet peering and TLS. Managed HSM uses Private Link, while Azure Attestation supplies runtime evidence.
+> A Confidential VM uses a hardware-backed trusted execution environment, or TEE, like a locked safe. Plaintext data is handled only inside the safe; outside it, only encrypted data is visible.
 >
-> The deployment spans two approved regions. Azure Policy can deny new resources elsewhere; that is a governance option, not a policy assignment made by this sample.
+> Browser traffic reaches the Application Confidential VM, or CVM, through private ExpressRoute or VPN connectivity. An H100 Confidential GPU is attached.
+>
+> SQL Server runs in a separate Database CVM, connected through private VNet peering and TLS.
+>
+> Managed HSM provides keys over Private Link, while Azure Attestation validates runtime evidence.
+>
+> Azure Policy restricts deployment to two approved regions. Everything outside republic-managed CVMs is treated as untrusted.
 
-## 0:40-1:10 | Data Sovereignty
+## 1:00-1:28 | Data Processing Confidentiality
 
 **Show:** Open the registry table and click a citizen's portrait to show the simulated passport image, clearly marked as a fictional credential. Close it, then open that citizen's Employment and Tax History dialog.
 
 **Say:**
 
-> First, data sovereignty. This simulated credential and the citizen's employment and tax history are visible to the application, but remain in the protected database tier.
+> First, data sovereignty. This simulated passport and the citizen's employment and tax history are visible to the application.
 >
-> SQL Server holds citizen, health, company, employment, salary, and tax data inside its dedicated Confidential VM. The application retrieves only the records needed for each operation.
+> SQL Server holds sensitive health, tax, and employment data inside the Database CVM. The application retrieves only the records needed for each operation.
 >
-> The H100 has no direct database connection and never receives SQL credentials.
+> Encryption protects data at rest and in transit, while Azure Confidential Computing protects it in use.
 
-## 1:10-1:55 | Operational Sovereignty
+## 1:28-2:04 | Operational Confidentiality
 
 **Show:** Expand the security evidence panel. Point to CPU attestation, GPU attestation, mTLS, Managed HSM, and the infrastructure diagram.
 
@@ -38,13 +44,13 @@
 
 > Next, operational sovereignty shows what is running and whether protected components are in the expected state.
 >
-> The Application CVM is protected by AMD SEV-SNP, with evidence from its current boot. The H100 is independently attested in production confidential-computing mode. These runtime checks fail closed if required evidence is missing or invalid.
+> Azure Attestation validates current boot evidence from the Application CVM. The H100 GPU is independently attested in confidential-computing mode. These checks fail closed if required evidence is missing or invalid.
 >
-> Managed HSM protects customer-managed keys and key-release policy. It holds no citizen records and is reached through Private Link.
+> Managed HSM protects customer-managed keys and releases them through policy only when the calling application demonstrates valid attestation.
 >
-> Mutual TLS protects service boundaries, while access follows controlled private paths.
+> Private Link and mutual TLS keep service access controlled and private.
 
-## 1:55-3:00 | Digital and Technology Sovereignty
+## 2:04-3:01 | Using AI in Confidential Applications
 
 **Show:** Open Citizen Help and ask:
 
@@ -52,27 +58,27 @@
 
 Then ask:
 
-> Calculate the average salary by age band and gender.
+> Calculate the average salary by age band and gender, format output as a table.
 
 **Say:**
 
-> Now for digital and technology sovereignty. Citizen Help runs an open-weight Qwen model on the attested H100. It neither calls a public AI endpoint nor sends registry data to an external service.
+> Now consider an AI-enabled application with end-to-end confidential-computing protection. Citizen Help runs an open-weight Qwen model on the attested H100 GPU, without calling a public AI endpoint or sending citizen data to an external service.
 >
-> A question arrives as ordinary language. The model produces a constrained, structured query plan, not SQL. The Application CVM checks every requested table, field, operation, join, and limit against an allowlist.
+> A question arrives in ordinary language. The model produces a constrained query plan, not SQL. The Application CVM checks every operation and field against an allowlist.
 >
-> Only then does the application build parameterized, read-only SQL for SQL Server in the Database CVM. The query runs there; the model has no credentials and cannot modify the registry.
+> Only then does the application build a read-only query for the Database CVM. The model has no credentials and cannot modify the registry.
 >
-> Bounded results return through the Application CVM to the H100 for explanation. The sanitized answer returns through the Application CVM to the browser.
+> Bounded results return through the Application CVM to the H100 for explanation, then a sanitized answer returns to the browser.
 >
-> One answer uses stored dates of birth. The other combines age band, gender, and salary history. Both are grounded in protected data, not a model guess.
+> One answer uses dates of birth; the other combines age band, gender, and salary history. Both are grounded in protected data, not model guesses.
 
-## 3:00-3:20 | Demonstrate the Boundary
+## 3:01-3:20 | Demonstrate the Boundary
 
 **Show:** Open the infrastructure diagram and optionally open Debug diagnostics.
 
 **Say:**
 
-> The live flow traces that boundary: browser to Application CVM, application to SQL, bounded context to the H100, then the answer back through the Application CVM. It exposes only sanitized states, never prompts, SQL, credentials, keys, or citizen records.
+> The boundary is clear: browser to Application CVM, application to SQL, bounded context to the H100, and back through the Application CVM. Only sanitized states are exposed, never prompts, SQL, credentials, keys, or citizen records.
 
 ## 3:20-3:30 | Close
 

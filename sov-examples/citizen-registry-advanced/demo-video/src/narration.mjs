@@ -45,6 +45,15 @@ function escapeXml(text) {
   return text.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[character]);
 }
 
+function buildSsmlContent(section, rate) {
+  const rateValue = `${rate >= 0 ? '+' : ''}${rate}%`;
+  if (section.id !== 'opening') return `<prosody rate="${rateValue}">${escapeXml(section.text)}</prosody>`;
+  const phrase = 'like a locked safe';
+  const [before, after] = section.text.split(phrase);
+  if (after === undefined) throw new Error(`Opening narration must contain the phrase "${phrase}".`);
+  return `<prosody rate="${rateValue}">${escapeXml(before)}</prosody><break time="90ms"/><prosody rate="-12%" contour="(0%,-2%) (55%,-5%) (100%,-12%)">${phrase}</prosody><break time="100ms"/><prosody rate="${rateValue}">${escapeXml(after)}</prosody>`;
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'], ...options });
@@ -71,7 +80,7 @@ async function synthesizeClip(speechConfig, section, rate, outputPath) {
     durationSeconds: event.duration / 10_000,
     text: event.text,
   });
-  const ssml = `<speak version="1.0" xml:lang="en-GB"><voice name="${voice}"><prosody rate="${rate >= 0 ? '+' : ''}${rate}%">${escapeXml(section.text)}</prosody></voice></speak>`;
+  const ssml = `<speak version="1.0" xml:lang="en-GB"><voice name="${voice}">${buildSsmlContent(section, rate)}</voice></speak>`;
   await new Promise((resolve, reject) => synthesizer.speakSsmlAsync(ssml, result => {
     synthesizer.close();
     if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) resolve();
@@ -92,7 +101,7 @@ function vttTimestamp(seconds) {
 }
 
 function makeCues(section, boundaries, clipDuration) {
-  if (!boundaries.length) {
+  if (!boundaries.length || boundaries.some(boundary => /\s/.test(boundary.text.trim()))) {
     const words = section.text.match(/[^\s]+/g) || [];
     boundaries = words.map((text, index) => ({ text, offsetSeconds: clipDuration * index / words.length }));
   }
@@ -141,7 +150,7 @@ const speechConfig = sdk.SpeechConfig.fromEndpoint(synthesisEndpoint);
 speechConfig.authorizationToken = `aad#${resourceId}#${accessToken.token}`;
 speechConfig.speechSynthesisVoiceName = voice;
 speechConfig.speechSynthesisOutputFormat = sdk.SpeechSynthesisOutputFormat.Riff48Khz16BitMonoPcm;
-const rates = [0, 4, 8, 12, 16, 20];
+const rates = [0];
 const clipResults = [];
 const cues = [];
 
