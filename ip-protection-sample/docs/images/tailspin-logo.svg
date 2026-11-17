@@ -1,0 +1,12 @@
+<svg class="brand-art tailspin-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" role="img" aria-label="Tailspin Toys pinwheel mark">
+  <path d="M43 40C12 43 4 22 17 10c13-12 33 0 26 30Z" fill="#ed6371"/>
+  <path d="M45 40C42 9 63 1 75 14c12 13 0 33-30 26Z" fill="#f3bd46"/>
+  <path d="M45 42c31-3 39 18 26 30-13 12-33 0-26-30Z" fill="#35bbaa"/>
+  <path d="M43 42c3 31-18 39-30 26C1 55 13 35 43 42Z" fill="#9064d7"/>
+  <path d="m43 52 5 27" fill="none" stroke="#9064d7" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="44" cy="41" r="10" fill="#fff5da"/>
+  <path d="m44 34 2 4 5 1-4 3 1 5-4-2-4 2 1-5-4-3 5-1Z" fill="#7040b1"/>
+  <text x="93" y="46" fill="var(--logo-ink,#422566)" font-family="'Trebuchet MS',system-ui,sans-serif" font-size="39" font-weight="800" letter-spacing="-2">tailspin</text>
+  <text x="97" y="68" fill="var(--logo-ink,#422566)" font-family="system-ui,sans-serif" font-size="12" font-weight="800" letter-spacing="7">TOYS</text>
+  <circle cx="185" cy="64" r="3" fill="#ed6371"/><circle cx="196" cy="64" r="3" fill="#f3bd46"/><circle cx="207" cy="64" r="3" fill="#35bbaa"/>
+</svg>

@@ -1,0 +1,43 @@
+{
+  "capturedAt": "2026-11-17T16:41:38.496Z",
+  "scenario": "Contoso infrastructure operator (role simulated)",
+  "caller": "Existing demo deployer Azure CLI identity; no separate Contoso identity or tenant used",
+  "containerGroup": "contoso-robot-deployment-redacted",
+  "container": "tailspin-robot",
+  "command": "/bin/true",
+  "armStatus": 200,
+  "armExecHandshakeReceived": true,
+  "guestOutput": "Internal error occurred: error executing command in container: failed to exec in container: failed to start exec \"operation-fingerprint-1-redacted\": guest RPC failure: exec in container denied due to policy:\n[Encoded diagnostic omitted; see selected guestPolicyDecision fields.]",
+  "guestPolicyDecision": {
+    "decision": "deny",
+    "command": [
+      "/bin/true"
+    ],
+    "errors": [
+      "invalid command",
+      "invalid env list: APP_IDENTITY_ENDPOINT",
+      "invalid noNewPrivileges",
+      "invalid user"
+    ]
+  },
+  "cceSha256": "worker-cce-sha256-redacted",
+  "cceUnchangedAfterAttempt": true,
+  "provisioningStateAfterAttempt": "Succeeded",
+  "workerAfterAttempt": {
+    "state": "protected",
+    "plaintextExposed": false,
+    "checks": 1
+  },
+  "presentation": "Annotated replay of the recorded real ARM/WebSocket exchange, not Azure Portal UI or unedited real-time footage",
+  "policySnapshot": "worker-cce-policy.snapshot.json",
+  "publication": {
+    "deploymentIdentifiersRedacted": true,
+    "redactedFields": [
+      "containerGroup",
+      "guestOutput",
+      "cceSha256"
+    ],
+    "note": "Deployment names, operation identifiers and exact policy fingerprints are withheld. Stable policy labels preserve cross-file equality but are not deployable SHA-256 values. Recorded outcomes, timings and policy settings are unchanged.",
+    "privatePolicyMatchesVerifiedBeforeRedaction": true
+  }
+}

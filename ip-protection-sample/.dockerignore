@@ -1,0 +1,10 @@
+**/node_modules
+**/.runtime
+**/*.log
+.generated/*
+!.generated/certs/
+.generated/certs/*
+!.generated/certs/demo-ca.crt
+!.generated/deploy/
+!.generated/deploy/worker.json
+**/.git

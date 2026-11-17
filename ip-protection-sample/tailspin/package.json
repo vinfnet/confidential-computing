@@ -1,0 +1,19 @@
+{
+  "name": "tailspin-toys-confidential-control",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "check": "node --check src/config.js && node --check src/server.js && node --check src/app.js && node --check src/security.js && node --check public/dashboard.js && node --check public/session.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-keys": "^4.10.0",
+    "express": "^5.1.0",
+    "jose": "^6.1.0",
+    "selfsigned": "^5.5.0"
+  }
+}

@@ -1,0 +1,96 @@
+{
+  "capturedAt": "2026-11-17T17:29:45.393Z",
+  "demoId": "deployment-id-redacted",
+  "source": "Edited sequence of real deployed application captures; explanatory captions are editorial",
+  "tenantBoundary": "One real tenant; separate resource groups simulate organizations",
+  "plaintextViewer": "Authenticated Tailspin operator, not a Contoso host operator",
+  "tlsVerificationBypassed": false,
+  "initialWorkerPolicyHash": "worker-cce-sha256-redacted",
+  "initialControllerPolicyHash": "controller-cce-sha256-redacted",
+  "verifiedKeyReleasePolicies": [
+    {
+      "key": "contoso-robot",
+      "exactPolicyHash": "worker-cce-sha256-redacted",
+      "enabled": true
+    },
+    {
+      "key": "worker-transport",
+      "exactPolicyHash": "worker-cce-sha256-redacted",
+      "enabled": true
+    },
+    {
+      "key": "tailspin-control",
+      "exactPolicyHash": "controller-cce-sha256-redacted",
+      "enabled": true
+    },
+    {
+      "key": "tailspin-transport",
+      "exactPolicyHash": "controller-cce-sha256-redacted",
+      "enabled": true
+    }
+  ],
+  "anonymous": {
+    "commandHttpStatus": 401,
+    "workerState": "protected",
+    "publicPlaintextPresent": false,
+    "ciphertextPresent": true
+  },
+  "commandReadability": {
+    "viewport": [
+      1664,
+      800
+    ],
+    "browserZoom": 1,
+    "motionFrames": 96,
+    "nominalFramesPerSecond": 12,
+    "scrollPixelsPerSecond": 60,
+    "panelHeight": 450,
+    "viewer": "Authenticated Tailspin operator"
+  },
+  "productionAnimation": {
+    "fictional": true,
+    "activeAnimations": 8,
+    "motionFrames": 120,
+    "nominalFramesPerSecond": 12,
+    "observedCaptureDurationMs": 23663,
+    "protectedPlaintextRequired": true,
+    "refreshPausesEdited": 2,
+    "editing": "Real protected-motion samples; routine fail-closed refresh pauses shortened. Not continuous real-time footage."
+  },
+  "revoke": {
+    "capturedAt": "2026-11-17T17:30:27.467Z",
+    "httpStatus": 202,
+    "disabledVersions": 1,
+    "trigger": "Actual Tailspin dashboard Revoke key access button",
+    "keyVaultAllVersionsDisabled": true,
+    "observedClearedAfterMs": 2841
+  },
+  "afterRevoke": {
+    "httpsAvailable": true,
+    "state": "unavailable",
+    "plaintextPresent": false,
+    "ciphertextPresent": true,
+    "protectionFailureReported": true,
+    "productionMotion": "locked"
+  },
+  "recovery": {
+    "method": "Scoped administrator PATCH re-enables only originally enabled command-key versions",
+    "initialKeyStatesRestored": true,
+    "workerState": "protected",
+    "commands": 34
+  },
+  "publication": {
+    "deploymentIdentifiersRedacted": true,
+    "redactedFields": [
+      "demoId",
+      "initialWorkerPolicyHash",
+      "initialControllerPolicyHash",
+      "verifiedKeyReleasePolicies[0].exactPolicyHash",
+      "verifiedKeyReleasePolicies[1].exactPolicyHash",
+      "verifiedKeyReleasePolicies[2].exactPolicyHash",
+      "verifiedKeyReleasePolicies[3].exactPolicyHash"
+    ],
+    "note": "Deployment names, operation identifiers and exact policy fingerprints are withheld. Stable policy labels preserve cross-file equality but are not deployable SHA-256 values. Recorded outcomes, timings and policy settings are unchanged.",
+    "privatePolicyMatchesVerifiedBeforeRedaction": true
+  }
+}

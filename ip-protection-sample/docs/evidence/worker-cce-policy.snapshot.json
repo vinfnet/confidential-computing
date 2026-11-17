@@ -1,0 +1,38 @@
+{
+  "capturedAt": "2026-11-17T16:41:33.446Z",
+  "source": "Selected enforcement fields from live ARM ccePolicy, decoded as Rego; not the complete policy",
+  "containerGroup": "contoso-robot-deployment-redacted",
+  "sku": "Confidential",
+  "cceSha256": "worker-cce-sha256-redacted",
+  "allow_dump_stacks": false,
+  "allow_runtime_logging": false,
+  "measuredContainers": [
+    {
+      "index": 0,
+      "exec_processes": [],
+      "allow_stdio_access": false,
+      "allow_elevated": false
+    },
+    {
+      "index": 1,
+      "exec_processes": [],
+      "allow_stdio_access": false,
+      "allow_elevated": false
+    },
+    {
+      "index": 2,
+      "exec_processes": [],
+      "allow_stdio_access": false,
+      "allow_elevated": false
+    }
+  ],
+  "publication": {
+    "deploymentIdentifiersRedacted": true,
+    "redactedFields": [
+      "containerGroup",
+      "cceSha256"
+    ],
+    "note": "Deployment names, operation identifiers and exact policy fingerprints are withheld. Stable policy labels preserve cross-file equality but are not deployable SHA-256 values. Recorded outcomes, timings and policy settings are unchanged.",
+    "privatePolicyMatchesVerifiedBeforeRedaction": true
+  }
+}

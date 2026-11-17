@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111a2b">
+  <title>Tailspin Toys · Protected production</title>
+  <link rel="icon" href="data:,">
+  <script src="/ui/preferences.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/ui/preferences.css">
+  <script type="module" src="/dashboard.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Tailspin Toys home">
+<svg class="brand-art tailspin-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" role="img" aria-label="Tailspin Toys pinwheel mark">
+  <path d="M43 40C12 43 4 22 17 10c13-12 33 0 26 30Z" fill="#ed6371"/>
+  <path d="M45 40C42 9 63 1 75 14c12 13 0 33-30 26Z" fill="#f3bd46"/>
+  <path d="M45 42c31-3 39 18 26 30-13 12-33 0-26-30Z" fill="#35bbaa"/>
+  <path d="M43 42c3 31-18 39-30 26C1 55 13 35 43 42Z" fill="#9064d7"/>
+  <path d="m43 52 5 27" fill="none" stroke="#9064d7" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="44" cy="41" r="10" fill="#fff5da"/>
+  <path d="m44 34 2 4 5 1-4 3 1 5-4-2-4 2 1-5-4-3 5-1Z" fill="#7040b1"/>
+  <text x="93" y="46" fill="var(--logo-ink,#422566)" font-family="'Trebuchet MS',system-ui,sans-serif" font-size="39" font-weight="800" letter-spacing="-2">tailspin</text>
+  <text x="97" y="68" fill="var(--logo-ink,#422566)" font-family="system-ui,sans-serif" font-size="12" font-weight="800" letter-spacing="7">TOYS</text>
+  <circle cx="185" cy="64" r="3" fill="#ed6371"/><circle cx="196" cy="64" r="3" fill="#f3bd46"/><circle cx="207" cy="64" r="3" fill="#35bbaa"/>
+</svg>
+    </a>
+    <span class="nav-label">WORKSPACE</span>
+    <a href="#overview" class="nav-item selected"><span>◈</span> Production overview</a>
+    <a href="#security" class="nav-item"><span>◇</span> Trust &amp; security</a>
+    <a href="#activity" class="nav-item"><span>≋</span> Activity stream</a>
+    <div class="sidebar-bottom"><span class="demo-dot"></span> Confidential computing demo<p>Real trust. Fictional toys.</p></div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="mobile-brand">
+<svg class="brand-art tailspin-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" role="img" aria-label="Tailspin Toys pinwheel mark">
+  <path d="M43 40C12 43 4 22 17 10c13-12 33 0 26 30Z" fill="#ed6371"/>
+  <path d="M45 40C42 9 63 1 75 14c12 13 0 33-30 26Z" fill="#f3bd46"/>
+  <path d="M45 42c31-3 39 18 26 30-13 12-33 0-26-30Z" fill="#35bbaa"/>
+  <path d="M43 42c3 31-18 39-30 26C1 55 13 35 43 42Z" fill="#9064d7"/>
+  <path d="m43 52 5 27" fill="none" stroke="#9064d7" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="44" cy="41" r="10" fill="#fff5da"/>
+  <path d="m44 34 2 4 5 1-4 3 1 5-4-2-4 2 1-5-4-3 5-1Z" fill="#7040b1"/>
+  <text x="93" y="46" fill="var(--logo-ink,#422566)" font-family="'Trebuchet MS',system-ui,sans-serif" font-size="39" font-weight="800" letter-spacing="-2">tailspin</text>
+  <text x="97" y="68" fill="var(--logo-ink,#422566)" font-family="system-ui,sans-serif" font-size="12" font-weight="800" letter-spacing="7">TOYS</text>
+  <circle cx="185" cy="64" r="3" fill="#ed6371"/><circle cx="196" cy="64" r="3" fill="#f3bd46"/><circle cx="207" cy="64" r="3" fill="#35bbaa"/>
+</svg>
+    <span class="brand-sub">IP OWNER / IMAGINATION HQ</span></div><div class="appearance-controls"><button id="theme-toggle" type="button">Dark mode</button><button id="certificate-help" type="button" aria-haspopup="dialog" aria-controls="certificate-dialog">Import certificate</button></div><div class="account"><span id="account-label">Operator signed out</span><button id="logout" class="button subtle small" hidden>Sign out</button></div></header>
+    <main>
+      <p id="appearance-status" role="status" aria-live="polite"></p>
+      <section id="overview" class="page-heading"><div><div class="eyebrow">BIG IDEAS. LITTLE TOYS. PROTECTED DESIGNS.</div><h1>Made for play.<br><span>Kept under wraps.</span></h1><p>Welcome to Tailspin's protected production workspace.<br>Keep the imagination here. Send the making to Contoso.</p><div class="environment"><span class="demo-dot"></span> REAL SECURITY / FICTIONAL TOYS</div></div>
+      <svg class="play-illustration" viewBox="0 0 300 220" aria-hidden="true"><path d="M34 157C-2 50 238 206 249 49" fill="none" stroke="#b899e4" stroke-width="2" stroke-dasharray="6 7"/><g transform="translate(184 36) rotate(26)"><path d="M0 66C-17 33-2 0 15-12 32 0 47 33 30 66Z" fill="#fff1d0" stroke="#7040b1" stroke-width="3"/><path d="m0 40-19 31 21-7m28-24 19 31-21-7M2 3l13-15L29 3" fill="#ed6371"/><circle cx="15" cy="27" r="10" fill="#35bbaa" stroke="#7040b1" stroke-width="3"/><path d="M10 73v22m11-22v14" stroke="#f3bd46" stroke-width="6" stroke-linecap="round"/></g><g transform="rotate(-12 87 150)"><rect x="37" y="103" width="79" height="79" rx="14" fill="#f3bd46"/><path d="m60 160 17-39 17 39m-27-12h20" fill="none" stroke="#7040b1" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></g><g transform="rotate(10 146 166)"><rect x="112" y="132" width="68" height="68" rx="13" fill="#35bbaa"/><path d="m145 145 6 13 14 2-10 10 2 14-12-7-13 7 3-14-10-10 14-2Z" fill="#fff1d0"/></g><path d="m48 48 4 10 11 1-9 7 3 11-9-6-9 6 3-11-9-7 11-1Z" fill="#ed6371"/><circle cx="272" cy="157" r="6" fill="#9064d7"/><circle cx="95" cy="39" r="4" fill="#35bbaa"/></svg></section>
+      <section class="partner-note" aria-label="Manufacturing partnership"><div class="contoso-brand">
+<svg class="brand-art contoso-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 88" role="img" aria-label="Contoso industrial mark">
+  <path d="m39 5 30 17v15L39 20 17 33v24l22 13 30-17v15L39 85 4 65V25Z" fill="#168b96"/>
+  <path d="m39 5 30 17-13 8-17-10-22 13L4 25Z" fill="#51bac1"/>
+  <path d="M4 40v25l35 20V70L17 57V33Z" fill="#245875"/>
+  <path d="m39 35 17 10-17 10-17-10Z" fill="#edaa45"/>
+  <path d="M75 15h9m-4-4v8M75 73h9m-4-4v8" stroke="#168b96" stroke-width="1.5"/>
+  <text x="103" y="45" fill="var(--logo-ink,#203d50)" font-family="'Segoe UI',system-ui,sans-serif" font-size="32" font-weight="750" letter-spacing="1">CONTOSO</text>
+  <text x="105" y="65" fill="var(--logo-ink,#203d50)" font-family="system-ui,sans-serif" font-size="9" font-weight="650" letter-spacing="3.1">PRECISION WORKS</text>
+</svg>
+      </div><div><strong>Our ideas. Their expert hands.</strong><p><span class="brand-role">IP owned by Tailspin Toys. Hosted by Contoso.</span> Contoso owns and operates the manufacturing infrastructure, robots and 3D printers as our subcontractor. Tailspin owns the toy designs and controls key release.</p></div></section>
+      <section id="login-panel" class="panel"><div class="panel-heading"><div><h2>Operator sign in</h2><p>Use your configured operator credentials over trusted HTTPS.</p></div><span class="pill">SECURE SESSION</span></div><form id="login-form" class="login-form"><label for="username">Username<input id="username" name="username" autocomplete="username" maxlength="128" required></label><label for="password">Password<input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required></label><button id="login" type="submit" class="button">Sign in</button></form><p id="login-status" role="status" aria-live="polite">A secure, HTTP-only cookie keeps this browser signed in for up to 30 minutes.</p></section>
+      <div class="notice"><span>ⓘ</span><div><strong>Worker-reported metrics. Real security.</strong> Cycle latency, process uptime and completed cycles are measured and reported by the worker; only defect rate is synthetic. Signatures authenticate these reports, not independently prove measurements or physical manufacturing. Password/session authentication, attestation verification, key release, management actions and HTTP heartbeat are real. No product instructions or decryption keys are displayed.</div></div>
+      <section class="trust-strip" aria-label="Data protection flow"><span><b>01</b> Tailspin source</span><i>→</i><span><b>02</b> AES-256-GCM envelope</span><i>→</i><span><b>03</b> Attested Contoso TEE</span><i>→</i><span><b>04</b> Verified metrics only</span></section>
+      <div id="status" class="status-banner" role="status" aria-live="polite">Sign in to view verified operations. No telemetry is fabricated while waiting.</div>
+      <section class="cards" aria-label="Operation status">
+        <article class="card"><div class="card-top">TRUST BOUNDARY <span>◇</span></div><h2 id="trust-value">Locked</h2><p id="trust-detail">Operator authentication required</p><div class="card-foot">Tailspin self-key release gate</div></article>
+        <article class="card"><div class="card-top">LIVE HEARTBEAT <span>⌁</span></div><h2 id="heartbeat-value">Unknown</h2><p id="heartbeat-detail">No verified worker sample yet</p><div class="card-foot">HTTP receipt · stale after 30 seconds</div></article>
+        <article class="card"><div class="card-top">PROTECTED SAMPLE SHARE <span>◴</span></div><h2 id="availability-value">—</h2><p id="availability-detail">Unknown until samples arrive</p><div class="card-foot">Last hour · not a wall-clock uptime SLA</div></article>
+        <article class="card"><div class="card-top">CYCLE LATENCY <span>↗</span></div><h2 id="latency-value">—</h2><p id="latency-detail">Waiting for verified metrics</p><div class="card-foot">Measured by worker · signed report</div></article>
+      </section>
+      <div class="two-column">
+        <section class="panel performance"><div class="panel-heading"><div><h2>Manufacturing pulse</h2><p>Measured cycle latency · signature-verified worker reports</p></div><span class="pill">WORKER REPORTED</span></div><div id="chart" class="chart" aria-label="Recent worker-measured cycle latency"><div class="empty">The production line is quiet.<br>Verified samples will appear here.</div></div><div class="chart-legend"><span>● Cycle latency / recent 32 samples</span><span id="chart-range">No measurements</span></div><div class="mini-stats"><div><span>Reported completed cycles</span><strong id="cycles">—</strong></div><div><span>Defect rate (synthetic)</span><strong id="defects">—</strong></div><div><span>Reported process uptime</span><strong id="uptime">—</strong></div></div></section>
+        <section id="security" class="panel"><div class="panel-heading"><div><h2>Security posture</h2><p>Fail-closed by design</p></div><span class="shield">◇</span></div><ul class="posture"><li><span>Operator access</span><strong id="operator-status">Sign-in required</strong></li><li><span>Tailspin release check</span><strong id="release-status">Unknown</strong></li><li><span>Contoso wrapping key</span><strong id="key-status">Unknown</strong></li><li><span>Worker evidence</span><strong id="evidence-status">No verified sample</strong></li><li><span>Payload visibility</span><strong>Encrypted only</strong></li></ul><p class="fineprint">A verified heartbeat proves fresh key possession bound to accepted MAA claims. Signed metrics are not independent proof of measurements or physical manufacturing. A stopped heartbeat is not proof of compromise.</p><a id="worker-link" class="text-link" hidden target="_blank" rel="noopener noreferrer">Open Contoso worker ↗</a></section>
+      </div>
+      <section class="panel controls"><div><h2>Worker lifecycle</h2><p>Real Azure operations, scoped to this demo worker and vault.</p></div><div class="control-buttons"><button data-action="deploy" class="button" disabled>Deploy approved worker</button><button data-action="restart" class="button subtle" disabled>Restart worker</button><button data-action="revoke" class="button danger" disabled>Revoke key access</button></div><p id="action-result" role="status" aria-live="polite">Actions require an authorized operator and a healthy Tailspin release gate.</p><p class="fineprint">Revocation disables every enabled key version. It cannot recall a key already released into worker memory; restart the worker and observe heartbeat behavior. Deploy does not automatically re-enable disabled keys.</p></section>
+      <section id="activity" class="panel"><div class="panel-heading"><div><h2>Verified telemetry</h2><p>Signed worker reports · last 500 received records · newest first</p></div><span id="sample-count" class="pill">0 SAMPLES</span></div><div class="table-wrap"><table><thead><tr><th>Received</th><th>Worker state</th><th>Measured latency</th><th>Reported cycles</th><th>Defect rate (synthetic)</th><th>Process uptime</th></tr></thead><tbody id="telemetry-body"><tr><td colspan="6" class="empty">Sign in to view telemetry.</td></tr></tbody></table></div></section>
+      <section class="panel security-log"><div class="panel-heading"><div><h2>Security activity</h2><p>Authentication, attestation and lifecycle audit trail</p></div><span class="pill">IN MEMORY</span></div><div class="table-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Outcome</th><th>Evidence status</th></tr></thead><tbody id="security-body"><tr><td colspan="4" class="empty">No records loaded.</td></tr></tbody></table></div></section>
+      <footer><span>TAILSPIN TOYS · CONFIDENTIAL CONTROL ROOM</span><span id="last-refresh">Not connected</span><p>Demo data is held in memory only, not durable. A restart clears this dashboard's history. Deployment HTTPS uses a demo-CA certificate; import its public CA explicitly before sign-in.</p></footer>
+    </main>
+  </div>
+</body>
+</html>

@@ -1,0 +1,127 @@
+{
+  "createdAt": "2026-11-17T17:51:46.631Z",
+  "durationSeconds": 58,
+  "dimensions": [
+    1920,
+    1080
+  ],
+  "videoFramesPerSecond": 24,
+  "liveMotionSamplesPerSecond": 12,
+  "commandScrollPixelsPerSecond": 60,
+  "captureBrowserZoom": 1,
+  "captureViewport": [
+    1664,
+    800
+  ],
+  "voice": "en-US-AvaMultilingualNeural",
+  "narrationProvider": "Azure AI Speech",
+  "aiGeneratedNarration": true,
+  "originalNarrationSeconds": 55.119416666666666,
+  "pitchPreservingTempoFactor": 1,
+  "synthesisProsodyRate": "+3%",
+  "captionTimingMethod": "Individually synthesized exact-script sentences, measured trimmed PCM sample counts, 320ms intersentence gaps; pitch-preserving tempo adjustment if required.",
+  "captions": "Burned-in and selectable English",
+  "temporarySpeechResourceDeleted": true,
+  "workerPolicyHash": "worker-cce-sha256-redacted",
+  "controllerPolicyHash": "controller-cce-sha256-redacted",
+  "footage": "Edited live application captures and explicitly labeled real CCE evidence replay; deployment identifiers permanently redacted",
+  "publication": {
+    "deploymentIdentifiersRedacted": true,
+    "note": "Key URI pixels are opaque-raster redactions in source frames. Exact deployment names, operation identifiers and policy fingerprints are withheld; stable policy labels are not deployable measurements.",
+    "privatePolicyMatchesVerifiedBeforeRedaction": true
+  },
+  "refreshPausesEdited": 2,
+  "keyRevocationIndependentlyVerified": true,
+  "fictionalAnimation": true,
+  "originalKeyStatesRestoredAfterCapture": true,
+  "scenes": [
+    {
+      "startSeconds": 0,
+      "endSeconds": 6.274,
+      "label": "TAILSPIN TOYS / TOY-LINE IP OWNER",
+      "title": "The toy-line designs and manufacturing IP belong to Tailspin Toys.",
+      "editorialBanner": "TAILSPIN OWNS THE IP  |  Contoso is the manufacturing subcontractor",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 6.274,
+      "endSeconds": 11.850458333333334,
+      "label": "CONTOSO / FACTORY OPERATOR",
+      "title": "Contoso owns and operates the machines. Not Tailspin's IP.",
+      "editorialBanner": "CONTOSO: infrastructure, robots and 3D printers  |  TAILSPIN: designs and instructions",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 11.850458333333334,
+      "endSeconds": 20.469083333333334,
+      "label": "ENCRYPTION IN USE / CONFIDENTIAL ACI",
+      "title": "Protected during processing. Not just at rest or in transit.",
+      "editorialBanner": "ENCRYPTED MEMORY + HARDWARE ISOLATION  |  Approved code processes instructions inside the TEE",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 20.469083333333334,
+      "endSeconds": 30.082083333333333,
+      "label": "ATTESTATION + SECURE KEY RELEASE",
+      "title": "Hosting the container does not entitle Contoso engineers to its keys.",
+      "editorialBanner": "RELEASE GATES: Tailspin identity + hardware attestation + exact measured CCE policy",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 30.082083333333333,
+      "endSeconds": 36.265,
+      "label": "REAL CCE ENFORCEMENT / RECORDED EVIDENCE",
+      "title": "Contoso engineers manage infrastructure, not the protected guest shell.",
+      "editorialBanner": "ACTUAL GUEST DECISION: DENY  |  Management-plane permission did not grant shell access",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 36.265,
+      "endSeconds": 39.27395833333333,
+      "label": "TAILSPIN CONTROL / REAL REVOCATION ACTION",
+      "title": "Now Tailspin selects Revoke key access.",
+      "editorialBanner": "TAILSPIN WITHDRAWS PERMISSION TO PROCESS ITS TOY-LINE IP",
+      "keyRevoked": false
+    },
+    {
+      "startSeconds": 39.27395833333333,
+      "endSeconds": 43.064458333333334,
+      "label": "REVOCATION CONFIRMED / AZURE KEY VAULT",
+      "title": "KEY ACCESS REVOKED. The command key is DISABLED.",
+      "editorialBanner": "KEY VAULT VERIFIED: 1 key version disabled  |  Further key release fails",
+      "keyRevoked": true
+    },
+    {
+      "startSeconds": 43.064458333333334,
+      "endSeconds": 46.26445833333334,
+      "label": "FAIL CLOSED / ACTUAL LOCKED COMMANDS",
+      "title": "Plaintext commands are gone. Only ciphertext remains.",
+      "editorialBanner": "KEY ACCESS REVOKED  |  PLAINTEXT UNAVAILABLE  |  HTTPS STATUS STILL AVAILABLE",
+      "keyRevoked": true
+    },
+    {
+      "startSeconds": 46.26445833333334,
+      "endSeconds": 48.33833333333333,
+      "label": "FAIL CLOSED / FICTIONAL TOY LINE LOCKED",
+      "title": "No command plaintext. The fictional production line locks.",
+      "editorialBanner": "KEY ACCESS REVOKED  |  FICTIONAL PRODUCTION LOCKED",
+      "keyRevoked": true
+    },
+    {
+      "startSeconds": 48.33833333333333,
+      "endSeconds": 51.467,
+      "label": "ENCRYPTED ENVELOPE RETAINED / NO PLAINTEXT",
+      "title": "The service stays reachable. Tailspin's commands stay locked.",
+      "editorialBanner": "KEY ACCESS REVOKED  |  NO PLAINTEXT COMMANDS  |  CIPHERTEXT RETAINED",
+      "keyRevoked": true
+    },
+    {
+      "startSeconds": 51.467,
+      "endSeconds": 58,
+      "label": "OUTSOURCE MANUFACTURING / NOT YOUR IP",
+      "title": "Tailspin Toys owns the toy-line IP and controls permission to process it.",
+      "editorialBanner": "ENCRYPTION IN USE + ATTESTATION + SECURE KEY RELEASE + CCE ENFORCEMENT",
+      "keyRevoked": true
+    }
+  ]
+}

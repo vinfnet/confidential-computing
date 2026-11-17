@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contoso Precision Works | Tailspin protected production</title><meta name="theme-color" content="#edf3f5">
+<script src="/ui/preferences.js"></script><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/ui/preferences.css">
+<script src="/app.js" defer></script></head>
+<body><header><div class="company-brand contoso-brand">
+<svg class="brand-art contoso-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 88" role="img" aria-label="Contoso industrial mark">
+  <path d="m39 5 30 17v15L39 20 17 33v24l22 13 30-17v15L39 85 4 65V25Z" fill="#168b96"/>
+  <path d="m39 5 30 17-13 8-17-10-22 13L4 25Z" fill="#51bac1"/>
+  <path d="M4 40v25l35 20V70L17 57V33Z" fill="#245875"/>
+  <path d="m39 35 17 10-17 10-17-10Z" fill="#edaa45"/>
+  <path d="M75 15h9m-4-4v8M75 73h9m-4-4v8" stroke="#168b96" stroke-width="1.5"/>
+  <text x="103" y="45" fill="var(--logo-ink,#203d50)" font-family="'Segoe UI',system-ui,sans-serif" font-size="32" font-weight="750" letter-spacing="1">CONTOSO</text>
+  <text x="105" y="65" fill="var(--logo-ink,#203d50)" font-family="system-ui,sans-serif" font-size="9" font-weight="650" letter-spacing="3.1">PRECISION WORKS</text>
+</svg>
+<span class="brand-role">Hosted by Contoso<span class="brand-caption">INFRASTRUCTURE &amp; MANUFACTURING OPERATOR</span></span></div>
+<div class="company-brand tailspin-brand">
+<svg class="brand-art tailspin-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 88" role="img" aria-label="Tailspin Toys pinwheel mark">
+  <path d="M43 40C12 43 4 22 17 10c13-12 33 0 26 30Z" fill="#ed6371"/>
+  <path d="M45 40C42 9 63 1 75 14c12 13 0 33-30 26Z" fill="#f3bd46"/>
+  <path d="M45 42c31-3 39 18 26 30-13 12-33 0-26-30Z" fill="#35bbaa"/>
+  <path d="M43 42c3 31-18 39-30 26C1 55 13 35 43 42Z" fill="#9064d7"/>
+  <path d="m43 52 5 27" fill="none" stroke="#9064d7" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="44" cy="41" r="10" fill="#fff5da"/>
+  <path d="m44 34 2 4 5 1-4 3 1 5-4-2-4 2 1-5-4-3 5-1Z" fill="#7040b1"/>
+  <text x="93" y="46" fill="var(--logo-ink,#422566)" font-family="'Trebuchet MS',system-ui,sans-serif" font-size="39" font-weight="800" letter-spacing="-2">tailspin</text>
+  <text x="97" y="68" fill="var(--logo-ink,#422566)" font-family="system-ui,sans-serif" font-size="12" font-weight="800" letter-spacing="7">TOYS</text>
+  <circle cx="185" cy="64" r="3" fill="#ed6371"/><circle cx="196" cy="64" r="3" fill="#f3bd46"/><circle cx="207" cy="64" r="3" fill="#35bbaa"/>
+</svg>
+<span class="brand-role">IP owned by Tailspin Toys<span class="brand-caption">DESIGN &amp; KEY RELEASE AUTHORITY</span></span></div>
+<div class="appearance-controls"><button id="theme-toggle" type="button">Dark mode</button><button id="certificate-help" type="button" aria-haspopup="dialog" aria-controls="certificate-dialog">Import certificate</button></div>
+<span id="identity">Not signed in</span><button id="logout" hidden>Sign out</button></header><main>
+<p id="appearance-status" role="status" aria-live="polite"></p>
+<section id="sign-in"><h2>Tailspin operator sign-in</h2>
+<p>Demo-owned authentication over Tailspin PKI. No Entra browser account is required.</p>
+<form id="login-form"><label>Username <input id="username" name="username" autocomplete="username" maxlength="128" required></label>
+<label>Password <input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+<button id="login" type="submit">Sign in</button></form></section>
+<p class="eyebrow">CONTOSO PRECISION WORKS / CONFIDENTIAL MANUFACTURING / AMD SEV-SNP</p>
+<h1>Our machines.<br><span>Tailspin's imagination.</span></h1>
+<p class="intro">Contoso owns and operates the robots, 3D printers and manufacturing infrastructure. As Tailspin's subcontractor, we make their toys — they keep control of their designs and key release.</p>
+<p class="boundary-note">Real confidential ACI workload. The tenant boundary is simulated with separate Azure resource groups, not a simulated enclave.</p>
+<section><h2 id="status">Waiting for attestation</h2><p id="reason"></p>
+<dl><dt>Last successful release</dt><dd id="last">Never</dd><dt>Plaintext lease</dt><dd id="lease">None</dd></dl></section>
+<section id="production-scene" class="production-scene" data-motion="locked" aria-labelledby="production-title">
+<div class="scene-heading"><div><p class="eyebrow">A LITTLE IMAGINATION. A REAL TRUST BOUNDARY.</p><h2 id="production-title">The toy works</h2><p>Fictional manufacturing animation · not live machinery</p></div><button id="scene-toggle" type="button" aria-controls="factory-illustration" aria-pressed="false" disabled>Play animation</button></div>
+<div class="scene-readout"><span id="scene-status" role="status" aria-live="polite">Locked · animation unavailable</span><span id="scene-job">No authorized design in view</span></div>
+<div class="factory-viewport" tabindex="0" role="region" aria-label="Fictional workshop illustration; scroll sideways on small screens">
+<svg id="factory-illustration" viewBox="0 0 1120 360" role="img" aria-labelledby="factory-title factory-description">
+<title id="factory-title">Contoso's fictional toy workshop</title><desc id="factory-description">Two industrial robot arms and a 3D printer above a conveyor carrying a toy train, rocket and duck. Decorative illustration, not hardware control or production telemetry.</desc>
+<defs>
+  <pattern id="factory-grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0v32" fill="none" stroke="currentColor" stroke-opacity=".09"/></pattern>
+  <pattern id="belt-treads" width="32" height="30" patternUnits="userSpaceOnUse"><path d="m3 0-12 30m44-30L23 30" stroke="#91b5c3" stroke-width="2"/></pattern>
+  <linearGradient id="factory-metal" x2="0" y2="1"><stop stop-color="#bfd8e1"/><stop offset="1" stop-color="#648a9e"/></linearGradient>
+</defs>
+<rect width="1120" height="360" rx="12" fill="url(#factory-grid)"/>
+<path d="M36 58h1048M36 322h1048" class="scene-guide"/><path d="M70 56v10m980-10v10M70 317v10m980-10v10" class="scene-guide"/>
+<g class="station-label"><text x="70" y="43">01 / ADDITIVE FORMING</text><text x="437" y="43">02 / ROBOT ASSEMBLY</text><text x="855" y="43">03 / PLAY, IMAGINED</text></g>
+<!-- Printer, arms and toys are illustrative: no coordinates come from commands. -->
+<g class="printer">
+  <path d="M90 241V83h248v158M108 241V101h212v140" fill="none" stroke="url(#factory-metal)" stroke-width="12" stroke-linejoin="round"/>
+  <rect x="123" y="218" width="181" height="12" rx="4" fill="#426679"/>
+  <path d="M146 213v-16h18v-14h28v-14h20v14h28v14h18v16Z" fill="#ab8ae3" stroke="#7456ae" stroke-width="2"/>
+  <path d="M146 204h112m-94-14h76m-48-14h20" stroke="#e0cfff" stroke-width="3"/>
+  <g class="printer-head"><path d="M159 107v30h25v-30" fill="#245875"/><rect x="151" y="128" width="42" height="23" rx="5" fill="#35bbaa"/><path d="m166 151 6 14 6-14" fill="#edaa45"/><path class="print-filament" d="M172 165v21" stroke="#ab8ae3" stroke-width="3" stroke-dasharray="3 3"/></g>
+  <rect x="280" y="116" width="22" height="39" rx="4" fill="#245875"/><path d="M286 126h10m-10 9h10m-10 9h6" stroke="#7ee1d2" stroke-width="2"/>
+</g>
+<g transform="translate(453 227)"><path d="M-31 16h62l-8-27h-46Z" fill="#416376"/>
+  <g class="robot-arm arm-one"><path d="m0-16 32-76 74 31" fill="none" stroke="#245875" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/><path d="m0-16 32-76 74 31" fill="none" stroke="#edaa45" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><circle cy="-16" r="16" fill="#416376"/><circle cx="32" cy="-92" r="13" fill="#416376"/><circle cx="32" cy="-92" r="5" fill="#bfd8e1"/><g transform="translate(106 -61)"><circle r="11" fill="#416376"/><path d="m0 9-9 16 6 8m3-24 9 16-6 8" fill="none" stroke="#35bbaa" stroke-width="6" stroke-linecap="round"/></g></g>
+</g>
+<g transform="translate(788 227)"><path d="M-31 16h62l-8-27h-46Z" fill="#416376"/>
+  <g class="robot-arm arm-two"><path d="m0-16-30-91-77 37" fill="none" stroke="#245875" stroke-width="25" stroke-linecap="round" stroke-linejoin="round"/><path d="m0-16-30-91-77 37" fill="none" stroke="#51bac1" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/><circle cy="-16" r="16" fill="#416376"/><circle cx="-30" cy="-107" r="13" fill="#416376"/><circle cx="-30" cy="-107" r="5" fill="#bfd8e1"/><g transform="translate(-107 -70)"><circle r="11" fill="#416376"/><path d="m0 9-9 16 6 8m3-24 9 16-6 8" fill="none" stroke="#edaa45" stroke-width="6" stroke-linecap="round"/></g></g>
+</g>
+<g><rect x="63" y="265" width="994" height="39" rx="19" fill="#245875"/><rect x="72" y="271" width="976" height="26" rx="13" fill="url(#belt-treads)" class="conveyor-belt"/><path d="M105 305v27m910-27v27" stroke="#648a9e" stroke-width="12"/><path d="M85 334h40m870 0h40" stroke="#416376" stroke-width="7" stroke-linecap="round"/></g>
+<g class="toy-carrier"><g class="toy-train" transform="translate(400 227)"><path d="M0 25V5h39v-25h31v45Z" fill="#ed6371"/><path d="M43-14h20V3H43Z" fill="#c2f0ed"/><path d="M33-23h43M-6 25h82" stroke="#744653" stroke-width="6" stroke-linecap="round"/><path d="M7 5V-5h12V5" fill="#f3bd46"/><circle cx="14" cy="28" r="10" fill="#245875"/><circle cx="57" cy="28" r="10" fill="#245875"/><circle cx="14" cy="28" r="4" fill="#f3bd46"/><circle cx="57" cy="28" r="4" fill="#f3bd46"/></g></g>
+<g class="toy-carrier carrier-two"><g transform="translate(658 211)"><path d="M0 29C-9 2 0-22 12-32 25-22 34 2 25 29Z" fill="#ede5ff" stroke="#9064d7" stroke-width="3"/><path d="m0 8-15 24 16-4m24-20 15 24-16-4M2-20l10-12 12 12" fill="#ed6371"/><circle cx="12" cy="0" r="8" fill="#51bac1" stroke="#245875" stroke-width="3"/><path d="M8 31v12m9-12v12" stroke="#f3bd46" stroke-width="5" stroke-linecap="round"/></g></g>
+<g class="toy-carrier carrier-three"><g transform="translate(935 233)"><path d="M-27 4C-32 34 19 39 27 9L17 0c15-28-24-36-25-10-1 13-12 17-19 14Z" fill="#f3bd46" stroke="#ba8031" stroke-width="2"/><path d="m24-11 13 7-14 3" fill="#ed6371"/><circle cx="14" cy="-12" r="3" fill="#203d50"/><path d="M-14 12q14 15 27-1" fill="none" stroke="#ba8031" stroke-width="3" stroke-linecap="round"/></g></g>
+<g class="scene-lock"><rect x="841" y="84" width="215" height="65" rx="8"/><path d="M861 113v-7a8 8 0 0 1 16 0v7m-19 0h22v18h-22Z" fill="none" stroke="currentColor" stroke-width="2"/><text x="893" y="112">DESIGNS LOCKED</text><text x="893" y="130" class="lock-subtitle">Awaiting authorized access</text></g>
+</svg>
+</div>
+<p class="scene-disclaimer">Illustration only. Motion is enabled only while this visible browser has authorized, unexpired plaintext. Shapes and movements are fictional, not generated from the commands; no hardware is connected. <span class="scene-scroll-hint">Scroll the illustration sideways to explore the workshop.</span></p>
+</section>
+<div class="grid"><section><p class="viewer-label">TAILSPIN-AUTHORIZED VIEW</p><h2>Robot commands</h2><p>Fictional 3D-printing instructions. Plaintext is available only to an authorized Tailspin viewer after fresh attestation and key release. This is a Tailspin-authorized view, not a host-operator right. Hosting the worker does not authorize Contoso operators to view plaintext.</p>
+<p id="command-scroll-help">Commands scroll automatically. Hover or focus the panel to pause and scroll manually. Reduced-motion preferences disable automatic scrolling.</p>
+<pre id="commands" tabindex="0" role="region" aria-label="Decrypted fictional robot commands" aria-describedby="command-scroll-help">Plaintext is not available. Tailspin sign-in required.</pre></section>
+<section><h2>Encrypted command envelope</h2><p>This ciphertext remains visible when keys are disabled, the lease expires, or attestation fails.</p><pre id="ciphertext">Awaiting encrypted data...</pre></section></div>
+<aside>Confidential computing protects data inside the enclave, not data deliberately displayed to an authorized browser.
+Only the Tailspin demo operator receives login credentials. No robot hardware is connected.</aside>
+<p id="error" role="alert"></p></main></body></html>

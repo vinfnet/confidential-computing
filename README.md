@@ -53,6 +53,7 @@ steps. Not every sample requires every tool listed below.
 | Run a confidential H100 GPU workload on Kubernetes | [AKS confidential H100 worker](aks-samples/aks-gpu-worker/README.md) | Guide-only GPU Operator automation on the latest offered AKS node image, TensorFlow GPU validation, and strict GPU attestation before and after the workload. Compute stops automatically; delete the resource group afterward. |
 | Keep partner datasets separate while computing shared results | [Federated multi-party analytics](multi-party-samples/advanced-app-federated/README.md) | Each partner processes its own data in its own TEE and returns aggregates. |
 | Explore confidential video processing | [Automotive machine vision](automotive-machine-vision/README.md) | Confidential ACI video redaction with HTTPS, CCE policy, and an attestation gate. |
+| Protect manufacturing instructions on a partner's infrastructure | [Tailspin Toys / Contoso IP protection](ip-protection-sample/README.md) | Confidential ACI, real encrypted robot commands, attestation-bound key release and Tailspin controls, with demo-owned PKI/password login rather than an Entra app registration. See the sample's actual deployment/validation status. |
 
 For the full catalog, see [Sample Categories](#sample-categories). To understand
 validation and CI, see [Validation Automation](docs/VALIDATION-AUTOMATION.md).

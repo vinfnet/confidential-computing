@@ -1,0 +1,9 @@
+<svg class="brand-art contoso-art" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 88" role="img" aria-label="Contoso industrial mark">
+  <path d="m39 5 30 17v15L39 20 17 33v24l22 13 30-17v15L39 85 4 65V25Z" fill="#168b96"/>
+  <path d="m39 5 30 17-13 8-17-10-22 13L4 25Z" fill="#51bac1"/>
+  <path d="M4 40v25l35 20V70L17 57V33Z" fill="#245875"/>
+  <path d="m39 35 17 10-17 10-17-10Z" fill="#edaa45"/>
+  <path d="M75 15h9m-4-4v8M75 73h9m-4-4v8" stroke="#168b96" stroke-width="1.5"/>
+  <text x="103" y="45" fill="var(--logo-ink,#203d50)" font-family="'Segoe UI',system-ui,sans-serif" font-size="32" font-weight="750" letter-spacing="1">CONTOSO</text>
+  <text x="105" y="65" fill="var(--logo-ink,#203d50)" font-family="system-ui,sans-serif" font-size="9" font-weight="650" letter-spacing="3.1">PRECISION WORKS</text>
+</svg>

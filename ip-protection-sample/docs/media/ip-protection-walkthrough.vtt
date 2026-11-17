@@ -1,0 +1,41 @@
+WEBVTT
+
+00:00.000 --> 00:05.954
+Tailspin Toys owns the toy-line designs and manufacturing instructions: its intellectual property.
+
+00:06.274 --> 00:11.530
+Contoso is the subcontractor, operating the robots, printers, and infrastructure.
+
+00:11.850 --> 00:14.386
+Tailspin sends encrypted instructions.
+
+00:14.706 --> 00:20.149
+Encryption in use protects them in confidential-container memory while approved code processes them.
+
+00:20.469 --> 00:22.501
+Attestation checks the runtime.
+
+00:22.821 --> 00:29.762
+Secure key release makes Tailspin's keys available only to the approved identity and exact measured
+container policy.
+
+00:30.082 --> 00:35.945
+Contoso engineers operate the infrastructure, but cannot open a shell into this protected workload.
+
+00:36.265 --> 00:38.954
+Now Tailspin revokes command-key access.
+
+00:39.274 --> 00:40.769
+The key is disabled.
+
+00:41.089 --> 00:42.744
+Further key release fails.
+
+00:43.064 --> 00:48.018
+When the app detects this, plaintext commands disappear and the fictional line locks.
+
+00:48.338 --> 00:51.147
+Ciphertext and status remain available.
+
+00:51.467 --> 00:55.119
+Tailspin owns the IP and controls permission to process it.

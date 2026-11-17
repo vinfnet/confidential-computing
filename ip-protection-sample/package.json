@@ -1,0 +1,11 @@
+{
+  "name": "tailspin-manufacturing-ip-protection",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "npm --prefix worker test && npm --prefix tailspin test && node --test test/auth.test.mjs test/integration.test.mjs test/policy.test.mjs test/worker-ui.test.mjs test/preferences.test.mjs infra/deployment-summary.test.mjs infra/deployment-settings.test.mjs",
+    "test:browser": "node --test test/production-browser.test.mjs",
+    "check": "node --check ui/server.mjs && node --check ui/public/preferences.js && node --check auth/operator.mjs && node --check infra/deploy.mjs && node --check infra/deployment-summary.mjs && node --check infra/deployment-settings.mjs && node --check infra/policy.mjs && node --check infra/bootstrap.mjs && node --check worker/server.mjs && node --check worker/public/app.js && npm --prefix tailspin run check"
+  }
+}

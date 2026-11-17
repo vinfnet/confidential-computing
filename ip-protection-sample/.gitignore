@@ -1,0 +1,6 @@
+.generated/
+**/node_modules/
+*.pem
+*.key
+*.pfx
+*.log
