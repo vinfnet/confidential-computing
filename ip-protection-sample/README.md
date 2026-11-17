@@ -60,8 +60,10 @@ conveyor, robot arms, 3D printer and toy outputs animate only while a
 Tailspin-authorized session has fresh protected plaintext. Revocation, expiry,
 logout or failures lock the scene; pause/play and reduced motion are supported.
 
-**Watch the 58-second, full-HD narrated walkthrough**—select the poster to open or
-download the MP4. Repository viewers may not play relative video links inline.
+**Watch the 58-second, full-HD narrated walkthrough** using the inline player on
+GitHub, or select the poster below to open or download the repository copy.
+
+https://github.com/user-attachments/assets/7a0bb39d-d074-4204-9346-e05ed5959ffb
 
 [![Play the narrated walkthrough: outsourced manufacturing with Tailspin-controlled IP](docs/images/walkthrough-poster.png)](docs/media/ip-protection-walkthrough.mp4)
 
